@@ -4,7 +4,7 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     filters,
-    ContextTypes,  # Updated import
+    ContextTypes,
 )
 import logging
 import os
@@ -43,7 +43,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         partner_id = user_pairs[user_id]
         del user_pairs[user_id]
         del user_pairs[partner_id]
-        await context.bot.send_message(partner_id, "Your]- partner left the chat. Use /start to find a new one.")
+        await context.bot.send_message(partner_id, "Your partner left the chat. Use /start to find a new one.")
         await update.message.reply_text("Chat ended. Use /start to begin a new chat.")
     else:
         await update.message.reply_text("You're not in a chat. Use /start to find a partner.")
@@ -92,7 +92,7 @@ def main() -> None:
         logger.error("No TOKEN found in environment variables. Please set the TOKEN variable.")
         return
 
-    # Simplified Application initialization
+    # Create the application directly without using Updater internally
     application = Application.builder().token(TOKEN).build()
 
     # Add handlers
@@ -105,8 +105,8 @@ def main() -> None:
     application.add_error_handler(error_handler)
 
     logger.info("Starting Chat Dude bot...")
-    # Use run_polling with simplified parameters
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Simplified polling with explicit parameters
+    application.run_polling(poll_interval=1.0, timeout=10, drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
