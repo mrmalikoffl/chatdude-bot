@@ -3,7 +3,7 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    Filters,
+    filters,  # Updated import for filters
     CallbackContext,
 )
 import logging
@@ -14,15 +14,14 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # Store active users and their chat partners
-waiting_users = []  # Users waiting to be paired
-user_pairs = {}     # Maps user_id to their partner's user_id
-reported_chats = [] # Store reported chat issues (basic logging for moderation)
+waiting_users = []
+user_pairs = {}
+reported_chats = []
 
-# Get the bot token from environment variables (for security)
+# Get the bot token from environment variables
 TOKEN = os.getenv("TOKEN")
 
 async def start(update: Update, context: CallbackContext) -> None:
-    """Start a new anonymous chat."""
     user_id = update.message.from_user.id
     if user_id in user_pairs:
         await update.message.reply_text("You're already in a chat. Use /next to switch or /stop to end.")
@@ -39,7 +38,6 @@ async def start(update: Update, context: CallbackContext) -> None:
         await context.bot.send_message(user2, "Connected! Start chatting. 🗣️ Use /help for commands.")
 
 async def stop(update: Update, context: CallbackContext) -> None:
-    """End the current chat."""
     user_id = update.message.from_user.id
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
@@ -51,12 +49,10 @@ async def stop(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("You're not in a chat. Use /start to find a partner.")
 
 async def next_chat(update: Update, context: CallbackContext) -> None:
-    """End current chat and find a new partner."""
-    await stop(update, context)  # End current chat
-    await start(update, context)  # Find new partner
+    await stop(update, context)
+    await start(update, context)
 
 async def help_command(update: Update, context: CallbackContext) -> None:
-    """Display help message with available commands."""
     help_text = (
         "📋 *Chat Dude Commands*\n\n"
         "/start - Start a new anonymous chat\n"
@@ -69,7 +65,6 @@ async def help_command(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
 async def report(update: Update, context: CallbackContext) -> None:
-    """Allow users to report inappropriate behavior."""
     user_id = update.message.from_user.id
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
@@ -80,7 +75,6 @@ async def report(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("You're not in a chat. Use /start to begin.")
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
-    """Relay messages between paired users."""
     user_id = update.message.from_user.id
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
@@ -89,34 +83,25 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("You're not connected. Use /start to find a partner.")
 
 async def error_handler(update: Update, context: CallbackContext) -> None:
-    """Log errors and notify the user."""
     logger.error(f"Update {update} caused error {context.error}")
     if update:
         await update.message.reply_text("An error occurred. Please try again or use /help for assistance.")
 
 def main() -> None:
-    """Run the bot."""
     if not TOKEN:
         logger.error("No TOKEN found in environment variables. Please set the TOKEN variable.")
         return
 
-    # Create the Application and pass it your bot's token
     application = Application.builder().token(TOKEN).build()
-
-    # Register command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stop", stop))
     application.add_handler(CommandHandler("next", next_chat))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("report", report))
-
-    # Register message handler for non-command messages
-    application.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-
-    # Register error handler
+    # Updated filter syntax for v20.x
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_error_handler(error_handler)
 
-    # Start the bot
     logger.info("Starting Chat Dude bot...")
     application.run_polling()
 
