@@ -3,8 +3,8 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    filters,
-    ContextTypes,
+    Filters,  # Reverted to using Filters
+    CallbackContext,
 )
 import logging
 import os
@@ -21,7 +21,7 @@ reported_chats = []
 # Get the bot token from environment variables
 TOKEN = os.getenv("TOKEN")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def start(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     if user_id in user_pairs:
         await update.message.reply_text("You're already in a chat. Use /next to switch or /stop to end.")
@@ -37,7 +37,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_message(user1, "Connected! Start chatting. 🗣️ Use /help for commands.")
         await context.bot.send_message(user2, "Connected! Start chatting. 🗣️ Use /help for commands.")
 
-async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def stop(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
@@ -48,11 +48,11 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         await update.message.reply_text("You're not in a chat. Use /start to find a partner.")
 
-async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def next_chat(update: Update, context: CallbackContext) -> None:
     await stop(update, context)
     await start(update, context)
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def help_command(update: Update, context: CallbackContext) -> None:
     help_text = (
         "📋 *Chat Dude Commands*\n\n"
         "/start - Start a new anonymous chat\n"
@@ -64,7 +64,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
-async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def report(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
@@ -74,7 +74,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         await update.message.reply_text("You're not in a chat. Use /start to begin.")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_message(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
@@ -82,7 +82,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         await update.message.reply_text("You're not connected. Use /start to find a partner.")
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def error_handler(update: Update, context: CallbackContext) -> None:
     logger.error(f"Update {update} caused error {context.error}")
     if update:
         await update.message.reply_text("An error occurred. Please try again or use /help for assistance.")
@@ -92,21 +92,20 @@ def main() -> None:
         logger.error("No TOKEN found in environment variables. Please set the TOKEN variable.")
         return
 
-    # Create the application directly without using Updater internally
-    application = Application.builder().token(TOKEN).build()
+    # Create the application (v13.15 style)
+    updater = Application.builder().token(TOKEN).build()
 
     # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("stop", stop))
-    application.add_handler(CommandHandler("next", next_chat))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("report", report))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_error_handler(error_handler)
+    updater.add_handler(CommandHandler("start", start))
+    updater.add_handler(CommandHandler("stop", stop))
+    updater.add_handler(CommandHandler("next", next_chat))
+    updater.add_handler(CommandHandler("help", help_command))
+    updater.add_handler(CommandHandler("report", report))
+    updater.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+    updater.add_error_handler(error_handler)
 
     logger.info("Starting Chat Dude bot...")
-    # Simplified polling with explicit parameters
-    application.run_polling(poll_interval=1.0, timeout=10, drop_pending_updates=True)
+    updater.run_polling()
 
 if __name__ == "__main__":
     main()
