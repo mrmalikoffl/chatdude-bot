@@ -838,6 +838,7 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
         if days <= 0:
             raise ValueError("Days must be positive")
         expiry = int(time.time()) + days * 24 * 3600
+        expiry_date = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
         user = get_user(target_id)
         update_user(target_id, {
             "premium_expiry": expiry,
@@ -847,6 +848,28 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
         })
         update.message.reply_text(f"User {target_id} granted premium for {days} days.")
         logger.info(f"Admin {user_id} granted premium to {target_id} for {days} days.")
+        # Send notification to the target user
+        notification_text = (
+            "🎉 *Congratulations\\!* You’ve been upgraded to premium\\! 🌟\n\n"
+            f"You now have premium access for *{days} days*, until *{expiry_date}*.\n"
+            "Enjoy these benefits:\n"
+            "\- Priority matching\n"
+            "\- Chat history\n"
+            "\- Advanced filters\n"
+            "\- Verified badge\n"
+            "\- 25 messages/min\n\n"
+            "Start exploring your premium features with `/help` or `/premium`\\!"
+        )
+        try:
+            context.bot.send_message(
+                chat_id=target_id,
+                text=notification_text,
+                parse_mode="MarkdownV2"
+            )
+            logger.info(f"Sent premium notification to user {target_id} for {days} days, expires {expiry_date}")
+        except Exception as e:
+            logger.warning(f"Failed to send premium notification to user {target_id}: {e}")
+            update.message.reply_text(f"Premium granted, but failed to notify user {target_id}. They may have blocked the bot.")
     except (IndexError, ValueError):
         update.message.reply_text("Usage: /admin_premium <user_id> <days>")
 
