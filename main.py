@@ -454,8 +454,8 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "`/report` \- Report inappropriate behavior\n"
         "`/settings` \- Customize your profile\n"
         "`/premium` \- View premium plans\n"
-        "`/history` \- View chat history (Premium)\n"
-        "`/rematch` \- Reconnect with previous partner (Premium)\n"
+        "`/history` \- View chat history \(Premium\)\n"
+        "`/rematch` \- Reconnect with previous partner \(Premium\)\n"
         "`/deleteprofile` \- Delete your profile and data\n\n"
         "*Premium Benefits*:\n"
         "\- Priority matching\n"
@@ -476,21 +476,25 @@ def premium(update: Update, context: CallbackContext) -> None:
     if is_banned(user_id):
         update.message.reply_text("You are currently banned.")
         return
-    update.message.reply_text(
+    premium_text = (
         "🌟 *Premium Plans*\n\n"
         "Unlock exclusive features:\n"
-        "- Priority matching\n"
-        "- Chat history\n"
-        "- Advanced filters (gender, age range)\n"
-        "- Verified badge\n"
-        "- 25 messages/min (vs 15)\n\n"
+        "\- Priority matching\n"
+        "\- Chat history\n"
+        "\- Advanced filters \(gender, age range\)\n"
+        "\- Verified badge\n"
+        "\- 25 messages/min \(vs 15\)\n\n"
         "Plans:\n"
-        "💎 Week: $4.99\n"
-        "💎 Month: $9.99\n"
-        "💎 Year: $49.99\n\n"
-        "Contact @Talk2AnyoneSupport to subscribe!",
-        parse_mode="Markdown"
+        "\- Week: $4\.99\n"
+        "\- Month: $9\.99\n"
+        "\- Year: $49\.99\n\n"
+        "Contact `@Talk2AnyoneSupport` to subscribe!"
     )
+    try:
+        update.message.reply_text(premium_text, parse_mode="MarkdownV2")
+    except Exception as e:
+        logger.error(f"Failed to send premium message: {e}")
+        update.message.reply_text("Error displaying premium plans. Please try again.")
 
 def history(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
