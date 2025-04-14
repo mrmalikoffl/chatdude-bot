@@ -572,20 +572,41 @@ def premium(update: Update, context: CallbackContext) -> None:
         [InlineKeyboardButton("Premium Pass (1000 Stars)", callback_data="buy_premium_pass")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text(
-        "🌟 *Premium Features*\n\n"
-        "Unlock with Telegram Stars:\n"
-        "- Flare Messages: Sparkle effects for 7 days (100 Stars)\n"
-        "- Instant Rematch: Reconnect anytime (100 Stars)\n"
-        "- Shine Profile: Priority matching for 24 hours (250 Stars)\n"
-        "- Mood Match: Vibe-based matches for 30 days (250 Stars)\n"
-        "- Vaulted Chats: Save chats forever (500 Stars)\n"
-        "- Premium Pass: All features for 30 days + 5 Instant Rematches (1000 Stars)\n\n"
-        "Choose a feature to buy!",
-        parse_mode="MarkdownV2",
-        reply_markup=reply_markup
+    # Define feature descriptions with raw hyphens
+    feature_lines = [
+        "- Flare Messages: Sparkle effects for 7 days (100 Stars)",
+        "- Instant Rematch: Reconnect anytime (100 Stars)",
+        "- Shine Profile: Priority matching for 24 hours (250 Stars)",
+        "- Mood Match: Vibe-based matches for 30 days (250 Stars)",
+        "- Vaulted Chats: Save chats forever (500 Stars)",
+        "- Premium Pass: All features for 30 days + 5 Instant Rematches (1000 Stars)",
+    ]
+    # Escape each line individually
+    escaped_lines = [escape_markdown_v2(line) for line in feature_lines]
+    message_text = (
+        "🌟 *Premium Features*\\!\n\n"
+        "Unlock with Telegram Stars\\:\n" +
+        "\n".join(escaped_lines) + "\n\n"
+        "Choose a feature to buy\\!"
     )
-    logger.info(f"Displayed premium menu for user {user_id}")
+    try:
+        update.message.reply_text(
+            message_text,
+            parse_mode="MarkdownV2",
+            reply_markup=reply_markup
+        )
+        logger.info(f"Displayed premium menu for user {user_id}")
+    except Exception as e:
+        logger.error(f"Failed to display premium menu for user {user_id}: {e}")
+        # Fallback to plain text
+        plain_text = (
+            "🌟 Premium Features\n\n"
+            "Unlock with Telegram Stars:\n" +
+            "\n".join(feature_lines) + "\n\n"
+            "Choose a feature to buy!"
+        )
+        update.message.reply_text(plain_text, reply_markup=reply_markup)
+        logger.info(f"Sent fallback premium menu for user {user_id}")
 
 def buy_premium(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
