@@ -861,7 +861,7 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             "🌟 25 messages/min\n\n"
             "Start exploring your premium features with `/help` or `/premium`\\!"
         )
-        logger.debug(f"Attempting to send notification to {target_id}: {repr(notification_text)}")
+        logger.debug(f"Attempting to send MarkdownV2 notification to {target_id}: {repr(notification_text)}")
         try:
             context.bot.send_message(
                 chat_id=target_id,
@@ -870,8 +870,29 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             )
             logger.info(f"Sent premium notification to user {target_id} for {days} days, expires {expiry_date}")
         except Exception as e:
-            logger.warning(f"Failed to send premium notification to user {target_id}: {e}")
-            update.message.reply_text(f"Premium granted, but failed to notify user {target_id}. They may have blocked the bot.")
+            logger.warning(f"Failed to send MarkdownV2 notification to user {target_id}: {e}")
+            # Fallback to plain text
+            fallback_text = (
+                f"Congratulations! You've been upgraded to premium!\n\n"
+                f"You now have premium access for {days} days, until {expiry_date}.\n"
+                "Enjoy these benefits:\n"
+                "- Priority matching\n"
+                "- Chat history\n"
+                "- Advanced filters\n"
+                "- Verified badge\n"
+                "- 25 messages/min\n\n"
+                "Start exploring your premium features with /help or /premium!"
+            )
+            try:
+                context.bot.send_message(
+                    chat_id=target_id,
+                    text=fallback_text,
+                    parse_mode=None
+                )
+                logger.info(f"Sent fallback plain-text notification to user {target_id}")
+            except Exception as e2:
+                logger.warning(f"Failed to send fallback notification to user {target_id}: {e2}")
+                update.message.reply_text(f"Premium granted, but failed to notify user {target_id}. They may have blocked the bot.")
     except (IndexError, ValueError):
         update.message.reply_text("Usage: /admin_premium <user_id> <days>")
 
