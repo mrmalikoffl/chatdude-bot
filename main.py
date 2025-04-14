@@ -606,27 +606,44 @@ def buy_premium(update: Update, context: CallbackContext) -> None:
         query.message.reply_text("Invalid feature selected.")
         return
     title, stars, desc, feature_key = feature_map[choice]
-    context.bot.send_invoice(
-        chat_id=user_id,
-        title=title,
-        description=desc,
-        payload=f"{feature_key}_{user_id}",
-        currency="XTR",
-        prices=[LabeledPrice(title, stars)],
-        start_parameter=f"buy-{feature_key}"
-    )
-    logger.info(f"Sent invoice for user {user_id}: {title}")
+    try:
+        context.bot.send_invoice(
+            chat_id=user_id,
+            title=title,
+            description=desc,
+            payload=f"{feature_key}_{user_id}",
+            currency="XTR",
+            prices=[LabeledPrice(title, stars)],
+            start_parameter=f"buy-{feature_key}",
+            provider_token=None  # Explicitly None for Stars
+        )
+        logger.info(f"Sent Stars invoice for user {user_id}: {title} ({stars} Stars)")
+    except Exception as e:
+        logger.error(f"Failed to send invoice for user {user_id}: {e}")
+        query.message.reply_text("Error generating payment invoice. Please try again.")
 
 def pre_checkout(update: Update, context: CallbackContext) -> None:
     query = update.pre_checkout_query
+    if query.currency != "XTR":
+        context.bot.answer_pre_checkout_query(
+            query.id, ok=False, error_message="Only Telegram Stars payments are supported."
+        )
+        return
     if query.invoice_payload in [f"{key}_{query.from_user.id}" for key in ["shine_profile", "instant_rematch", "mood_match", "vaulted_chats", "flare_messages"]]:
         context.bot.answer_pre_checkout_query(query.id, ok=True)
+        logger.info(f"Approved pre-checkout for user {query.from_user.id}: {query.invoice_payload}")
     else:
-        context.bot.answer_pre_checkout_query(query.id, ok=False, error_message="Invalid purchase.")
+        context.bot.answer_pre_checkout_query(
+            query.id, ok=False, error_message="Invalid purchase payload."
+        )
+        logger.warning(f"Rejected pre-checkout for user {query.from_user.id}: {query.invoice_payload}")
 
 def successful_payment(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     payment = update.message.successful_payment
+    if payment.currency != "XTR":
+        logger.warning(f"Non-Stars payment received from user {user_id}: {payment.currency}")
+        return
     payload = payment.invoice_payload
     current_time = int(time.time())
     feature_map = {
@@ -644,8 +661,11 @@ def successful_payment(update: Update, context: CallbackContext) -> None:
             features[feature] = expiry if expiry else True  # True for permanent
             update_user(user_id, {"premium_features": features})
             update.message.reply_text(message)
-            logger.info(f"User {user_id} purchased {feature}")
+            logger.info(f"User {user_id} purchased {feature} with Stars")
             break
+    else:
+        logger.warning(f"Unknown payload for user {user_id}: {payload}")
+        
 
 def shine(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
