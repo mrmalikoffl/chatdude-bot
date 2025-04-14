@@ -405,7 +405,10 @@ def verification_handler(update: Update, context: CallbackContext) -> int:
     user_id = update.message.from_user.id
     phrase = update.message.text.strip()
     if len(phrase) < 10 or not is_safe_message(phrase):
-        update.message.reply_text("⚠️ Please provide a valid, respectful verification phrase \\(min 10 characters\\)\\.", parse_mode="MarkdownV2")
+        update.message.reply_text(
+            "⚠️ Please provide a valid, respectful verification phrase \\(min 10 characters\\)\\.",
+            parse_mode="MarkdownV2"
+        )
         return VERIFICATION
     user = get_user(user_id)
     update_user(user_id, {
@@ -413,13 +416,21 @@ def verification_handler(update: Update, context: CallbackContext) -> int:
         "profile": user.get("profile", {}),
         "consent": user.get("consent", False)
     })
-    update.message.reply_text("🎉 Profile verified successfully\\! Let’s get started\\.", parse_mode="MarkdownV2")
+    update.message.reply_text(
+        "🎉 Profile verified successfully\\! Let’s get started\\.",
+        parse_mode="MarkdownV2"
+    )
     if user_id not in waiting_users:
         if is_premium(user_id) or has_premium_feature(user_id, "shine_profile"):
             waiting_users.insert(0, user_id)
         else:
             waiting_users.append(user_id)
-        update.message.reply_text("🔍 Looking for a chat partner... Please wait!", parse_mode="MarkdownV2")
+        # Escape the message to handle periods in the ellipsis
+        escaped_message = escape_markdown_v2("🔍 Looking for a chat partner... Please wait!")
+        update.message.reply_text(
+            escaped_message,
+            parse_mode="MarkdownV2"
+        )
     match_users(context)
     return ConversationHandler.END
 
