@@ -528,7 +528,7 @@ def report(update: Update, context: CallbackContext) -> None:
                         "consent": get_user(partner_id).get("consent", False),
                         "verified": get_user(partner_id).get("verified", False)
                     })
-                    context.bot.send_message(partner_id inactive": "You’ve been temporarily banned due to multiple reports.")
+                    context.bot.send_message(partner_id, "You’ve been temporarily banned due to multiple reports.")
                     logger.warning(f"User {partner_id} banned temporarily due to {report_count} reports.")
                     stop(update, context)
                 update.message.reply_text("Thank you for reporting. We’ll review it. Use /next to find a new partner.")
