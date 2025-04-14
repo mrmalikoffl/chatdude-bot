@@ -443,17 +443,17 @@ def help_command(update: Update, context: CallbackContext) -> None:
         return
     help_text = (
         "📋 *Talk2Anyone Commands*\n\n"
-        "/start - Start a new anonymous chat\n"
-        "/next - Find a new chat partner\n"
-        "/stop - End the current chat\n"
-        "/help - Show this help message\n"
-        "/report - Report inappropriate behavior\n"
-        "/settings - Customize your profile\n"
-        "/premium - View premium plans\n"
-        "/history - View chat history (Premium)\n"
-        "/rematch - Reconnect with previous partner (Premium)\n"
-        "/deleteprofile - Delete your profile and data\n\n"
-        "Premium Benefits:\n"
+        "`/start` - Start a new anonymous chat\n"
+        "`/next` - Find a new chat partner\n"
+        "`/stop` - End the current chat\n"
+        "`/help` - Show this help message\n"
+        "`/report` - Report inappropriate behavior\n"
+        "`/settings` - Customize your profile\n"
+        "`/premium` - View premium plans\n"
+        "`/history` - View chat history (Premium)\n"
+        "`/rematch` - Reconnect with previous partner (Premium)\n"
+        "`/deleteprofile` - Delete your profile and data\n\n"
+        "*Premium Benefits*:\n"
         "- Priority matching\n"
         "- Chat history\n"
         "- Advanced filters\n"
@@ -461,7 +461,11 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "- 25 messages/min\n\n"
         "Stay respectful and enjoy! 🗣️"
     )
-    update.message.reply_text(help_text, parse_mode="Markdown")
+    try:
+        update.message.reply_text(help_text, parse_mode="MarkdownV2")
+    except Exception as e:
+        logger.error(f"Failed to send help message: {e}")
+        update.message.reply_text("Error displaying help. Please try again.")
 
 def premium(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
@@ -784,19 +788,23 @@ def admin_access(update: Update, context: CallbackContext) -> None:
         return
     access_text = (
         "🔐 *Admin Commands*\n\n"
-        "/admin_delete <user_id> - Delete a user’s data\n"
-        "/admin_premium <user_id> <days> - Grant premium\n"
-        "/admin_revoke_premium <user_id> - Revoke premium\n"
-        "/admin_ban <user_id> <days/permanent> - Ban a user\n"
-        "/admin_unban <user_id> - Unban a user\n"
-        "/admin_info <user_id> - View user details\n"
-        "/admin_reports - List reported users\n"
-        "/admin_clear_reports <user_id> - Clear reports\n"
-        "/admin_broadcast <message> - Send message to all users\n"
-        "/admin_userslist - List all bot users with user IDs\n"
+        "`/admin_delete <user_id>` - Delete a user’s data\n"
+        "`/admin_premium <user_id> <days>` - Grant premium\n"
+        "`/admin_revoke_premium <user_id>` - Revoke premium\n"
+        "`/admin_ban <user_id> <days/permanent>` - Ban a user\n"
+        "`/admin_unban <user_id>` - Unban a user\n"
+        "`/admin_info <user_id>` - View user details\n"
+        "`/admin_reports` - List reported users\n"
+        "`/admin_clear_reports <user_id>` - Clear reports\n"
+        "`/admin_broadcast <message>` - Send message to all users\n"
+        "`/admin_userslist` - List all bot users with user IDs\n"
     )
-    update.message.reply_text(access_text, parse_mode="Markdown")
-    logger.info(f"Admin {user_id} accessed admin commands list.")
+    try:
+        update.message.reply_text(access_text, parse_mode="MarkdownV2")
+        logger.info(f"Admin {user_id} accessed admin commands list.")
+    except Exception as e:
+        logger.error(f"Failed to send admin access message: {e}")
+        update.message.reply_text("Error displaying admin commands. Please try again.")
 
 def admin_delete(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
@@ -1072,11 +1080,11 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
                 update.message.reply_text("No users found.")
                 logger.info(f"Admin {user_id} requested users list: no users found")
                 return
-            user_list = "📋 *Bot Users List*\n\n"
+            user_list = "*Bot Users List*\n\n"
             for user in users:
-                user_list += f"User ID: {user[0]}\n"
-            user_list += f"\n*Total Users*: {len(users)}"
-            update.message.reply_text(user_list, parse_mode="Markdown")
+                user_list += f"User ID: `{user[0]}`\n"
+            user_list += f"\n*Total Users*: `{len(users)}`"
+            update.message.reply_text(user_list, parse_mode="MarkdownV2")
             logger.info(f"Admin {user_id} viewed users list: {len(users)} users")
     except Exception as e:
         logger.error(f"Failed to fetch users list: {e}")
