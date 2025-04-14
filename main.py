@@ -793,6 +793,7 @@ def admin_access(update: Update, context: CallbackContext) -> None:
         "/admin_reports - List reported users\n"
         "/admin_clear_reports <user_id> - Clear reports\n"
         "/admin_broadcast <message> - Send message to all users\n"
+        "/admin_userslist - List all bot users with user IDs\n"
     )
     update.message.reply_text(access_text, parse_mode="Markdown")
     logger.info(f"Admin {user_id} accessed admin commands list.")
@@ -1052,6 +1053,37 @@ def admin_broadcast(update: Update, context: CallbackContext) -> None:
     finally:
         release_db_connection(conn)
 
+def admin_userslist(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    if user_id not in ADMIN_IDS:
+        update.message.reply_text("Unauthorized.")
+        logger.info(f"Unauthorized access attempt by user_id={user_id}")
+        return
+    conn = get_db_connection()
+    if not conn:
+        update.message.reply_text("Error fetching users list due to database issue.")
+        logger.error("Failed to get database connection for /admin_userslist")
+        return
+    try:
+        with conn.cursor() as c:
+            c.execute("SELECT user_id FROM users ORDER BY user_id")
+            users = c.fetchall()
+            if not users:
+                update.message.reply_text("No users found.")
+                logger.info(f"Admin {user_id} requested users list: no users found")
+                return
+            user_list = "📋 *Bot Users List*\n\n"
+            for user in users:
+                user_list += f"User ID: {user[0]}\n"
+            user_list += f"\n*Total Users*: {len(users)}"
+            update.message.reply_text(user_list, parse_mode="Markdown")
+            logger.info(f"Admin {user_id} viewed users list: {len(users)} users")
+    except Exception as e:
+        logger.error(f"Failed to fetch users list: {e}")
+        update.message.reply_text("Error fetching users list.")
+    finally:
+        release_db_connection(conn)
+
 def error_handler(update: Update, context: CallbackContext) -> None:
     logger.error(f"Update {update} caused error {context.error}", exc_info=True)
     if update and update.message:
@@ -1111,6 +1143,7 @@ def main() -> None:
         dispatcher.add_handler(CommandHandler("admin_reports", admin_reports))
         dispatcher.add_handler(CommandHandler("admin_clear_reports", admin_clear_reports))
         dispatcher.add_handler(CommandHandler("admin_broadcast", admin_broadcast))
+        dispatcher.add_handler(CommandHandler("admin_userslist", admin_userslist))
         dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
         dispatcher.add_error_handler(error_handler)
 
