@@ -1,4 +1,4 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
     Updater,
     CommandHandler,
@@ -7,6 +7,7 @@ from telegram.ext import (
     CallbackContext,
     ConversationHandler,
     CallbackQueryHandler,
+    PreCheckoutQueryHandler,
 )
 import logging
 import os
@@ -103,7 +104,7 @@ def init_db():
         return
     try:
         with conn.cursor() as c:
-            # Users table
+            # Users table with premium_features
             c.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
@@ -113,7 +114,8 @@ def init_db():
                     premium_expiry BIGINT,
                     ban_type TEXT,
                     ban_expiry BIGINT,
-                    verified BOOLEAN DEFAULT FALSE
+                    verified BOOLEAN DEFAULT FALSE,
+                    premium_features JSONB DEFAULT '{}'
                 )
             """)
             # Reports table
@@ -151,7 +153,7 @@ def cleanup_in_memory(context: CallbackContext):
         if not message_timestamps[user_id]:
             del message_timestamps[user_id]
     for user_id in list(chat_histories.keys()):
-        if not is_premium(user_id):
+        if not is_premium(user_id) and not has_premium_feature(user_id, "vaulted_chats"):
             del chat_histories[user_id]
     logger.debug("In-memory data cleaned up.")
 
@@ -162,7 +164,7 @@ def get_user(user_id: int) -> dict:
     try:
         with conn.cursor() as c:
             c.execute(
-                "SELECT profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified "
+                "SELECT profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified, premium_features "
                 "FROM users WHERE user_id = %s",
                 (user_id,)
             )
@@ -175,7 +177,8 @@ def get_user(user_id: int) -> dict:
                     "premium_expiry": result[3],
                     "ban_type": result[4],
                     "ban_expiry": result[5],
-                    "verified": result[6]
+                    "verified": result[6],
+                    "premium_features": result[7] or {}
                 }
             return {}
     except Exception as e:
@@ -191,15 +194,17 @@ def update_user(user_id: int, data: dict):
     try:
         with conn.cursor() as c:
             c.execute("""
-                INSERT INTO users (user_id, profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO users (user_id, profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified, premium_features)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id) DO UPDATE
-                SET profile = %s, consent = %s, consent_time = %s, premium_expiry = %s, ban_type = %s, ban_expiry = %s, verified = %s
+                SET profile = %s, consent = %s, consent_time = %s, premium_expiry = %s, ban_type = %s, ban_expiry = %s, verified = %s, premium_features = %s
             """, (
                 user_id, json.dumps(data.get("profile", {})), data.get("consent", False), data.get("consent_time"),
                 data.get("premium_expiry"), data.get("ban_type"), data.get("ban_expiry"), data.get("verified", False),
+                json.dumps(data.get("premium_features", {})),
                 json.dumps(data.get("profile", {})), data.get("consent", False), data.get("consent_time"),
-                data.get("premium_expiry"), data.get("ban_type"), data.get("ban_expiry"), data.get("verified", False)
+                data.get("premium_expiry"), data.get("ban_type"), data.get("ban_expiry"), data.get("verified", False),
+                json.dumps(data.get("premium_features", {}))
             ))
             conn.commit()
             logger.debug(f"Updated user {user_id} in database.")
@@ -236,6 +241,11 @@ def is_premium(user_id: int) -> bool:
     user = get_user(user_id)
     return user.get("premium_expiry") and user["premium_expiry"] > time.time()
 
+def has_premium_feature(user_id: int, feature: str) -> bool:
+    user = get_user(user_id)
+    features = user.get("premium_features", {})
+    return feature in features and features[feature] > time.time()
+
 def is_verified(user_id: int) -> bool:
     return get_user(user_id).get("verified", False)
 
@@ -249,7 +259,7 @@ def check_rate_limit(user_id: int, cooldown: int = COMMAND_COOLDOWN) -> bool:
 def check_message_rate_limit(user_id: int) -> bool:
     current_time = time.time()
     message_timestamps[user_id] = [t for t in message_timestamps[user_id] if current_time - t < 60]
-    max_messages = MAX_MESSAGES_PER_MINUTE + 10 if is_premium(user_id) else MAX_MESSAGES_PER_MINUTE
+    max_messages = MAX_MESSAGES_PER_MINUTE + 10 if is_premium(user_id) or any(has_premium_feature(user_id, f) for f in ["shine_profile", "flare_messages"]) else MAX_MESSAGES_PER_MINUTE
     if len(message_timestamps[user_id]) >= max_messages:
         return False
     message_timestamps[user_id].append(current_time)
@@ -265,6 +275,13 @@ def is_safe_message(text: str) -> bool:
     if url_pattern.search(text):
         return False
     return True
+
+def escape_markdown_v2(text: str) -> str:
+    """Escape special MarkdownV2 characters."""
+    special_chars = r'_*\[\]()~`>#+\-=|{}.!'
+    for char in special_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
 
 def start(update: Update, context: CallbackContext) -> int:
     user_id = update.message.from_user.id
@@ -303,7 +320,7 @@ def start(update: Update, context: CallbackContext) -> int:
         )
         return VERIFICATION
     if user_id not in waiting_users:
-        if is_premium(user_id):
+        if is_premium(user_id) or has_premium_feature(user_id, "shine_profile"):
             waiting_users.insert(0, user_id)
         else:
             waiting_users.append(user_id)
@@ -344,7 +361,7 @@ def verification_handler(update: Update, context: CallbackContext) -> int:
     })
     update.message.reply_text("Profile verified! 🎉 Let’s get started.")
     if user_id not in waiting_users:
-        if is_premium(user_id):
+        if is_premium(user_id) or has_premium_feature(user_id, "shine_profile"):
             waiting_users.insert(0, user_id)
         else:
             waiting_users.append(user_id)
@@ -371,9 +388,9 @@ def match_users(context: CallbackContext) -> None:
                 context.bot.send_message(user1, "Connected! Start chatting. 🗣️ Use /help for commands.")
                 context.bot.send_message(user2, "Connected! Start chatting. 🗣️ Use /help for commands.")
                 logger.info(f"Matched users {user1} and {user2}.")
-                if is_premium(user1):
+                if is_premium(user1) or has_premium_feature(user1, "vaulted_chats"):
                     chat_histories[user1] = []
-                if is_premium(user2):
+                if is_premium(user2) or has_premium_feature(user2, "vaulted_chats"):
                     chat_histories[user2] = []
                 return
             j += 1
@@ -390,7 +407,7 @@ def can_match(user1: int, user2: int) -> bool:
         return False
     age1 = profile1.get("age")
     age2 = profile2.get("age")
-    if age1 and age2 and abs(age1 - age2) > (15 if is_premium(user1) or is_premium(user2) else 10):
+    if age1 and age2 and abs(age1 - age2) > (15 if is_premium(user1) or is_premium(user2) or has_premium_feature(user1, "mood_match") or has_premium_feature(user2, "mood_match") else 10):
         return False
     gender_pref1 = profile1.get("gender_preference")
     gender_pref2 = profile2.get("gender_preference")
@@ -400,6 +417,12 @@ def can_match(user1: int, user2: int) -> bool:
         return False
     if gender_pref2 and gender1 and gender_pref2 != gender1:
         return False
+    # Mood Match logic
+    if has_premium_feature(user1, "mood_match") and has_premium_feature(user2, "mood_match"):
+        mood1 = profile1.get("mood")
+        mood2 = profile2.get("mood")
+        if mood1 and mood2 and mood1 != mood2:
+            return False
     return True
 
 def stop(update: Update, context: CallbackContext) -> None:
@@ -415,7 +438,7 @@ def stop(update: Update, context: CallbackContext) -> None:
         context.bot.send_message(partner_id, "Your partner left the chat. Use /start to find a new one.")
         update.message.reply_text("Chat ended. Use /start to begin a new chat.")
         logger.info(f"User {user_id} stopped chat with {partner_id}.")
-        if user_id in chat_histories:
+        if user_id in chat_histories and not has_premium_feature(user_id, "vaulted_chats"):
             del chat_histories[user_id]
     else:
         update.message.reply_text("You're not in a chat. Use /start to find a partner.")
@@ -431,7 +454,7 @@ def next_chat(update: Update, context: CallbackContext) -> None:
     stop(update, context)
     if get_user(user_id).get("consent"):
         if user_id not in waiting_users:
-            if is_premium(user_id):
+            if is_premium(user_id) or has_premium_feature(user_id, "shine_profile"):
                 waiting_users.insert(0, user_id)
             else:
                 waiting_users.append(user_id)
@@ -447,23 +470,28 @@ def help_command(update: Update, context: CallbackContext) -> None:
         return
     help_text = (
         "📋 *Talk2Anyone Commands*\n\n"
-        "`/start` \- Start a new anonymous chat\n"
-        "`/next` \- Find a new chat partner\n"
-        "`/stop` \- End the current chat\n"
-        "`/help` \- Show this help message\n"
-        "`/report` \- Report inappropriate behavior\n"
-        "`/settings` \- Customize your profile\n"
-        "`/premium` \- View premium plans\n"
-        "`/history` \- View chat history \(Premium\)\n"
-        "`/rematch` \- Reconnect with previous partner \(Premium\)\n"
-        "`/deleteprofile` \- Delete your profile and data\n\n"
+        "`/start` \\- Start a new anonymous chat\n"
+        "`/next` \\- Find a new chat partner\n"
+        "`/stop` \\- End the current chat\n"
+        "`/help` \\- Show this help message\n"
+        "`/report` \\- Report inappropriate behavior\n"
+        "`/settings` \\- Customize your profile\n"
+        "`/premium` \\- Unlock premium features with Stars\n"
+        "`/history` \\- View chat history \\(Premium/Vaulted Chats\\)\n"
+        "`/rematch` \\- Reconnect with previous partner \\(Premium\\)\n"
+        "`/shine` \\- Boost your profile visibility \\(Premium\\)\n"
+        "`/instant` \\- Rematch instantly \\(Premium\\)\n"
+        "`/mood` \\- Set a chat mood \\(Premium\\)\n"
+        "`/vault` \\- Save chats forever \\(Premium\\)\n"
+        "`/flare` \\- Add flair to messages \\(Premium\\)\n"
+        "`/deleteprofile` \\- Delete your profile and data\n\n"
         "*Premium Benefits*:\n"
-        "\- Priority matching\n"
-        "\- Chat history\n"
-        "\- Advanced filters\n"
-        "\- Verified badge\n"
-        "\- 25 messages/min\n\n"
-        "Stay respectful and enjoy\! 🗣️"
+        "\\- Shine Profile: Priority matching\n"
+        "\\- Instant Rematch: Reconnect anytime\n"
+        "\\- Mood Match: Find similar vibes\n"
+        "\\- Vaulted Chats: Save chats forever\n"
+        "\\- Flare Messages: Sparkle effects\n"
+        "Buy with Stars via `/premium`\\!"
     )
     try:
         update.message.reply_text(help_text, parse_mode="MarkdownV2")
@@ -476,33 +504,213 @@ def premium(update: Update, context: CallbackContext) -> None:
     if is_banned(user_id):
         update.message.reply_text("You are currently banned.")
         return
+    keyboard = [
+        [InlineKeyboardButton("Shine Profile (100 Stars)", callback_data="buy_shine")],
+        [InlineKeyboardButton("Instant Rematch (50 Stars)", callback_data="buy_instant")],
+        [InlineKeyboardButton("Mood Match (150 Stars)", callback_data="buy_mood")],
+        [InlineKeyboardButton("Vaulted Chats (200 Stars)", callback_data="buy_vault")],
+        [InlineKeyboardButton("Flare Messages (75 Stars)", callback_data="buy_flare")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     premium_text = (
-        "🌟 *Premium Plans*\n\n"
-        "Unlock exclusive features:\n"
-        "\- Priority matching\n"
-        "\- Chat history\n"
-        "\- Advanced filters \(gender, age range\)\n"
-        "\- Verified badge\n"
-        "\- 25 messages/min \(vs 15\)\n\n"
-        "Plans:\n"
-        "\- Week: $4\.99\n"
-        "\- Month: $9\.99\n"
-        "\- Year: $49\.99\n\n"
-        "Contact `@Talk2AnyoneSupport` to subscribe\!"
+        "🌟 *Premium Features*\n\n"
+        "Unlock with Telegram Stars:\n"
+        "\\- *Shine Profile*: Be first in line for matches \\(100 Stars\\)\n"
+        "\\- *Instant Rematch*: Reconnect anytime \\(50 Stars\\)\n"
+        "\\- *Mood Match*: Match by vibe \\(150 Stars\\)\n"
+        "\\- *Vaulted Chats*: Save chats forever \\(200 Stars\\)\n"
+        "\\- *Flare Messages*: Add sparkle effects \\(75 Stars\\)\n\n"
+        "Choose a feature to buy\\!"
     )
     try:
-        update.message.reply_text(premium_text, parse_mode="MarkdownV2")
+        update.message.reply_text(premium_text, parse_mode="MarkdownV2", reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Failed to send premium message: {e}")
-        update.message.reply_text("Error displaying premium plans. Please try again.")
+        update.message.reply_text("Error displaying premium features. Please try again.")
+
+def buy_premium(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    if is_banned(user_id):
+        query.message.reply_text("You are currently banned.")
+        return
+    feature_map = {
+        "buy_shine": ("Shine Profile", 100, "Boost your profile to the top for 24 hours!", "shine_profile"),
+        "buy_instant": ("Instant Rematch", 50, "Reconnect with any past partner instantly!", "instant_rematch"),
+        "buy_mood": ("Mood Match", 150, "Match with users sharing your vibe!", "mood_match"),
+        "buy_vault": ("Vaulted Chats", 200, "Save your chats forever!", "vaulted_chats"),
+        "buy_flare": ("Flare Messages", 75, "Add sparkle effects to your messages!", "flare_messages"),
+    }
+    choice = query.data
+    if choice not in feature_map:
+        query.message.reply_text("Invalid feature selected.")
+        return
+    title, stars, desc, feature_key = feature_map[choice]
+    context.bot.send_invoice(
+        chat_id=user_id,
+        title=title,
+        description=desc,
+        payload=f"{feature_key}_{user_id}",
+        currency="XTR",
+        prices=[LabeledPrice(title, stars)],
+        start_parameter=f"buy-{feature_key}"
+    )
+    logger.info(f"Sent invoice for user {user_id}: {title}")
+
+def pre_checkout(update: Update, context: CallbackContext) -> None:
+    query = update.pre_checkout_query
+    if query.invoice_payload in [f"{key}_{query.from_user.id}" for key in ["shine_profile", "instant_rematch", "mood_match", "vaulted_chats", "flare_messages"]]:
+        context.bot.answer_pre_checkout_query(query.id, ok=True)
+    else:
+        context.bot.answer_pre_checkout_query(query.id, ok=False, error_message="Invalid purchase.")
+
+def successful_payment(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    payment = update.message.successful_payment
+    payload = payment.invoice_payload
+    current_time = int(time.time())
+    feature_map = {
+        "shine_profile": (24 * 3600, "Shine Profile activated for 24 hours! 🌟"),
+        "instant_rematch": (None, "Instant Rematch unlocked! Use /instant."),  # One-time use
+        "mood_match": (30 * 24 * 3600, "Mood Match activated for 30 days! 😊"),
+        "vaulted_chats": (None, "Vaulted Chats unlocked forever! 📜"),  # Permanent
+        "flare_messages": (7 * 24 * 3600, "Flare Messages activated for 7 days! ✨"),
+    }
+    for feature, (duration, message) in feature_map.items():
+        if payload.startswith(feature):
+            user = get_user(user_id)
+            features = user.get("premium_features", {})
+            expiry = current_time + duration if duration else None
+            features[feature] = expiry if expiry else True  # True for permanent
+            update_user(user_id, {"premium_features": features})
+            update.message.reply_text(message)
+            logger.info(f"User {user_id} purchased {feature}")
+            break
+
+def shine(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    if is_banned(user_id):
+        update.message.reply_text("You are currently banned.")
+        return
+    if not has_premium_feature(user_id, "shine_profile"):
+        update.message.reply_text("Shine Profile is a premium feature. Buy with /premium.")
+        return
+    if user_id not in waiting_users and user_id not in user_pairs:
+        waiting_users.insert(0, user_id)
+        update.message.reply_text("Your profile is shining! 🔍 First in line for matches.")
+        match_users(context)
+    else:
+        update.message.reply_text("You're already in a chat or waiting.")
+
+def instant(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    if is_banned(user_id):
+        update.message.reply_text("You are currently banned.")
+        return
+    if not check_rate_limit(user_id):
+        update.message.reply_text(f"Please wait {COMMAND_COOLDOWN} seconds before trying again.")
+        return
+    if not has_premium_feature(user_id, "instant_rematch"):
+        update.message.reply_text("Instant Rematch is a premium feature. Buy with /premium.")
+        return
+    if user_id in user_pairs:
+        update.message.reply_text("You're already in a chat. Use /stop first.")
+        return
+    previous_partner = previous_partners.get(user_id)
+    if not previous_partner:
+        update.message.reply_text("No previous partner to rematch with.")
+        return
+    if previous_partner in user_pairs:
+        update.message.reply_text("Your previous partner is in another chat.")
+        return
+    if previous_partner in waiting_users:
+        waiting_users.remove(previous_partner)
+    user_pairs[user_id] = previous_partner
+    user_pairs[previous_partner] = user_id
+    context.bot.send_message(user_id, "Instantly reconnected! 🗣️")
+    context.bot.send_message(previous_partner, "Someone reconnected with you! 🗣️")
+    logger.info(f"User {user_id} used Instant Rematch with {previous_partner}.")
+    # Remove one-time use
+    user = get_user(user_id)
+    features = user.get("premium_features", {})
+    features.pop("instant_rematch", None)
+    update_user(user_id, {"premium_features": features})
+
+def mood(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    if is_banned(user_id):
+        update.message.reply_text("You are currently banned.")
+        return
+    if not has_premium_feature(user_id, "mood_match"):
+        update.message.reply_text("Mood Match is a premium feature. Buy with /premium.")
+        return
+    keyboard = [
+        [InlineKeyboardButton("Chill", callback_data="mood_chill")],
+        [InlineKeyboardButton("Deep", callback_data="mood_deep")],
+        [InlineKeyboardButton("Fun", callback_data="mood_fun")],
+        [InlineKeyboardButton("Clear Mood", callback_data="mood_clear")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    update.message.reply_text("Choose your chat mood:", reply_markup=reply_markup)
+
+def set_mood(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    if not has_premium_feature(user_id, "mood_match"):
+        query.message.reply_text("Mood Match is a premium feature. Buy with /premium.")
+        return
+    choice = query.data
+    user = get_user(user_id)
+    profile = user.get("profile", {})
+    if choice == "mood_clear":
+        profile.pop("mood", None)
+        query.message.reply_text("Mood cleared.")
+    else:
+        mood = choice.split("_")[1]
+        profile["mood"] = mood
+        query.message.reply_text(f"Mood set to: {mood}")
+    update_user(user_id, {"profile": profile})
+
+def vault(update: Update, context: Update) -> None:
+    user_id = update.message.from_user.id
+    if is_banned(user_id):
+        update.message.reply_text("You are currently banned.")
+        return
+    if not has_premium_feature(user_id, "vaulted_chats"):
+        update.message.reply_text("Vaulted Chats is a premium feature. Buy with /premium.")
+        return
+    if user_id not in chat_histories or not chat_histories[user_id]:
+        update.message.reply_text("No chats saved in your vault.")
+        return
+    history_text = "📜 *Vaulted Chats*\n\n"
+    for msg in chat_histories[user_id][-10:]:
+        history_text += f"[{msg['time']}]: {msg['text']}\n"
+    update.message.reply_text(history_text, parse_mode="Markdown")
+
+def flare(update: Update, context: Update) -> None:
+    user_id = update.message.from_user.id
+    if is_banned(user_id):
+        update.message.reply_text("You are currently banned.")
+        return
+    if not has_premium_feature(user_id, "flare_messages"):
+        update.message.reply_text("Flare Messages is a premium feature. Buy with /premium.")
+        return
+    user = get_user(user_id)
+    features = user.get("premium_features", {})
+    flare_active = features.get("flare_active", False)
+    features["flare_active"] = not flare_active
+    update_user(user_id, {"premium_features": features})
+    update.message.reply_text(f"Flare Messages {'enabled' if not flare_active else 'disabled'}. ✨")
 
 def history(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     if is_banned(user_id):
         update.message.reply_text("You are currently banned.")
         return
-    if not is_premium(user_id):
-        update.message.reply_text("Chat history is a premium feature. Use /premium to subscribe.")
+    if not (is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats")):
+        update.message.reply_text("Chat history is a premium feature. Use /premium to unlock.")
         return
     if user_id not in chat_histories or not chat_histories[user_id]:
         update.message.reply_text("No chat history available.")
@@ -577,20 +785,22 @@ def handle_message(update: Update, context: CallbackContext) -> None:
             update.message.reply_text("Inappropriate content detected. Please keep the chat respectful.")
             logger.info(f"User {user_id} sent unsafe message: {message_text}")
             return
-        context.bot.send_message(partner_id, message_text)
+        flare = has_premium_feature(user_id, "flare_messages") and get_user(user_id).get("premium_features", {}).get("flare_active", False)
+        final_text = f"✨ {message_text} ✨" if flare else message_text
+        context.bot.send_message(partner_id, final_text)
         logger.info(f"Message from {user_id} to {partner_id}: {message_text}")
-        if is_premium(user_id) and user_id in chat_histories:
-            chat_histories[user_id].append({
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "text": f"You: {message_text}"
-            })
-        if is_premium(partner_id) and partner_id in chat_histories:
-            chat_histories[partner_id].append({
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "text": f"Partner: {message_text}"
-            })
-    else:
-        update.message.reply_text("You're not connected. Use /start to find a partner.")
+        if is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats"):
+            if user_id in chat_histories:
+                chat_histories[user_id].append({
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "text": f"You: {message_text}"
+                })
+        if is_premium(partner_id) or has_premium_feature(partner_id, "vaulted_chats"):
+            if partner_id in chat_histories:
+                chat_histories[partner_id].append({
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "text": f"Partner: {message_text}"
+                })
 
 def settings(update: Update, context: CallbackContext) -> int:
     user_id = update.message.from_user.id
@@ -752,7 +962,7 @@ def rematch(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(f"Please wait {COMMAND_COOLDOWN} seconds before trying again.")
         return
     if not is_premium(user_id):
-        update.message.reply_text("Re-matching is a premium feature. Use /premium to subscribe.")
+        update.message.reply_text("Re-matching is a premium feature. Use /premium to unlock.")
         return
     if user_id in user_pairs:
         update.message.reply_text("You're already in a chat. Use /stop to end it first.")
@@ -771,9 +981,9 @@ def rematch(update: Update, context: CallbackContext) -> None:
     context.bot.send_message(user_id, "Re-connected with your previous partner! Start chatting. 🗣️")
     context.bot.send_message(previous_partner, "Your previous partner re-connected with you! Start chatting. 🗣️")
     logger.info(f"User {user_id} rematched with {previous_partner}.")
-    if is_premium(user_id):
+    if is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats"):
         chat_histories[user_id] = chat_histories.get(user_id, [])
-    if is_premium(previous_partner):
+    if is_premium(previous_partner) or has_premium_feature(previous_partner, "vaulted_chats"):
         chat_histories[previous_partner] = chat_histories.get(previous_partner, [])
 
 def delete_profile(update: Update, context: CallbackContext) -> None:
@@ -839,7 +1049,7 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
         if days <= 0:
             raise ValueError("Days must be positive")
         expiry = int(time.time()) + days * 24 * 3600
-        expiry_date = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
+        expiry_date = datetime.fromtimestamp(expiry).strftime("%Y\\-%m\\-%d")
         user = get_user(target_id)
         update_user(target_id, {
             "premium_expiry": expiry,
@@ -852,36 +1062,35 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
         # Send notification to the target user
         notification_text = (
             "🎉 *Congratulations\\!* You’ve been upgraded to premium\\! 🌟\n\n"
-            f"You now have premium access for *{days} days*, until *{expiry_date}*.\n"
-            "Enjoy these benefits:\n"
+            f"You now have premium access for *{days} days*\\, until *{expiry_date}*\\.\n"
+            "Enjoy these benefits\\:\n"
             "🌟 Priority matching\n"
             "🌟 Chat history\n"
             "🌟 Advanced filters\n"
             "🌟 Verified badge\n"
             "🌟 25 messages/min\n\n"
-            "Start exploring your premium features with `/help` or `/premium`\\!"
+            "Start exploring with `/help` or `/premium`\\!"
         )
-        logger.debug(f"Attempting to send MarkdownV2 notification to {target_id}: {repr(notification_text)}")
+        logger.debug(f"Sending MarkdownV2 notification to {target_id}: {repr(notification_text)}")
         try:
             context.bot.send_message(
                 chat_id=target_id,
                 text=notification_text,
                 parse_mode="MarkdownV2"
             )
-            logger.info(f"Sent premium notification to user {target_id} for {days} days, expires {expiry_date}")
+            logger.info(f"Sent premium notification to user {target_id}")
         except Exception as e:
             logger.warning(f"Failed to send MarkdownV2 notification to user {target_id}: {e}")
-            # Fallback to plain text
             fallback_text = (
                 f"Congratulations! You've been upgraded to premium!\n\n"
-                f"You now have premium access for {days} days, until {expiry_date}.\n"
+                f"You now have premium access for {days} days, until {expiry_date.replace('\\', '')}.\n"
                 "Enjoy these benefits:\n"
                 "- Priority matching\n"
                 "- Chat history\n"
                 "- Advanced filters\n"
                 "- Verified badge\n"
                 "- 25 messages/min\n\n"
-                "Start exploring your premium features with /help or /premium!"
+                "Start exploring with /help or /premium!"
             )
             try:
                 context.bot.send_message(
@@ -889,13 +1098,12 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
                     text=fallback_text,
                     parse_mode=None
                 )
-                logger.info(f"Sent fallback plain-text notification to user {target_id}")
+                logger.info(f"Sent fallback notification to user {target_id}")
             except Exception as e2:
                 logger.warning(f"Failed to send fallback notification to user {target_id}: {e2}")
-                update.message.reply_text(f"Premium granted, but failed to notify user {target_id}. They may have blocked the bot.")
+                update.message.reply_text(f"Premium granted, but failed to notify user {target_id}.")
     except (IndexError, ValueError):
         update.message.reply_text("Usage: /admin_premium <user_id> <days>")
-
 
 def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
@@ -909,7 +1117,8 @@ def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
             "premium_expiry": None,
             "profile": user.get("profile", {}),
             "consent": user.get("consent", False),
-            "verified": user.get("verified", False)
+            "verified": user.get("verified", False),
+            "premium_features": {}  # Clear Stars features too
         })
         update.message.reply_text(f"Premium status revoked for user {target_id}.")
         logger.info(f"Admin {user_id} revoked premium for {target_id}.")
@@ -990,7 +1199,7 @@ def admin_info(update: Update, context: CallbackContext) -> None:
         info += f"Profile: {user.get('profile', {})}\n"
         info += f"Consent: {user.get('consent', False)}"
         if user.get("consent_time"):
-            info += f" (given at {datetime.fromtimestamp(user['consent_time'])})\n"
+            info += f" (-given at {datetime.fromtimestamp(user['consent_time'])})\n"
         else:
             info += "\n"
         info += f"Premium: {is_premium(target_id)}"
@@ -998,6 +1207,7 @@ def admin_info(update: Update, context: CallbackContext) -> None:
             info += f" (expires at {datetime.fromtimestamp(user['premium_expiry'])})\n"
         else:
             info += "\n"
+        info += f"Features: {user.get('premium_features', {})}\n"
         info += f"Banned: {is_banned(target_id)}"
         if user.get("ban_type"):
             info += f" ({user['ban_type']}"
@@ -1162,7 +1372,7 @@ def premium_users_list(update: Update, context: CallbackContext) -> None:
         current_time = int(time.time())
         with conn.cursor() as c:
             c.execute(
-                "SELECT user_id, premium_expiry FROM users WHERE premium_expiry > %s ORDER BY premium_expiry",
+                "SELECT user_id, premium_expiry, premium_features FROM users WHERE premium_expiry > %s OR premium_features != '{}'",
                 (current_time,)
             )
             users = c.fetchall()
@@ -1171,9 +1381,14 @@ def premium_users_list(update: Update, context: CallbackContext) -> None:
                 logger.info(f"Admin {user_id} requested premium users list: no users found")
                 return
             user_list = "*Premium Users List*\n\n"
-            for user_id, premium_expiry in users:
-                remaining_days = (premium_expiry - current_time + 24 * 3600 - 1) // (24 * 3600)  # Ceiling division
-                user_list += f"User ID: `{user_id}` \\- {remaining_days} days remaining\n"
+            for user_id, premium_expiry, features in users:
+                if premium_expiry and premium_expiry > current_time:
+                    remaining_days = (premium_expiry - current_time + 24 * 3600 - 1) // (24 * 3600)
+                    user_list += f"User ID: `{user_id}` \\- {remaining_days} days remaining\n"
+                if features:
+                    active = [k for k, v in features.items() if v is True or (isinstance(v, int) and v > current_time)]
+                    if active:
+                        user_list += f"User ID: `{user_id}` \\- Features: {', '.join(active)}\n"
             user_list += f"\n*Total Premium Users*: `{len(users)}`"
             update.message.reply_text(user_list, parse_mode="MarkdownV2")
             logger.info(f"Admin {user_id} viewed premium users list: {len(users)} users")
@@ -1221,16 +1436,31 @@ def main() -> None:
             },
             fallbacks=[CommandHandler("cancel", cancel)],
         )
+        mood_handler = ConversationHandler(
+            entry_points=[CommandHandler("mood", mood)],
+            states={
+                GENDER: [CallbackQueryHandler(set_mood, pattern="^mood_")],
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+        )
 
         dispatcher.add_handler(start_handler)
         dispatcher.add_handler(settings_handler)
+        dispatcher.add_handler(mood_handler)
         dispatcher.add_handler(CommandHandler("stop", stop))
         dispatcher.add_handler(CommandHandler("next", next_chat))
         dispatcher.add_handler(CommandHandler("help", help_command))
         dispatcher.add_handler(CommandHandler("premium", premium))
+        dispatcher.add_handler(CallbackQueryHandler(buy_premium, pattern="^buy_"))
+        dispatcher.add_handler(PreCheckoutQueryHandler(pre_checkout))
+        dispatcher.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
         dispatcher.add_handler(CommandHandler("history", history))
         dispatcher.add_handler(CommandHandler("report", report))
         dispatcher.add_handler(CommandHandler("rematch", rematch))
+        dispatcher.add_handler(CommandHandler("shine", shine))
+        dispatcher.add_handler(CommandHandler("instant", instant))
+        dispatcher.add_handler(CommandHandler("vault", vault))
+        dispatcher.add_handler(CommandHandler("flare", flare))
         dispatcher.add_handler(CommandHandler("deleteprofile", delete_profile))
         dispatcher.add_handler(CommandHandler("adminaccess", admin_access))
         dispatcher.add_handler(CommandHandler("admin_delete", admin_delete))
