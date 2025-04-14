@@ -796,16 +796,17 @@ def admin_access(update: Update, context: CallbackContext) -> None:
         return
     access_text = (
         "🔐 *Admin Commands*\n\n"
-        "`/admin_delete <user_id>` \- Delete a user’s data\n"
-        "`/admin_premium <user_id> <days>` \- Grant premium\n"
-        "`/admin_revoke_premium <user_id>` \- Revoke premium\n"
-        "`/admin_ban <user_id> <days/permanent>` \- Ban a user\n"
-        "`/admin_unban <user_id>` \- Unban a user\n"
-        "`/admin_info <user_id>` \- View user details\n"
-        "`/admin_reports` \- List reported users\n"
-        "`/admin_clear_reports <user_id>` \- Clear reports\n"
-        "`/admin_broadcast <message>` \- Send message to all users\n"
-        "`/admin_userslist` \- List all bot users with user IDs\n"
+        "`/admin_delete <user_id>` \\- Delete a user’s data\n"
+        "`/admin_premium <user_id> <days>` \\- Grant premium\n"
+        "`/admin_revoke_premium <user_id>` \\- Revoke premium\n"
+        "`/admin_ban <user_id> <days/permanent>` \\- Ban a user\n"
+        "`/admin_unban <user_id>` \\- Unban a user\n"
+        "`/admin_info <user_id>` \\- View user details\n"
+        "`/admin_reports` \\- List reported users\n"
+        "`/admin_clear_reports <user_id>` \\- Clear reports\n"
+        "`/admin_broadcast <message>` \\- Send message to all users\n"
+        "`/admin_userslist` \\- List all bot users with user IDs\n"
+        "`/premiumuserslist` \\- List premium users with remaining days\n"
     )
     try:
         update.message.reply_text(access_text, parse_mode="MarkdownV2")
@@ -860,7 +861,7 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             "🌟 25 messages/min\n\n"
             "Start exploring your premium features with `/help` or `/premium`\\!"
         )
-        logger.debug(f"Attempting to send notification to {target_id}: {notification_text}")
+        logger.debug(f"Attempting to send notification to {target_id}: {repr(notification_text)}")
         try:
             context.bot.send_message(
                 chat_id=target_id,
@@ -1125,6 +1126,42 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
     finally:
         release_db_connection(conn)
 
+def premium_users_list(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    if user_id not in ADMIN_IDS:
+        update.message.reply_text("Unauthorized.")
+        logger.info(f"Unauthorized access attempt by user_id={user_id}")
+        return
+    conn = get_db_connection()
+    if not conn:
+        update.message.reply_text("Error fetching premium users list due to database issue.")
+        logger.error("Failed to get database connection for /premiumuserslist")
+        return
+    try:
+        current_time = int(time.time())
+        with conn.cursor() as c:
+            c.execute(
+                "SELECT user_id, premium_expiry FROM users WHERE premium_expiry > %s ORDER BY premium_expiry",
+                (current_time,)
+            )
+            users = c.fetchall()
+            if not users:
+                update.message.reply_text("No premium users found.")
+                logger.info(f"Admin {user_id} requested premium users list: no users found")
+                return
+            user_list = "*Premium Users List*\n\n"
+            for user_id, premium_expiry in users:
+                remaining_days = (premium_expiry - current_time + 24 * 3600 - 1) // (24 * 3600)  # Ceiling division
+                user_list += f"User ID: `{user_id}` \\- {remaining_days} days remaining\n"
+            user_list += f"\n*Total Premium Users*: `{len(users)}`"
+            update.message.reply_text(user_list, parse_mode="MarkdownV2")
+            logger.info(f"Admin {user_id} viewed premium users list: {len(users)} users")
+    except Exception as e:
+        logger.error(f"Failed to fetch premium users list: {e}")
+        update.message.reply_text("Error fetching premium users list.")
+    finally:
+        release_db_connection(conn)
+
 def error_handler(update: Update, context: CallbackContext) -> None:
     logger.error(f"Update {update} caused error {context.error}", exc_info=True)
     if update and update.message:
@@ -1185,6 +1222,7 @@ def main() -> None:
         dispatcher.add_handler(CommandHandler("admin_clear_reports", admin_clear_reports))
         dispatcher.add_handler(CommandHandler("admin_broadcast", admin_broadcast))
         dispatcher.add_handler(CommandHandler("admin_userslist", admin_userslist))
+        dispatcher.add_handler(CommandHandler("premiumuserslist", premium_users_list))
         dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
         dispatcher.add_error_handler(error_handler)
 
