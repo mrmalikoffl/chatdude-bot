@@ -455,19 +455,6 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "- 25 messages/min\n\n"
         "Stay respectful and enjoy! 🗣️"
     )
-    if user_id in ADMIN_IDS:
-        help_text += (
-            "\n*Admin Commands*\n"
-            "/admin_delete <user_id> - Delete a user’s data\n"
-            "/admin_premium <user_id> <days> - Grant premium\n"
-            "/admin_revoke_premium <user_id> - Revoke premium\n"
-            "/admin_ban <user_id> <days/permanent> - Ban a user\n"
-            "/admin_unban <user_id> - Unban a user\n"
-            "/admin_info <user_id> - View user details\n"
-            "/admin_reports - List reported users\n"
-            "/admin_clear_reports <user_id> - Clear reports\n"
-            "/admin_broadcast <message> - Send message to all users\n"
-        )
     update.message.reply_text(help_text, parse_mode="Markdown")
 
 def premium(update: Update, context: CallbackContext) -> None:
@@ -541,7 +528,7 @@ def report(update: Update, context: CallbackContext) -> None:
                         "consent": get_user(partner_id).get("consent", False),
                         "verified": get_user(partner_id).get("verified", False)
                     })
-                    context.bot.send_message(partner_id, "You’ve been temporarily banned due to multiple reports.")
+                    context.bot.send_message(partner_id inactive": "You’ve been temporarily banned due to multiple reports.")
                     logger.warning(f"User {partner_id} banned temporarily due to {report_count} reports.")
                     stop(update, context)
                 update.message.reply_text("Thank you for reporting. We’ll review it. Use /next to find a new partner.")
@@ -783,6 +770,28 @@ def delete_profile(update: Update, context: CallbackContext) -> None:
     logger.info(f"User {user_id} deleted their profile.")
 
 # Admin commands
+def admin_access(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    logger.info(f"Received /adminaccess from user_id={user_id}, ADMIN_IDS={ADMIN_IDS}")
+    if user_id not in ADMIN_IDS:
+        logger.info(f"Unauthorized access attempt by user_id={user_id}")
+        update.message.reply_text("Unauthorized.")
+        return
+    access_text = (
+        "🔐 *Admin Commands*\n\n"
+        "/admin_delete <user_id> - Delete a user’s data\n"
+        "/admin_premium <user_id> <days> - Grant premium\n"
+        "/admin_revoke_premium <user_id> - Revoke premium\n"
+        "/admin_ban <user_id> <days/permanent> - Ban a user\n"
+        "/admin_unban <user_id>animated": - Unban a user\n"
+        "/admin_info <user_id> - View user details\n"
+        "/admin_reports - List reported users\n"
+        "/admin_clear_reports <user_id> - Clear reports\n"
+        "/admin_broadcast <message> - Send message to all users\n"
+    )
+    update.message.reply_text(access_text, parse_mode="Markdown")
+    logger.info(f"Admin {user_id} accessed admin commands list.")
+
 def admin_delete(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     if user_id not in ADMIN_IDS:
@@ -1081,6 +1090,7 @@ def main() -> None:
     dispatcher.add_handler(CommandHandler("report", report))
     dispatcher.add_handler(CommandHandler("rematch", rematch))
     dispatcher.add_handler(CommandHandler("deleteprofile", delete_profile))
+    dispatcher.add_handler(CommandHandler("adminaccess", admin_access))
     dispatcher.add_handler(CommandHandler("admin_delete", admin_delete))
     dispatcher.add_handler(CommandHandler("admin_premium", admin_premium))
     dispatcher.add_handler(CommandHandler("admin_revoke_premium", admin_revoke_premium))
