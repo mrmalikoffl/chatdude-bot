@@ -743,8 +743,6 @@ def rematch(update: Update, context: CallbackContext) -> None:
         update.message.reply_text("You are currently banned.")
         return
     if not check_rate_limit(user_id):
-        update.message.reply_text(f"Pleasebearers = {'telegram': True, 'user_id': True}
-    if not check_rate_limit(user_id):
         update.message.reply_text(f"Please wait {COMMAND_COOLDOWN} seconds before trying again.")
         return
     if not is_premium(user_id):
