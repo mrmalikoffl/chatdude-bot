@@ -104,7 +104,7 @@ def init_db():
         return
     try:
         with conn.cursor() as c:
-            # Users table with premium_features
+            # Create users table if it doesn't exist
             c.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
@@ -114,11 +114,23 @@ def init_db():
                     premium_expiry BIGINT,
                     ban_type TEXT,
                     ban_expiry BIGINT,
-                    verified BOOLEAN DEFAULT FALSE,
-                    premium_features JSONB DEFAULT '{}'
+                    verified BOOLEAN DEFAULT FALSE
                 )
             """)
-            # Reports table
+            # Check if premium_features column exists
+            c.execute("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'users' AND column_name = 'premium_features'
+            """)
+            if not c.fetchone():
+                # Add premium_features column
+                c.execute("""
+                    ALTER TABLE users
+                    ADD COLUMN premium_features JSONB DEFAULT '{}'
+                """)
+                logger.info("Added premium_features column to users table.")
+            # Create reports table
             c.execute("""
                 CREATE TABLE IF NOT EXISTS reports (
                     report_id SERIAL PRIMARY KEY,
@@ -134,9 +146,9 @@ def init_db():
             logger.info("Database tables initialized successfully.")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
+        conn.rollback()
     finally:
         release_db_connection(conn)
-
 # Initialize database
 try:
     init_db_pool()
@@ -163,23 +175,49 @@ def get_user(user_id: int) -> dict:
         return {}
     try:
         with conn.cursor() as c:
-            c.execute(
-                "SELECT profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified, premium_features "
-                "FROM users WHERE user_id = %s",
-                (user_id,)
-            )
+            # Try querying with premium_features
+            c.execute("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'users' AND column_name = 'premium_features'
+            """)
+            has_premium_features = bool(c.fetchone())
+            if has_premium_features:
+                c.execute(
+                    "SELECT profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified, premium_features "
+                    "FROM users WHERE user_id = %s",
+                    (user_id,)
+                )
+            else:
+                c.execute(
+                    "SELECT profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified "
+                    "FROM users WHERE user_id = %s",
+                    (user_id,)
+                )
             result = c.fetchone()
             if result:
-                return {
-                    "profile": result[0] or {},
-                    "consent": result[1],
-                    "consent_time": result[2],
-                    "premium_expiry": result[3],
-                    "ban_type": result[4],
-                    "ban_expiry": result[5],
-                    "verified": result[6],
-                    "premium_features": result[7] or {}
-                }
+                if has_premium_features:
+                    return {
+                        "profile": result[0] or {},
+                        "consent": result[1],
+                        "consent_time": result[2],
+                        "premium_expiry": result[3],
+                        "ban_type": result[4],
+                        "ban_expiry": result[5],
+                        "verified": result[6],
+                        "premium_features": result[7] or {}
+                    }
+                else:
+                    return {
+                        "profile": result[0] or {},
+                        "consent": result[1],
+                        "consent_time": result[2],
+                        "premium_expiry": result[3],
+                        "ban_type": result[4],
+                        "ban_expiry": result[5],
+                        "verified": result[6],
+                        "premium_features": {}  # Fallback
+                    }
             return {}
     except Exception as e:
         logger.error(f"Failed to get user {user_id}: {e}")
@@ -193,23 +231,44 @@ def update_user(user_id: int, data: dict):
         return
     try:
         with conn.cursor() as c:
+            # Check if premium_features column exists
             c.execute("""
-                INSERT INTO users (user_id, profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified, premium_features)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (user_id) DO UPDATE
-                SET profile = %s, consent = %s, consent_time = %s, premium_expiry = %s, ban_type = %s, ban_expiry = %s, verified = %s, premium_features = %s
-            """, (
-                user_id, json.dumps(data.get("profile", {})), data.get("consent", False), data.get("consent_time"),
-                data.get("premium_expiry"), data.get("ban_type"), data.get("ban_expiry"), data.get("verified", False),
-                json.dumps(data.get("premium_features", {})),
-                json.dumps(data.get("profile", {})), data.get("consent", False), data.get("consent_time"),
-                data.get("premium_expiry"), data.get("ban_type"), data.get("ban_expiry"), data.get("verified", False),
-                json.dumps(data.get("premium_features", {}))
-            ))
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'users' AND column_name = 'premium_features'
+            """)
+            has_premium_features = bool(c.fetchone())
+            if has_premium_features:
+                c.execute("""
+                    INSERT INTO users (user_id, profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified, premium_features)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE
+                    SET profile = %s, consent = %s, consent_time = %s, premium_expiry = %s, ban_type = %s, ban_expiry = %s, verified = %s, premium_features = %s
+                """, (
+                    user_id, json.dumps(data.get("profile", {})), data.get("consent", False), data.get("consent_time"),
+                    data.get("premium_expiry"), data.get("ban_type"), data.get("ban_expiry"), data.get("verified", False),
+                    json.dumps(data.get("premium_features", {})),
+                    json.dumps(data.get("profile", {})), data.get("consent", False), data.get("consent_time"),
+                    data.get("premium_expiry"), data.get("ban_type"), data.get("ban_expiry"), data.get("verified", False),
+                    json.dumps(data.get("premium_features", {}))
+                ))
+            else:
+                c.execute("""
+                    INSERT INTO users (user_id, profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE
+                    SET profile = %s, consent = %s, consent_time = %s, premium_expiry = %s, ban_type = %s, ban_expiry = %s, verified = %s
+                """, (
+                    user_id, json.dumps(data.get("profile", {})), data.get("consent", False), data.get("consent_time"),
+                    data.get("premium_expiry"), data.get("ban_type"), data.get("ban_expiry"), data.get("verified", False),
+                    json.dumps(data.get("profile", {})), data.get("consent", False), data.get("consent_time"),
+                    data.get("premium_expiry"), data.get("ban_type"), data.get("ban_expiry"), data.get("verified", False)
+                ))
             conn.commit()
             logger.debug(f"Updated user {user_id} in database.")
     except Exception as e:
         logger.error(f"Failed to update user {user_id}: {e}")
+        conn.rollback()
     finally:
         release_db_connection(conn)
 
