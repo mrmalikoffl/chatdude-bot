@@ -564,28 +564,28 @@ def premium(update: Update, context: CallbackContext) -> None:
         update.message.reply_text("You are currently banned.")
         return
     keyboard = [
-        [InlineKeyboardButton("Shine Profile (100 Stars)", callback_data="buy_shine")],
-        [InlineKeyboardButton("Instant Rematch (50 Stars)", callback_data="buy_instant")],
-        [InlineKeyboardButton("Mood Match (150 Stars)", callback_data="buy_mood")],
-        [InlineKeyboardButton("Vaulted Chats (200 Stars)", callback_data="buy_vault")],
-        [InlineKeyboardButton("Flare Messages (75 Stars)", callback_data="buy_flare")],
+        [InlineKeyboardButton("Flare Messages (100 Stars)", callback_data="buy_flare")],
+        [InlineKeyboardButton("Instant Rematch (100 Stars)", callback_data="buy_instant")],
+        [InlineKeyboardButton("Shine Profile (250 Stars)", callback_data="buy_shine")],
+        [InlineKeyboardButton("Mood Match (250 Stars)", callback_data="buy_mood")],
+        [InlineKeyboardButton("Vaulted Chats (500 Stars)", callback_data="buy_vault")],
+        [InlineKeyboardButton("Premium Pass (1000 Stars)", callback_data="buy_premium_pass")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    premium_text = (
+    update.message.reply_text(
         "🌟 *Premium Features*\n\n"
         "Unlock with Telegram Stars:\n"
-        "\\- *Shine Profile*: Be first in line for matches \\(100 Stars\\)\n"
-        "\\- *Instant Rematch*: Reconnect anytime \\(50 Stars\\)\n"
-        "\\- *Mood Match*: Match by vibe \\(150 Stars\\)\n"
-        "\\- *Vaulted Chats*: Save chats forever \\(200 Stars\\)\n"
-        "\\- *Flare Messages*: Add sparkle effects \\(75 Stars\\)\n\n"
-        "Choose a feature to buy\\!"
+        "- Flare Messages: Sparkle effects for 7 days (100 Stars)\n"
+        "- Instant Rematch: Reconnect anytime (100 Stars)\n"
+        "- Shine Profile: Priority matching for 24 hours (250 Stars)\n"
+        "- Mood Match: Vibe-based matches for 30 days (250 Stars)\n"
+        "- Vaulted Chats: Save chats forever (500 Stars)\n"
+        "- Premium Pass: All features for 30 days + 5 Instant Rematches (1000 Stars)\n\n"
+        "Choose a feature to buy!",
+        parse_mode="MarkdownV2",
+        reply_markup=reply_markup
     )
-    try:
-        update.message.reply_text(premium_text, parse_mode="MarkdownV2", reply_markup=reply_markup)
-    except Exception as e:
-        logger.error(f"Failed to send premium message: {e}")
-        update.message.reply_text("Error displaying premium features. Please try again.")
+    logger.info(f"Displayed premium menu for user {user_id}")
 
 def buy_premium(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
@@ -595,11 +595,12 @@ def buy_premium(update: Update, context: CallbackContext) -> None:
         query.message.reply_text("You are currently banned.")
         return
     feature_map = {
-        "buy_shine": ("Shine Profile", 100, "Boost your profile to the top for 24 hours!", "shine_profile"),
-        "buy_instant": ("Instant Rematch", 50, "Reconnect with any past partner instantly!", "instant_rematch"),
-        "buy_mood": ("Mood Match", 150, "Match with users sharing your vibe!", "mood_match"),
-        "buy_vault": ("Vaulted Chats", 200, "Save your chats forever!", "vaulted_chats"),
-        "buy_flare": ("Flare Messages", 75, "Add sparkle effects to your messages!", "flare_messages"),
+        "buy_flare": ("Flare Messages", 100, "Add sparkle effects to your messages for 7 days!", "flare_messages"),
+        "buy_instant": ("Instant Rematch", 100, "Reconnect with any past partner instantly!", "instant_rematch"),
+        "buy_shine": ("Shine Profile", 250, "Boost your profile to the top for 24 hours!", "shine_profile"),
+        "buy_mood": ("Mood Match", 250, "Match with users sharing your vibe for 30 days!", "mood_match"),
+        "buy_vault": ("Vaulted Chats", 500, "Save your chats forever!", "vaulted_chats"),
+        "buy_premium_pass": ("Premium Pass", 1000, "Unlock Shine Profile, Mood Match, Vaulted Chats, Flare Messages (30 days), and 5 Instant Rematches!", "premium_pass"),
     }
     choice = query.data
     if choice not in feature_map:
@@ -615,7 +616,7 @@ def buy_premium(update: Update, context: CallbackContext) -> None:
             currency="XTR",
             prices=[LabeledPrice(title, stars)],
             start_parameter=f"buy-{feature_key}",
-            provider_token=None  # Explicitly None for Stars
+            provider_token=None
         )
         logger.info(f"Sent Stars invoice for user {user_id}: {title} ({stars} Stars)")
     except Exception as e:
@@ -629,7 +630,8 @@ def pre_checkout(update: Update, context: CallbackContext) -> None:
             query.id, ok=False, error_message="Only Telegram Stars payments are supported."
         )
         return
-    if query.invoice_payload in [f"{key}_{query.from_user.id}" for key in ["shine_profile", "instant_rematch", "mood_match", "vaulted_chats", "flare_messages"]]:
+    valid_payloads = [f"{key}_{query.from_user.id}" for key in ["flare_messages", "instant_rematch", "shine_profile", "mood_match", "vaulted_chats", "premium_pass"]]
+    if query.invoice_payload in valid_payloads:
         context.bot.answer_pre_checkout_query(query.id, ok=True)
         logger.info(f"Approved pre-checkout for user {query.from_user.id}: {query.invoice_payload}")
     else:
@@ -647,18 +649,31 @@ def successful_payment(update: Update, context: CallbackContext) -> None:
     payload = payment.invoice_payload
     current_time = int(time.time())
     feature_map = {
+        "flare_messages": (7 * 24 * 3600, "Flare Messages activated for 7 days! ✨"),
+        "instant_rematch": (None, "Instant Rematch unlocked! Use /instant."),  # One-time
         "shine_profile": (24 * 3600, "Shine Profile activated for 24 hours! 🌟"),
-        "instant_rematch": (None, "Instant Rematch unlocked! Use /instant."),  # One-time use
         "mood_match": (30 * 24 * 3600, "Mood Match activated for 30 days! 😊"),
         "vaulted_chats": (None, "Vaulted Chats unlocked forever! 📜"),  # Permanent
-        "flare_messages": (7 * 24 * 3600, "Flare Messages activated for 7 days! ✨"),
+        "premium_pass": (None, "Premium Pass activated! Enjoy all features for 30 days + 5 Instant Rematches! 🎉"),
     }
+    user = get_user(user_id)
+    features = user.get("premium_features", {})
     for feature, (duration, message) in feature_map.items():
         if payload.startswith(feature):
-            user = get_user(user_id)
-            features = user.get("premium_features", {})
-            expiry = current_time + duration if duration else None
-            features[feature] = expiry if expiry else True  # True for permanent
+            if feature == "premium_pass":
+                # Grant all features
+                features["shine_profile"] = current_time + 30 * 24 * 3600
+                features["mood_match"] = current_time + 30 * 24 * 3600
+                features["vaulted_chats"] = True
+                features["flare_messages"] = current_time + 30 * 24 * 3600
+                # Add 5 Instant Rematches
+                features["instant_rematch_count"] = features.get("instant_rematch_count", 0) + 5
+            else:
+                expiry = current_time + duration if duration else True
+                if feature == "instant_rematch":
+                    features["instant_rematch_count"] = features.get("instant_rematch_count", 0) + 1
+                else:
+                    features[feature] = expiry
             update_user(user_id, {"premium_features": features})
             update.message.reply_text(message)
             logger.info(f"User {user_id} purchased {feature} with Stars")
@@ -684,37 +699,24 @@ def shine(update: Update, context: CallbackContext) -> None:
 
 def instant(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
-    if is_banned(user_id):
-        update.message.reply_text("You are currently banned.")
-        return
-    if not check_rate_limit(user_id):
-        update.message.reply_text(f"Please wait {COMMAND_COOLDOWN} seconds before trying again.")
-        return
-    if not has_premium_feature(user_id, "instant_rematch"):
-        update.message.reply_text("Instant Rematch is a premium feature. Buy with /premium.")
-        return
-    if user_id in user_pairs:
-        update.message.reply_text("You're already in a chat. Use /stop first.")
-        return
-    previous_partner = previous_partners.get(user_id)
-    if not previous_partner:
-        update.message.reply_text("No previous partner to rematch with.")
-        return
-    if previous_partner in user_pairs:
-        update.message.reply_text("Your previous partner is in another chat.")
-        return
-    if previous_partner in waiting_users:
-        waiting_users.remove(previous_partner)
-    user_pairs[user_id] = previous_partner
-    user_pairs[previous_partner] = user_id
-    context.bot.send_message(user_id, "Instantly reconnected! 🗣️")
-    context.bot.send_message(previous_partner, "Someone reconnected with you! 🗣️")
-    logger.info(f"User {user_id} used Instant Rematch with {previous_partner}.")
-    # Remove one-time use
     user = get_user(user_id)
     features = user.get("premium_features", {})
-    features.pop("instant_rematch", None)
+    rematch_count = features.get("instant_rematch_count", 0)
+    if rematch_count <= 0:
+        update.message.reply_text("You need an Instant Rematch! Buy one with /premium.")
+        return
+    partners = user.get("profile", {}).get("past_partners", [])
+    if not partners:
+        update.message.reply_text("No past partners to rematch with.")
+        return
+    partner_id = partners[-1]  # Pick most recent
+    if not match_users(user_id, partner_id, context):
+        update.message.reply_text("Failed to reconnect. Try again later.")
+        return
+    features["instant_rematch_count"] = rematch_count - 1
     update_user(user_id, {"premium_features": features})
+    update.message.reply_text("Instantly reconnected! 🗣️")
+    logger.info(f"User {user_id} used Instant Rematch with {partner_id}")
 
 def mood(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
