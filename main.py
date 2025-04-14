@@ -463,7 +463,7 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "\- Advanced filters\n"
         "\- Verified badge\n"
         "\- 25 messages/min\n\n"
-        "Stay respectful and enjoy! 🗣️"
+        "Stay respectful and enjoy\! 🗣️"
     )
     try:
         update.message.reply_text(help_text, parse_mode="MarkdownV2")
@@ -488,7 +488,7 @@ def premium(update: Update, context: CallbackContext) -> None:
         "\- Week: $4\.99\n"
         "\- Month: $9\.99\n"
         "\- Year: $49\.99\n\n"
-        "Contact `@Talk2AnyoneSupport` to subscribe!\n"
+        "Contact `@Talk2AnyoneSupport` to subscribe\!"
     )
     try:
         update.message.reply_text(premium_text, parse_mode="MarkdownV2")
