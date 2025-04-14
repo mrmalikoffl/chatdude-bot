@@ -28,7 +28,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Admin configuration
-ADMIN_IDS = {5975525252}  # Your Telegram user ID
+ADMIN_IDS = {5975525252}  # Replace with your Telegram user ID
 
 # Security configurations
 BANNED_WORDS = {
@@ -56,10 +56,15 @@ GENDER, AGE, TAGS, LOCATION, BIO, CONSENT, VERIFICATION = range(7)
 
 # Database connection pool
 db_pool = None
+
 def init_db_pool():
     global db_pool
     try:
-        url = urlparse(os.getenv("DATABASE_URL"))
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            logger.error("DATABASE_URL environment variable not set.")
+            raise ValueError("DATABASE_URL not set")
+        url = urlparse(database_url)
         db_pool = psycopg2.pool.SimpleConnectionPool(
             1, 10,  # Min 1, max 10 connections
             database=url.path[1:],
@@ -68,12 +73,11 @@ def init_db_pool():
             host=url.hostname,
             port=url.port
         )
-        logger.info("Database connection pool initialized.")
+        logger.info("Database connection pool initialized successfully.")
     except Exception as e:
         logger.error(f"Failed to initialize database pool: {e}")
-        exit(1)
+        raise
 
-# Get a connection from the pool
 def get_db_connection():
     try:
         return db_pool.getconn()
@@ -81,17 +85,20 @@ def get_db_connection():
         logger.error(f"Failed to get database connection: {e}")
         return None
 
-# Release a connection back to the pool
 def release_db_connection(conn):
     if conn:
-        db_pool.putconn(conn)
+        try:
+            db_pool.putconn(conn)
+        except Exception as e:
+            logger.error(f"Failed to release database connection: {e}")
 
-# Initialize database tables
 def init_db():
     conn = get_db_connection()
-    if conn:
-        try:
-            c = conn.cursor()
+    if not conn:
+        logger.error("Could not get database connection for initialization.")
+        return
+    try:
+        with conn.cursor() as c:
             # Users table
             c.execute("""
                 CREATE TABLE IF NOT EXISTS users (
@@ -101,20 +108,9 @@ def init_db():
                     consent_time BIGINT,
                     premium_expiry BIGINT,
                     ban_type TEXT,
-                    ban_expiry BIGINT
+                    ban_expiry BIGINT,
+                    verified BOOLEAN DEFAULT FALSE
                 )
-            """)
-            # Add verified column if it doesn't exist
-            c.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT FROM information_schema.columns
-                        WHERE table_name = 'users' AND column_name = 'verified'
-                    ) THEN
-                        ALTER TABLE users ADD COLUMN verified BOOLEAN DEFAULT FALSE;
-                    END IF;
-                END $$;
             """)
             # Reports table
             c.execute("""
@@ -129,36 +125,38 @@ def init_db():
                 )
             """)
             conn.commit()
-            logger.info("Database tables initialized.")
-        except Exception as e:
-            logger.error(f"Failed to initialize database: {e}")
-        finally:
-            release_db_connection(conn)
+            logger.info("Database tables initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+    finally:
+        release_db_connection(conn)
 
-# Initialize pool and database
-init_db_pool()
-init_db()
+# Initialize database
+try:
+    init_db_pool()
+    init_db()
+except Exception as e:
+    logger.error(f"Failed to set up database: {e}")
+    exit(1)
 
-# Cleanup in-memory data periodically
 def cleanup_in_memory(context: CallbackContext):
     current_time = time.time()
-    # Remove old timestamps
     command_timestamps.clear()
     for user_id in list(message_timestamps.keys()):
         message_timestamps[user_id] = [t for t in message_timestamps[user_id] if current_time - t < 60]
         if not message_timestamps[user_id]:
             del message_timestamps[user_id]
-    # Clear stale chat histories
     for user_id in list(chat_histories.keys()):
         if not is_premium(user_id):
             del chat_histories[user_id]
+    logger.debug("In-memory data cleaned up.")
 
-# Helper functions for database operations
 def get_user(user_id: int) -> dict:
     conn = get_db_connection()
-    if conn:
-        try:
-            c = conn.cursor()
+    if not conn:
+        return {}
+    try:
+        with conn.cursor() as c:
             c.execute(
                 "SELECT profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified "
                 "FROM users WHERE user_id = %s",
@@ -176,17 +174,18 @@ def get_user(user_id: int) -> dict:
                     "verified": result[6]
                 }
             return {}
-        except Exception as e:
-            logger.error(f"Failed to get user {user_id}: {e}")
-        finally:
-            release_db_connection(conn)
-    return {}
+    except Exception as e:
+        logger.error(f"Failed to get user {user_id}: {e}")
+        return {}
+    finally:
+        release_db_connection(conn)
 
 def update_user(user_id: int, data: dict):
     conn = get_db_connection()
-    if conn:
-        try:
-            c = conn.cursor()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as c:
             c.execute("""
                 INSERT INTO users (user_id, profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -199,24 +198,26 @@ def update_user(user_id: int, data: dict):
                 data.get("premium_expiry"), data.get("ban_type"), data.get("ban_expiry"), data.get("verified", False)
             ))
             conn.commit()
-        except Exception as e:
-            logger.error(f"Failed to update user {user_id}: {e}")
-        finally:
-            release_db_connection(conn)
+            logger.debug(f"Updated user {user_id} in database.")
+    except Exception as e:
+        logger.error(f"Failed to update user {user_id}: {e}")
+    finally:
+        release_db_connection(conn)
 
 def delete_user(user_id: int):
     conn = get_db_connection()
-    if conn:
-        try:
-            c = conn.cursor()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as c:
             c.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
             c.execute("DELETE FROM reports WHERE reporter_id = %s OR reported_id = %s", (user_id, user_id))
             conn.commit()
             logger.info(f"Deleted user {user_id} from database.")
-        except Exception as e:
-            logger.error(f"Failed to delete user {user_id}: {e}")
-        finally:
-            release_db_connection(conn)
+    except Exception as e:
+        logger.error(f"Failed to delete user {user_id}: {e}")
+    finally:
+        release_db_connection(conn)
 
 def is_banned(user_id: int) -> bool:
     user = get_user(user_id)
@@ -250,8 +251,9 @@ def check_message_rate_limit(user_id: int) -> bool:
     message_timestamps[user_id].append(current_time)
     return True
 
-# Security: Filter malicious content
 def is_safe_message(text: str) -> bool:
+    if not text:
+        return True
     text = text.lower()
     if any(word in text for word in BANNED_WORDS):
         return False
@@ -260,7 +262,6 @@ def is_safe_message(text: str) -> bool:
         return False
     return True
 
-# Bot commands
 def start(update: Update, context: CallbackContext) -> int:
     user_id = update.message.from_user.id
     if is_banned(user_id):
@@ -350,9 +351,11 @@ def verification_handler(update: Update, context: CallbackContext) -> int:
 def match_users(context: CallbackContext) -> None:
     if len(waiting_users) < 2:
         return
-    for i in range(len(waiting_users)):
+    i = 0
+    while i < len(waiting_users):
         user1 = waiting_users[i]
-        for j in range(i + 1, len(waiting_users)):
+        j = i + 1
+        while j < len(waiting_users):
             user2 = waiting_users[j]
             if can_match(user1, user2):
                 waiting_users.remove(user1)
@@ -369,6 +372,8 @@ def match_users(context: CallbackContext) -> None:
                 if is_premium(user2):
                     chat_histories[user2] = []
                 return
+            j += 1
+        i += 1
 
 def can_match(user1: int, user2: int) -> bool:
     profile1 = get_user(user1).get("profile", {})
@@ -401,7 +406,8 @@ def stop(update: Update, context: CallbackContext) -> None:
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
         del user_pairs[user_id]
-        del user_pairs[partner_id]
+        if partner_id in user_pairs:
+            del user_pairs[partner_id]
         context.bot.send_message(partner_id, "Your partner left the chat. Use /start to find a new one.")
         update.message.reply_text("Chat ended. Use /start to begin a new chat.")
         logger.info(f"User {user_id} stopped chat with {partner_id}.")
@@ -505,9 +511,11 @@ def report(update: Update, context: CallbackContext) -> None:
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
         conn = get_db_connection()
-        if conn:
-            try:
-                c = conn.cursor()
+        if not conn:
+            update.message.reply_text("Error processing report due to database issue.")
+            return
+        try:
+            with conn.cursor() as c:
                 reason = " ".join(context.args) if context.args else "No reason provided"
                 c.execute("""
                     INSERT INTO reports (reporter_id, reported_id, timestamp, reason, reporter_profile, reported_profile)
@@ -533,11 +541,11 @@ def report(update: Update, context: CallbackContext) -> None:
                     stop(update, context)
                 update.message.reply_text("Thank you for reporting. We’ll review it. Use /next to find a new partner.")
                 logger.info(f"User {user_id} reported user {partner_id}. Reason: {reason}. Total reports: {report_count}.")
-            except Exception as e:
-                logger.error(f"Failed to log report: {e}")
-                update.message.reply_text("Error processing report.")
-            finally:
-                release_db_connection(conn)
+        except Exception as e:
+            logger.error(f"Failed to log report: {e}")
+            update.message.reply_text("Error processing report.")
+        finally:
+            release_db_connection(conn)
     else:
         update.message.reply_text("You're not in a chat. Use /start to begin.")
 
@@ -601,7 +609,6 @@ def settings(update: Update, context: CallbackContext) -> int:
 def button(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     query.answer()
-    user_id = query.from_user.id
     choice = query.data
     if choice == "gender":
         keyboard = [
@@ -769,13 +776,11 @@ def delete_profile(update: Update, context: CallbackContext) -> None:
     update.message.reply_text("Your profile and data have been deleted.")
     logger.info(f"User {user_id} deleted their profile.")
 
-# Admin commands
 def admin_access(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
-    logger.info(f"Received /adminaccess from user_id={user_id}, ADMIN_IDS={ADMIN_IDS}")
     if user_id not in ADMIN_IDS:
-        logger.info(f"Unauthorized access attempt by user_id={user_id}")
         update.message.reply_text("Unauthorized.")
+        logger.info(f"Unauthorized access attempt by user_id={user_id}")
         return
     access_text = (
         "🔐 *Admin Commands*\n\n"
@@ -783,7 +788,7 @@ def admin_access(update: Update, context: CallbackContext) -> None:
         "/admin_premium <user_id> <days> - Grant premium\n"
         "/admin_revoke_premium <user_id> - Revoke premium\n"
         "/admin_ban <user_id> <days/permanent> - Ban a user\n"
-        "/admin_unban <user_id>animated": - Unban a user\n"
+        "/admin_unban <user_id> - Unban a user\n"
         "/admin_info <user_id> - View user details\n"
         "/admin_reports - List reported users\n"
         "/admin_clear_reports <user_id> - Clear reports\n"
@@ -807,14 +812,14 @@ def admin_delete(update: Update, context: CallbackContext) -> None:
 
 def admin_premium(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
-    logger.info(f"Received /admin_premium from user_id={user_id}, ADMIN_IDS={ADMIN_IDS}")
     if user_id not in ADMIN_IDS:
-        logger.info(f"Unauthorized access attempt by user_id={user_id}")
         update.message.reply_text("Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
         days = int(context.args[1])
+        if days <= 0:
+            raise ValueError("Days must be positive")
         expiry = int(time.time()) + days * 24 * 3600
         user = get_user(target_id)
         update_user(target_id, {
@@ -825,12 +830,8 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
         })
         update.message.reply_text(f"User {target_id} granted premium for {days} days.")
         logger.info(f"Admin {user_id} granted premium to {target_id} for {days} days.")
-    except (IndexError, ValueError) as e:
-        logger.error(f"Error in /admin_premium: {e}")
+    except (IndexError, ValueError):
         update.message.reply_text("Usage: /admin_premium <user_id> <days>")
-    except Exception as e:
-        logger.error(f"Unexpected error in /admin_premium: {e}", exc_info=True)
-        update.message.reply_text("An error occurred in admin_premium.")
 
 def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
@@ -884,6 +885,7 @@ def admin_ban(update: Update, context: CallbackContext) -> None:
             logger.info(f"Admin {user_id} banned {target_id} for {days} days.")
         else:
             update.message.reply_text("Usage: /admin_ban <user_id> <days/permanent>")
+            return
         if target_id in user_pairs:
             stop(update, context)
     except (IndexError, ValueError):
@@ -944,12 +946,12 @@ def admin_info(update: Update, context: CallbackContext) -> None:
         conn = get_db_connection()
         if conn:
             try:
-                c = conn.cursor()
-                c.execute("SELECT COUNT(*), string_agg(reason, '; ') FROM reports WHERE reported_id = %s", (target_id,))
-                count, reasons = c.fetchone()
-                info += f"Reports: {count}"
-                if reasons:
-                    info += f" (Reasons: {reasons})"
+                with conn.cursor() as c:
+                    c.execute("SELECT COUNT(*), string_agg(reason, '; ') FROM reports WHERE reported_id = %s", (target_id,))
+                    count, reasons = c.fetchone()
+                    info += f"Reports: {count}"
+                    if reasons:
+                        info += f" (Reasons: {reasons})"
             except Exception as e:
                 logger.error(f"Failed to fetch reports for {target_id}: {e}")
             finally:
@@ -965,9 +967,11 @@ def admin_reports(update: Update, context: CallbackContext) -> None:
         update.message.reply_text("Unauthorized.")
         return
     conn = get_db_connection()
-    if conn:
-        try:
-            c = conn.cursor()
+    if not conn:
+        update.message.reply_text("Error fetching reports due to database issue.")
+        return
+    try:
+        with conn.cursor() as c:
             c.execute("""
                 SELECT reported_id, COUNT(*), string_agg(reason, '; ')
                 FROM reports
@@ -984,11 +988,11 @@ def admin_reports(update: Update, context: CallbackContext) -> None:
                 report_text += f"User {reported_id}: {count} reports (Reasons: {reasons or 'None'})\n"
             update.message.reply_text(report_text)
             logger.info(f"Admin {user_id} viewed reported users.")
-        except Exception as e:
-            logger.error(f"Failed to fetch reports: {e}")
-            update.message.reply_text("Error fetching reports.")
-        finally:
-            release_db_connection(conn)
+    except Exception as e:
+        logger.error(f"Failed to fetch reports: {e}")
+        update.message.reply_text("Error fetching reports.")
+    finally:
+        release_db_connection(conn)
 
 def admin_clear_reports(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
@@ -998,18 +1002,20 @@ def admin_clear_reports(update: Update, context: CallbackContext) -> None:
     try:
         target_id = int(context.args[0])
         conn = get_db_connection()
-        if conn:
-            try:
-                c = conn.cursor()
+        if not conn:
+            update.message.reply_text("Error clearing reports due to database issue.")
+            return
+        try:
+            with conn.cursor() as c:
                 c.execute("DELETE FROM reports WHERE reported_id = %s", (target_id,))
                 conn.commit()
                 update.message.reply_text(f"Reports cleared for user {target_id}.")
                 logger.info(f"Admin {user_id} cleared reports for {target_id}.")
-            except Exception as e:
-                logger.error(f"Failed to clear reports: {e}")
-                update.message.reply_text("Error clearing reports.")
-            finally:
-                release_db_connection(conn)
+        except Exception as e:
+            logger.error(f"Failed to clear reports: {e}")
+            update.message.reply_text("Error clearing reports.")
+        finally:
+            release_db_connection(conn)
     except (IndexError, ValueError):
         update.message.reply_text("Usage: /admin_clear_reports <user_id>")
 
@@ -1026,9 +1032,11 @@ def admin_broadcast(update: Update, context: CallbackContext) -> None:
         update.message.reply_text("Broadcast message contains inappropriate content.")
         return
     conn = get_db_connection()
-    if conn:
-        try:
-            c = conn.cursor()
+    if not conn:
+        update.message.reply_text("Error sending broadcast due to database issue.")
+        return
+    try:
+        with conn.cursor() as c:
             c.execute("SELECT user_id FROM users")
             user_ids = [row[0] for row in c.fetchall()]
             for uid in user_ids:
@@ -1038,11 +1046,11 @@ def admin_broadcast(update: Update, context: CallbackContext) -> None:
                     logger.warning(f"Failed to send broadcast to {uid}: {e}")
             update.message.reply_text(f"Broadcast sent to {len(user_ids)} users.")
             logger.info(f"Admin {user_id} sent broadcast: {message}")
-        except Exception as e:
-            logger.error(f"Failed to send broadcast: {e}")
-            update.message.reply_text("Error sending broadcast.")
-        finally:
-            release_db_connection(conn)
+    except Exception as e:
+        logger.error(f"Failed to send broadcast: {e}")
+        update.message.reply_text("Error sending broadcast.")
+    finally:
+        release_db_connection(conn)
 
 def error_handler(update: Update, context: CallbackContext) -> None:
     logger.error(f"Update {update} caused error {context.error}", exc_info=True)
@@ -1057,55 +1065,62 @@ def error_handler(update: Update, context: CallbackContext) -> None:
 def main() -> None:
     TOKEN = os.getenv("TOKEN")
     if not TOKEN:
-        logger.error("No TOKEN found in environment variables. Exiting.")
+        logger.error("No TOKEN found in environment variables.")
         exit(1)
-    updater = Updater(TOKEN, use_context=True)
-    dispatcher = updater.dispatcher
-    start_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            CONSENT: [CallbackQueryHandler(consent_handler, pattern="^consent_")],
-            VERIFICATION: [MessageHandler(Filters.text & ~Filters.command, verification_handler)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    settings_handler = ConversationHandler(
-        entry_points=[CommandHandler("settings", settings)],
-        states={
-            GENDER: [CallbackQueryHandler(button), CallbackQueryHandler(set_gender, pattern="^(gender_|pref_)")],
-            AGE: [MessageHandler(Filters.text & ~Filters.command, set_age)],
-            TAGS: [MessageHandler(Filters.text & ~Filters.command, set_tags)],
-            LOCATION: [MessageHandler(Filters.text & ~Filters.command, set_location)],
-            BIO: [MessageHandler(Filters.text & ~Filters.command, set_bio)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    dispatcher.add_handler(start_handler)
-    dispatcher.add_handler(settings_handler)
-    dispatcher.add_handler(CommandHandler("stop", stop))
-    dispatcher.add_handler(CommandHandler("next", next_chat))
-    dispatcher.add_handler(CommandHandler("help", help_command))
-    dispatcher.add_handler(CommandHandler("premium", premium))
-    dispatcher.add_handler(CommandHandler("history", history))
-    dispatcher.add_handler(CommandHandler("report", report))
-    dispatcher.add_handler(CommandHandler("rematch", rematch))
-    dispatcher.add_handler(CommandHandler("deleteprofile", delete_profile))
-    dispatcher.add_handler(CommandHandler("adminaccess", admin_access))
-    dispatcher.add_handler(CommandHandler("admin_delete", admin_delete))
-    dispatcher.add_handler(CommandHandler("admin_premium", admin_premium))
-    dispatcher.add_handler(CommandHandler("admin_revoke_premium", admin_revoke_premium))
-    dispatcher.add_handler(CommandHandler("admin_ban", admin_ban))
-    dispatcher.add_handler(CommandHandler("admin_unban", admin_unban))
-    dispatcher.add_handler(CommandHandler("admin_info", admin_info))
-    dispatcher.add_handler(CommandHandler("admin_reports", admin_reports))
-    dispatcher.add_handler(CommandHandler("admin_clear_reports", admin_clear_reports))
-    dispatcher.add_handler(CommandHandler("admin_broadcast", admin_broadcast))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-    dispatcher.add_error_handler(error_handler)
-    updater.job_queue.run_repeating(cleanup_in_memory, interval=3600, first=60)
-    logger.info("Starting Talk2Anyone bot...")
-    updater.start_polling(drop_pending_updates=True)
-    updater.idle()
+    try:
+        updater = Updater(TOKEN, use_context=True)
+        dispatcher = updater.dispatcher
+
+        start_handler = ConversationHandler(
+            entry_points=[CommandHandler("start", start)],
+            states={
+                CONSENT: [CallbackQueryHandler(consent_handler, pattern="^consent_")],
+                VERIFICATION: [MessageHandler(Filters.text & ~Filters.command, verification_handler)],
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+        )
+        settings_handler = ConversationHandler(
+            entry_points=[CommandHandler("settings", settings)],
+            states={
+                GENDER: [CallbackQueryHandler(button), CallbackQueryHandler(set_gender, pattern="^(gender_|pref_)")],
+                AGE: [MessageHandler(Filters.text & ~Filters.command, set_age)],
+                TAGS: [MessageHandler(Filters.text & ~Filters.command, set_tags)],
+                LOCATION: [MessageHandler(Filters.text & ~Filters.command, set_location)],
+                BIO: [MessageHandler(Filters.text & ~Filters.command, set_bio)],
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+        )
+
+        dispatcher.add_handler(start_handler)
+        dispatcher.add_handler(settings_handler)
+        dispatcher.add_handler(CommandHandler("stop", stop))
+        dispatcher.add_handler(CommandHandler("next", next_chat))
+        dispatcher.add_handler(CommandHandler("help", help_command))
+        dispatcher.add_handler(CommandHandler("premium", premium))
+        dispatcher.add_handler(CommandHandler("history", history))
+        dispatcher.add_handler(CommandHandler("report", report))
+        dispatcher.add_handler(CommandHandler("rematch", rematch))
+        dispatcher.add_handler(CommandHandler("deleteprofile", delete_profile))
+        dispatcher.add_handler(CommandHandler("adminaccess", admin_access))
+        dispatcher.add_handler(CommandHandler("admin_delete", admin_delete))
+        dispatcher.add_handler(CommandHandler("admin_premium", admin_premium))
+        dispatcher.add_handler(CommandHandler("admin_revoke_premium", admin_revoke_premium))
+        dispatcher.add_handler(CommandHandler("admin_ban", admin_ban))
+        dispatcher.add_handler(CommandHandler("admin_unban", admin_unban))
+        dispatcher.add_handler(CommandHandler("admin_info", admin_info))
+        dispatcher.add_handler(CommandHandler("admin_reports", admin_reports))
+        dispatcher.add_handler(CommandHandler("admin_clear_reports", admin_clear_reports))
+        dispatcher.add_handler(CommandHandler("admin_broadcast", admin_broadcast))
+        dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+        dispatcher.add_error_handler(error_handler)
+
+        updater.job_queue.run_repeating(cleanup_in_memory, interval=3600, first=60)
+        logger.info("Starting Talk2Anyone bot...")
+        updater.start_polling(drop_pending_updates=True)
+        updater.idle()
+    except Exception as e:
+        logger.error(f"Failed to start bot: {e}")
+        exit(1)
 
 if __name__ == "__main__":
     main()
