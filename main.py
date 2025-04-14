@@ -488,7 +488,7 @@ def premium(update: Update, context: CallbackContext) -> None:
         "\- Week: $4\.99\n"
         "\- Month: $9\.99\n"
         "\- Year: $49\.99\n\n"
-        "Contact `@Talk2AnyoneSupport` to subscribe!"
+        "Contact `@Talk2AnyoneSupport` to subscribe!\n"
     )
     try:
         update.message.reply_text(premium_text, parse_mode="MarkdownV2")
