@@ -18,6 +18,10 @@ from urllib.parse import urlparse
 import json
 import re
 from collections import defaultdict
+import warnings
+
+# Suppress ConversationHandler warning
+warnings.filterwarnings("ignore", category=UserWarning, module="telegram.ext.conversationhandler")
 
 # Set up logging for Heroku
 logging.basicConfig(
@@ -443,22 +447,22 @@ def help_command(update: Update, context: CallbackContext) -> None:
         return
     help_text = (
         "📋 *Talk2Anyone Commands*\n\n"
-        "`/start` - Start a new anonymous chat\n"
-        "`/next` - Find a new chat partner\n"
-        "`/stop` - End the current chat\n"
-        "`/help` - Show this help message\n"
-        "`/report` - Report inappropriate behavior\n"
-        "`/settings` - Customize your profile\n"
-        "`/premium` - View premium plans\n"
-        "`/history` - View chat history (Premium)\n"
-        "`/rematch` - Reconnect with previous partner (Premium)\n"
-        "`/deleteprofile` - Delete your profile and data\n\n"
+        "`/start` \- Start a new anonymous chat\n"
+        "`/next` \- Find a new chat partner\n"
+        "`/stop` \- End the current chat\n"
+        "`/help` \- Show this help message\n"
+        "`/report` \- Report inappropriate behavior\n"
+        "`/settings` \- Customize your profile\n"
+        "`/premium` \- View premium plans\n"
+        "`/history` \- View chat history (Premium)\n"
+        "`/rematch` \- Reconnect with previous partner (Premium)\n"
+        "`/deleteprofile` \- Delete your profile and data\n\n"
         "*Premium Benefits*:\n"
-        "- Priority matching\n"
-        "- Chat history\n"
-        "- Advanced filters\n"
-        "- Verified badge\n"
-        "- 25 messages/min\n\n"
+        "\- Priority matching\n"
+        "\- Chat history\n"
+        "\- Advanced filters\n"
+        "\- Verified badge\n"
+        "\- 25 messages/min\n\n"
         "Stay respectful and enjoy! 🗣️"
     )
     try:
@@ -788,16 +792,16 @@ def admin_access(update: Update, context: CallbackContext) -> None:
         return
     access_text = (
         "🔐 *Admin Commands*\n\n"
-        "`/admin_delete <user_id>` - Delete a user’s data\n"
-        "`/admin_premium <user_id> <days>` - Grant premium\n"
-        "`/admin_revoke_premium <user_id>` - Revoke premium\n"
-        "`/admin_ban <user_id> <days/permanent>` - Ban a user\n"
-        "`/admin_unban <user_id>` - Unban a user\n"
-        "`/admin_info <user_id>` - View user details\n"
-        "`/admin_reports` - List reported users\n"
-        "`/admin_clear_reports <user_id>` - Clear reports\n"
-        "`/admin_broadcast <message>` - Send message to all users\n"
-        "`/admin_userslist` - List all bot users with user IDs\n"
+        "`/admin_delete <user_id>` \- Delete a user’s data\n"
+        "`/admin_premium <user_id> <days>` \- Grant premium\n"
+        "`/admin_revoke_premium <user_id>` \- Revoke premium\n"
+        "`/admin_ban <user_id> <days/permanent>` \- Ban a user\n"
+        "`/admin_unban <user_id>` \- Unban a user\n"
+        "`/admin_info <user_id>` \- View user details\n"
+        "`/admin_reports` \- List reported users\n"
+        "`/admin_clear_reports <user_id>` \- Clear reports\n"
+        "`/admin_broadcast <message>` \- Send message to all users\n"
+        "`/admin_userslist` \- List all bot users with user IDs\n"
     )
     try:
         update.message.reply_text(access_text, parse_mode="MarkdownV2")
