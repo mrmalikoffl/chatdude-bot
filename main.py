@@ -546,7 +546,7 @@ def help_command(update: Update, context: CallbackContext) -> None:
         [InlineKeyboardButton("🗑️ Delete Profile", callback_data="delete_profile")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    # Define the help text with minimal formatting, then escape
+    # Define the help text with minimal formatting
     help_lines = [
         "🌟 *Talk2Anyone Help Menu* 🌟\n",
         "Here’s how you can use the bot:\n",
@@ -559,29 +559,28 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "• /deleteprofile - Erase your data\n",
         "🌟 *Premium Features*\n",
         "• /premium - Unlock amazing features\n",
-        "• /history - View past chats (Premium)\n",
-        "• /rematch - Reconnect with past partners (Premium)\n",
-        "• /shine - Boost your profile (Premium)\n",
-        "• /instant - Instant rematch (Premium)\n",
-        "• /mood - Set chat mood (Premium)\n",
-        "• /vault - Save chats forever (Premium)\n",
-        "• /flare - Add sparkle to messages (Premium)\n",
+        "• /history - View past chats [Premium]\n",  # Changed (Premium) to [Premium]
+        "• /rematch - Reconnect with past partners [Premium]\n",
+        "• /shine - Boost your profile [Premium]\n",
+        "• /instant - Instant rematch [Premium]\n",
+        "• /mood - Set chat mood [Premium]\n",
+        "• /vault - Save chats forever [Premium]\n",
+        "• /flare - Add sparkle to messages [Premium]\n",
         "🚨 *Safety*\n",
         "• /report - Report inappropriate behavior\n",
         "Use the buttons below to explore! 👇"
     ]
-    # Escape each line, but preserve Markdown formatting by escaping after splitting
-    escaped_lines = []
-    for line in help_lines:
-        # Split line into parts that are inside *...* (bold) and outside
-        parts = line.split("*")
-        for i in range(len(parts)):
-            if i % 2 == 0:  # Outside bold
-                parts[i] = escape_markdown_v2(parts[i])
-        escaped_lines.append("*".join(parts))
-    help_text = "".join(escaped_lines)
+    # Join the lines first
+    help_text = "".join(help_lines)
+    # Temporarily replace bold markers to avoid escaping them
+    help_text = help_text.replace("*", "TEMP_BOLD")
+    # Escape all special characters
+    help_text = escape_markdown_v2(help_text)
+    # Restore bold markers
+    help_text = help_text.replace("TEMP_BOLD", "*")
     try:
         update.message.reply_text(help_text, parse_mode="MarkdownV2", reply_markup=reply_markup)
+        logger.info(f"Help message sent successfully to user {user_id}")
     except Exception as e:
         logger.error(f"Failed to send help message: {e}")
         update.message.reply_text("❌ Error displaying help. Please try again.")
