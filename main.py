@@ -510,7 +510,6 @@ def stop(update: Update, context: CallbackContext) -> None:
         update.message.reply_text("❓ You're not in a chat\\. Use /start to find a partner\\.", parse_mode="MarkdownV2")
 
 def next_chat(update: Update, context: CallbackContext) -> None:
-def next_chat(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     if is_banned(user_id):
         update.message.reply_text("🚫 You are currently banned.", parse_mode="MarkdownV2")
