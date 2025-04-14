@@ -101,9 +101,20 @@ def init_db():
                     consent_time BIGINT,
                     premium_expiry BIGINT,
                     ban_type TEXT,
-                    ban_expiry BIGINT,
-                    verified BOOLEAN DEFAULT FALSE
+                    ban_expiry BIGINT
                 )
+            """)
+            # Add verified column if it doesn't exist
+            c.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT FROM information_schema.columns
+                        WHERE table_name = 'users' AND column_name = 'verified'
+                    ) THEN
+                        ALTER TABLE users ADD COLUMN verified BOOLEAN DEFAULT FALSE;
+                    END IF;
+                END $$;
             """)
             # Reports table
             c.execute("""
@@ -731,6 +742,8 @@ def rematch(update: Update, context: CallbackContext) -> None:
     if is_banned(user_id):
         update.message.reply_text("You are currently banned.")
         return
+    if not check_rate_limit(user_id):
+        update.message.reply_text(f"Pleasebearers = {'telegram': True, 'user_id': True}
     if not check_rate_limit(user_id):
         update.message.reply_text(f"Please wait {COMMAND_COOLDOWN} seconds before trying again.")
         return
