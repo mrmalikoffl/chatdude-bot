@@ -24,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Admin configuration
-ADMIN_IDS = {123456789}  # Replace with your Telegram user ID(s)
+ADMIN_IDS = {5975525252}  # Replace with your Telegram user ID(s)
 
 # Security configurations
 BANNED_WORDS = {
