@@ -1,3 +1,2 @@
 python-telegram-bot==13.7
-# transformers==4.40.0  # Uncomment for AI moderation (requires Standard dyno)
-# torch==2.3.0        # Uncomment for AI moderation
+psycopg2-binary==2.9.9
