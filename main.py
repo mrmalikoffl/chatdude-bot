@@ -153,16 +153,6 @@ def cleanup_in_memory(context: CallbackContext):
         if not is_premium(user_id):
             del chat_histories[user_id]
 
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT FROM information_schema.columns
-        WHERE table_name = 'users' AND column_name = 'verified'
-    ) THEN
-        ALTER TABLE users ADD COLUMN verified BOOLEAN DEFAULT FALSE;
-    END IF;
-END $$;
-
 # Helper functions for database operations
 def get_user(user_id: int) -> dict:
     conn = get_db_connection()
