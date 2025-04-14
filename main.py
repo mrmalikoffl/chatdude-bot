@@ -1049,7 +1049,7 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
         if days <= 0:
             raise ValueError("Days must be positive")
         expiry = int(time.time()) + days * 24 * 3600
-        expiry_date = datetime.fromtimestamp(expiry).strftime("%Y\\-%m\\-%d")
+        expiry_date = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")  # No backslashes
         user = get_user(target_id)
         update_user(target_id, {
             "premium_expiry": expiry,
@@ -1062,7 +1062,7 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
         # Send notification to the target user
         notification_text = (
             "🎉 *Congratulations\\!* You’ve been upgraded to premium\\! 🌟\n\n"
-            f"You now have premium access for *{days} days*\\, until *{expiry_date}*\\.\n"
+            "You now have premium access for *{} days*\\, until *{}*\\.\n"
             "Enjoy these benefits\\:\n"
             "🌟 Priority matching\n"
             "🌟 Chat history\n"
@@ -1070,8 +1070,8 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             "🌟 Verified badge\n"
             "🌟 25 messages/min\n\n"
             "Start exploring with `/help` or `/premium`\\!"
-        )
-        logger.debug(f"Sending MarkdownV2 notification to {target_id}: {repr(notification_text)}")
+        ).format(days, escape_markdown_v2(expiry_date))
+        logger.debug(f"Sending MarkdownV2 notification to {target_id}: {notification_text}")
         try:
             context.bot.send_message(
                 chat_id=target_id,
@@ -1083,7 +1083,7 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             logger.warning(f"Failed to send MarkdownV2 notification to user {target_id}: {e}")
             fallback_text = (
                 f"Congratulations! You've been upgraded to premium!\n\n"
-                f"You now have premium access for {days} days, until {expiry_date.replace('\\', '')}.\n"
+                f"You now have premium access for {days} days, until {expiry_date}.\n"
                 "Enjoy these benefits:\n"
                 "- Priority matching\n"
                 "- Chat history\n"
