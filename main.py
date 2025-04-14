@@ -798,7 +798,9 @@ def admin_delete(update: Update, context: CallbackContext) -> None:
 
 def admin_premium(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
+    logger.info(f"Received /admin_premium from user_id={user_id}, ADMIN_IDS={ADMIN_IDS}")
     if user_id not in ADMIN_IDS:
+        logger.info(f"Unauthorized access attempt by user_id={user_id}")
         update.message.reply_text("Unauthorized.")
         return
     try:
@@ -814,8 +816,12 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
         })
         update.message.reply_text(f"User {target_id} granted premium for {days} days.")
         logger.info(f"Admin {user_id} granted premium to {target_id} for {days} days.")
-    except (IndexError, ValueError):
+    except (IndexError, ValueError) as e:
+        logger.error(f"Error in /admin_premium: {e}")
         update.message.reply_text("Usage: /admin_premium <user_id> <days>")
+    except Exception as e:
+        logger.error(f"Unexpected error in /admin_premium: {e}", exc_info=True)
+        update.message.reply_text("An error occurred in admin_premium.")
 
 def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
@@ -1030,9 +1036,14 @@ def admin_broadcast(update: Update, context: CallbackContext) -> None:
             release_db_connection(conn)
 
 def error_handler(update: Update, context: CallbackContext) -> None:
-    logger.error(f"Update {update} caused error {context.error}")
+    logger.error(f"Update {update} caused error {context.error}", exc_info=True)
     if update and update.message:
         update.message.reply_text("An error occurred. Please try again or use /help for assistance.")
+    for admin_id in ADMIN_IDS:
+        try:
+            context.bot.send_message(admin_id, f"Bot error: {context.error}")
+        except Exception as e:
+            logger.warning(f"Failed to notify admin {admin_id}: {e}")
 
 def main() -> None:
     TOKEN = os.getenv("TOKEN")
