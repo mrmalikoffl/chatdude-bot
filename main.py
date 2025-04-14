@@ -378,7 +378,9 @@ def start(update: Update, context: CallbackContext) -> int:
             waiting_users.insert(0, user_id)
         else:
             waiting_users.append(user_id)
-        update.message.reply_text("🔍 Looking for a chat partner... Please wait!", parse_mode="MarkdownV2")
+        # Escape the message to handle periods and exclamation mark
+        escaped_message = escape_markdown_v2("🔍 Looking for a chat partner... Please wait!")
+        update.message.reply_text(escaped_message, parse_mode="MarkdownV2")
     match_users(context)
     return ConversationHandler.END
 
@@ -544,29 +546,40 @@ def help_command(update: Update, context: CallbackContext) -> None:
         [InlineKeyboardButton("🗑️ Delete Profile", callback_data="delete_profile")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    help_text = (
-        "🌟 *Talk2Anyone Help Menu* 🌟\n\n"
-        "Here’s how you can use the bot:\n"
-        "💬 *Chat Commands*\n"
-        "• /start \\- Begin a new anonymous chat\n"
-        "• /next \\- Find a new chat partner\n"
-        "• /stop \\- End the current chat\n\n"
-        "⚙️ *Profile & Settings*\n"
-        "• /settings \\- Customize your profile\n"
-        "• /deleteprofile \\- Erase your data\n\n"
-        "🌟 *Premium Features*\n"
-        "• /premium \\- Unlock amazing features\n"
-        "• /history \\- View past chats \\(Premium\\)\n"
-        "• /rematch \\- Reconnect with past partners \\(Premium\\)\n"
-        "• /shine \\- Boost your profile \\(Premium\\)\n"
-        "• /instant \\- Instant rematch \\(Premium\\)\n"
-        "• /mood \\- Set chat mood \\(Premium\\)\n"
-        "• /vault \\- Save chats forever \\(Premium\\)\n"
-        "• /flare \\- Add sparkle to messages \\(Premium\\)\n\n"
-        "🚨 *Safety*\n"
-        "• /report \\- Report inappropriate behavior\n\n"
+    # Define the help text with minimal formatting, then escape
+    help_lines = [
+        "🌟 *Talk2Anyone Help Menu* 🌟\n",
+        "Here’s how you can use the bot:\n",
+        "💬 *Chat Commands*\n",
+        "• /start - Begin a new anonymous chat\n",
+        "• /next - Find a new chat partner\n",
+        "• /stop - End the current chat\n",
+        "⚙️ *Profile & Settings*\n",
+        "• /settings - Customize your profile\n",
+        "• /deleteprofile - Erase your data\n",
+        "🌟 *Premium Features*\n",
+        "• /premium - Unlock amazing features\n",
+        "• /history - View past chats (Premium)\n",
+        "• /rematch - Reconnect with past partners (Premium)\n",
+        "• /shine - Boost your profile (Premium)\n",
+        "• /instant - Instant rematch (Premium)\n",
+        "• /mood - Set chat mood (Premium)\n",
+        "• /vault - Save chats forever (Premium)\n",
+        "• /flare - Add sparkle to messages (Premium)\n",
+        "🚨 *Safety*\n",
+        "• /report - Report inappropriate behavior\n",
         "Use the buttons below to explore! 👇"
-    )
+    ]
+    # Escape each line, but preserve Markdown formatting by escaping after splitting
+    escaped_lines = []
+    for line in help_lines:
+        # Split line into parts that are inside *...* (bold) and outside
+        parts = line.split("*")
+        for i in range(len(parts)):
+            if i % 2 == 0:  # Outside bold
+                parts[i] = escape_markdown_v2(parts[i])
+        escaped_lines.append("*".join(parts))
+    help_text = "".join(escaped_lines)
     try:
         update.message.reply_text(help_text, parse_mode="MarkdownV2", reply_markup=reply_markup)
     except Exception as e:
@@ -588,18 +601,25 @@ def premium(update: Update, context: CallbackContext) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     feature_lines = [
-        "✨ *Flare Messages* \\- Add sparkle effects for 7 days \\(100 ⭐\\)",
-        "🔄 *Instant Rematch* \\- Reconnect anytime \\(100 ⭐\\)",
-        "🌟 *Shine Profile* \\- Priority matching for 24 hours \\(250 ⭐\\)",
-        "😊 *Mood Match* \\- Vibe\\-based matches for 30 days \\(250 ⭐\\)",
-        "📜 *Vaulted Chats* \\- Save chats forever \\(500 ⭐\\)",
-        "🎉 *Premium Pass* \\- All features for 30 days \\+ 5 Instant Rematches \\(1000 ⭐\\)",
+        "✨ *Flare Messages* - Add sparkle effects for 7 days (100 ⭐)",
+        "🔄 *Instant Rematch* - Reconnect anytime (100 ⭐)",
+        "🌟 *Shine Profile* - Priority matching for 24 hours (250 ⭐)",
+        "😊 *Mood Match* - Vibe-based matches for 30 days (250 ⭐)",
+        "📜 *Vaulted Chats* - Save chats forever (500 ⭐)",
+        "🎉 *Premium Pass* - All features for 30 days + 5 Instant Rematches (1000 ⭐)",
     ]
-    escaped_lines = [escape_markdown_v2(line) for line in feature_lines]
+    # Escape each feature line while preserving bold formatting
+    escaped_feature_lines = []
+    for line in feature_lines:
+        parts = line.split("*")
+        for i in range(len(parts)):
+            if i % 2 == 0:  # Outside bold
+                parts[i] = escape_markdown_v2(parts[i])
+        escaped_feature_lines.append("*".join(parts))
     message_text = (
         "🌟 *Unlock Premium Features\\!* 🌟\n\n"
         "Enhance your chat experience with these amazing perks:\n" +
-        "\n".join(escaped_lines) + "\n\n"
+        "\n".join(escaped_feature_lines) + "\n\n"
         "👇 Tap a button to purchase with Telegram Stars\\!"
     )
     try:
