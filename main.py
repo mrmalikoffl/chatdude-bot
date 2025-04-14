@@ -853,11 +853,11 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             "🎉 *Congratulations\\!* You’ve been upgraded to premium\\! 🌟\n\n"
             f"You now have premium access for *{days} days*, until *{expiry_date}*.\n"
             "Enjoy these benefits:\n"
-            "\\* Priority matching\n"
-            "\\* Chat history\n"
-            "\\* Advanced filters\n"
-            "\\* Verified badge\n"
-            "\\* 25 messages/min\n\n"
+            "🌟 Priority matching\n"
+            "🌟 Chat history\n"
+            "🌟 Advanced filters\n"
+            "🌟 Verified badge\n"
+            "🌟 25 messages/min\n\n"
             "Start exploring your premium features with `/help` or `/premium`\\!"
         )
         logger.debug(f"Attempting to send notification to {target_id}: {notification_text}")
