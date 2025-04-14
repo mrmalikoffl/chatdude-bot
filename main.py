@@ -1033,41 +1033,134 @@ def set_gender(update: Update, context: CallbackContext) -> int:
     choice = query.data
     user = get_user(user_id)
     profile = user.get("profile", {})
-    if choice.startswith("gender_"):
-        gender = choice.split("_")[1]
-        if gender != "skip":
-            profile["gender"] = gender
-        else:
-            profile.pop("gender", None)
+def settings(update: Update, context: CallbackContext) -> int:
+    user_id = update.effective_user.id
+    if is_banned(user_id):
+        update.message.reply_text("🚫 You are currently banned\\.", parse_mode="MarkdownV2")
+        return ConversationHandler.END
+    user = get_user(user_id)
+    profile = user.get("profile", {})
+    keyboard = [
+        [
+            InlineKeyboardButton("👤 Gender: " + (profile.get("gender", "Not set") or "Not set"), callback_data="set_gender"),
+            InlineKeyboardButton("🎂 Age: " + (str(profile.get("age", "Not set")) if profile.get("age") else "Not set"), callback_data="set_age")
+        ],
+        [
+            InlineKeyboardButton("🏷️ Tags: " + (", ".join(profile.get("tags", [])) or "Not set"), callback_data="set_tags"),
+            InlineKeyboardButton("📍 Location: " + (profile.get("location", "Not set") or "Not set"), callback_data="set_location")
+        ],
+        [
+            InlineKeyboardButton("📝 Bio: " + (profile.get("bio", "Not set") or "Not set"), callback_data="set_bio"),
+            InlineKeyboardButton("🔙 Back to Chat", callback_data="back_to_chat")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    settings_text = escape_markdown_v2(
+        "⚙️ *Your Profile Settings* ⚙️\n\n"
+        "Customize your profile below. Tap an option to edit it!"
+    )
+    update.message.reply_text(settings_text, reply_markup=reply_markup, parse_mode="MarkdownV2")
+    return GENDER
+
+def button(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    data = query.data
+
+    if data == "set_gender":
+        keyboard = [
+            [
+                InlineKeyboardButton("👨 Male", callback_data="gender_male"),
+                InlineKeyboardButton("👩 Female", callback_data="gender_female"),
+                InlineKeyboardButton("🌈 Other", callback_data="gender_other")
+            ],
+            [
+                InlineKeyboardButton("🔙 Back", callback_data="back_to_settings")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        gender_text = escape_markdown_v2("👤 *Set Your Gender* 👤\n\nChoose your gender below:")
+        query.edit_message_text(gender_text, reply_markup=reply_markup, parse_mode="MarkdownV2")
+        return GENDER
+
+    elif data == "set_age":
+        age_text = escape_markdown_v2("🎂 *Set Your Age* 🎂\n\nPlease enter your age (e.g., 25):")
+        query.edit_message_text(age_text, parse_mode="MarkdownV2")
+        return AGE
+
+    elif data == "set_tags":
+        tags_text = escape_markdown_v2(
+            "🏷️ *Set Your Tags* 🏷️\n\n"
+            "Enter tags to match with others (comma-separated, e.g., music, gaming).\n"
+            f"Available tags: {', '.join(ALLOWED_TAGS)}"
+        )
+        query.edit_message_text(tags_text, parse_mode="MarkdownV2")
+        return TAGS
+
+    elif data == "set_location":
+        location_text = escape_markdown_v2("📍 *Set Your Location* 📍\n\nEnter your location (e.g., New York):")
+        query.edit_message_text(location_text, parse_mode="MarkdownV2")
+        return LOCATION
+
+    elif data == "set_bio":
+        bio_text = escape_markdown_v2(
+            "📝 *Set Your Bio* 📝\n\n"
+            f"Enter a short bio (max {MAX_PROFILE_LENGTH} characters):"
+        )
+        query.edit_message_text(bio_text, parse_mode="MarkdownV2")
+        return BIO
+
+    elif data == "back_to_chat":
+        back_text = escape_markdown_v2("👋 Returning to chat! Use /settings to edit your profile again.")
+        query.edit_message_text(back_text, parse_mode="MarkdownV2")
+        return ConversationHandler.END
+
+    elif data == "back_to_settings":
+        return settings(update, context)
+
+    return GENDER
+
+def set_gender(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    data = query.data
+
+    if data.startswith("gender_"):
+        gender = data.split("_")[1].capitalize()
+        user = get_user(user_id)
+        profile = user.get("profile", {})
+        profile["gender"] = gender
         update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
-        query.message.reply_text(f"👤 Gender set to: *{gender if gender != 'skip' else 'Not specified'}*\\!", parse_mode="MarkdownV2")
-    elif choice.startswith("pref_"):
-        pref = choice.split("_")[1]
-        if pref != "any":
-            profile["gender_preference"] = pref
-        else:
-            profile.pop("gender_preference", None)
-        update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
-        query.message.reply_text(f"❤️ Gender preference set to: *{pref if pref != 'any' else 'Any'}*\\!", parse_mode="MarkdownV2")
-    return settings(update, context)
+        confirmation_text = escape_markdown_v2(f"👤 Gender set to: *{gender}*! 🎉")
+        query.edit_message_text(confirmation_text, parse_mode="MarkdownV2")
+        # Return to settings menu after setting gender
+        return settings(update, context)
+
+    return GENDER
 
 def set_age(update: Update, context: CallbackContext) -> int:
     user_id = update.message.from_user.id
     user = get_user(user_id)
     profile = user.get("profile", {})
+    age_text = update.message.text.strip()
+
     try:
-        age = int(update.message.text)
-        if 13 <= age <= 120:
-            profile["age"] = age
-            update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
-            update.message.reply_text(f"🎂 Age set to: *{age}*\\!", parse_mode="MarkdownV2")
-        else:
-            update.message.reply_text("⚠️ Please enter a valid age between 13 and 120\\.", parse_mode="MarkdownV2")
+        age = int(age_text)
+        if age < 13 or age > 120:
+            error_text = escape_markdown_v2("⚠️ Age must be between 13 and 120. Please try again.")
+            update.message.reply_text(error_text, parse_mode="MarkdownV2")
             return AGE
+        profile["age"] = age
+        update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
+        confirmation_text = escape_markdown_v2(f"🎂 Age set to: *{age}*! 🎉")
+        update.message.reply_text(confirmation_text, parse_mode="MarkdownV2")
+        return settings(update, context)
     except ValueError:
-        update.message.reply_text("⚠️ Please enter a valid number for age\\.", parse_mode="MarkdownV2")
+        error_text = escape_markdown_v2("⚠️ Please enter a valid number for your age (e.g., 25).")
+        update.message.reply_text(error_text, parse_mode="MarkdownV2")
         return AGE
-    return settings(update, context)
 
 def set_tags(update: Update, context: CallbackContext) -> int:
     user_id = update.message.from_user.id
@@ -1075,17 +1168,13 @@ def set_tags(update: Update, context: CallbackContext) -> int:
     profile = user.get("profile", {})
     tags = [tag.strip().lower() for tag in update.message.text.split(",") if tag.strip().lower() in ALLOWED_TAGS]
     if not tags and update.message.text.strip():
-        update.message.reply_text(
-            f"⚠️ Invalid tags\\. Choose from: *{', '.join(ALLOWED_TAGS)}*",
-            parse_mode="MarkdownV2"
-        )
+        error_text = escape_markdown_v2(f"⚠️ Invalid tags. Choose from: *{', '.join(ALLOWED_TAGS)}*")
+        update.message.reply_text(error_text, parse_mode="MarkdownV2")
         return TAGS
     profile["tags"] = tags
     update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
-    update.message.reply_text(
-        f"🏷️ Tags set to: *{', '.join(tags) if tags else 'None'}*\\! 🎉",
-        parse_mode="MarkdownV2"
-    )
+    confirmation_text = escape_markdown_v2(f"🏷️ Tags set to: *{', '.join(tags) if tags else 'None'}*! 🎉")
+    update.message.reply_text(confirmation_text, parse_mode="MarkdownV2")
     return settings(update, context)
 
 def set_location(update: Update, context: CallbackContext) -> int:
@@ -1094,17 +1183,13 @@ def set_location(update: Update, context: CallbackContext) -> int:
     profile = user.get("profile", {})
     location = update.message.text.strip()
     if len(location) > 100:
-        update.message.reply_text(
-            "⚠️ Location must be under 100 characters\\.",
-            parse_mode="MarkdownV2"
-        )
+        error_text = escape_markdown_v2("⚠️ Location must be under 100 characters.")
+        update.message.reply_text(error_text, parse_mode="MarkdownV2")
         return LOCATION
     profile["location"] = location
     update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
-    update.message.reply_text(
-        f"📍 Location set to: *{location}*\\! 🌍",
-        parse_mode="MarkdownV2"
-    )
+    confirmation_text = escape_markdown_v2(f"📍 Location set to: *{location}*! 🌍")
+    update.message.reply_text(confirmation_text, parse_mode="MarkdownV2")
     return settings(update, context)
 
 def set_bio(update: Update, context: CallbackContext) -> int:
@@ -1113,30 +1198,22 @@ def set_bio(update: Update, context: CallbackContext) -> int:
     profile = user.get("profile", {})
     bio = update.message.text.strip()
     if len(bio) > MAX_PROFILE_LENGTH:
-        update.message.reply_text(
-            f"⚠️ Bio must be under {MAX_PROFILE_LENGTH} characters\\.",
-            parse_mode="MarkdownV2"
-        )
+        error_text = escape_markdown_v2(f"⚠️ Bio must be under {MAX_PROFILE_LENGTH} characters.")
+        update.message.reply_text(error_text, parse_mode="MarkdownV2")
         return BIO
     if not is_safe_message(bio):
-        update.message.reply_text(
-            "⚠️ Bio contains inappropriate content\\. Please try again\\.",
-            parse_mode="MarkdownV2"
-        )
+        error_text = escape_markdown_v2("⚠️ Bio contains inappropriate content. Please try again.")
+        update.message.reply_text(error_text, parse_mode="MarkdownV2")
         return BIO
     profile["bio"] = bio
     update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
-    update.message.reply_text(
-        f"📝 Bio set to: *{bio}*\\! ✨",
-        parse_mode="MarkdownV2"
-    )
+    confirmation_text = escape_markdown_v2(f"📝 Bio set to: *{bio}*! ✨")
+    update.message.reply_text(confirmation_text, parse_mode="MarkdownV2")
     return settings(update, context)
 
 def cancel(update: Update, context: CallbackContext) -> int:
-    update.message.reply_text(
-        "❌ Operation cancelled\\. Use /settings to try again\\.",
-        parse_mode="MarkdownV2"
-    )
+    cancel_text = escape_markdown_v2("❌ Operation cancelled. Use /settings to try again.")
+    update.message.reply_text(cancel_text, parse_mode="MarkdownV2")
     return ConversationHandler.END
 
 def rematch(update: Update, context: CallbackContext) -> None:
@@ -1597,7 +1674,10 @@ def main() -> None:
         settings_handler = ConversationHandler(
             entry_points=[CommandHandler("settings", settings)],
             states={
-                GENDER: [CallbackQueryHandler(button), CallbackQueryHandler(set_gender, pattern="^(gender_|pref_)")],
+                GENDER: [
+                    CallbackQueryHandler(set_gender, pattern="^(gender_|pref_)"),
+                    CallbackQueryHandler(button, pattern="^(set_|back_)")
+                ],
                 AGE: [MessageHandler(Filters.text & ~Filters.command, set_age)],
                 TAGS: [MessageHandler(Filters.text & ~Filters.command, set_tags)],
                 LOCATION: [MessageHandler(Filters.text & ~Filters.command, set_location)],
@@ -1644,7 +1724,6 @@ def main() -> None:
         dispatcher.add_handler(CommandHandler("admin_userslist", admin_userslist))
         dispatcher.add_handler(CommandHandler("premiumuserslist", premium_users_list))
         dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-        dispatcher.add_handler(CallbackQueryHandler(button))
         dispatcher.add_error_handler(error_handler)
 
         updater.job_queue.run_repeating(cleanup_in_memory, interval=3600, first=60)
