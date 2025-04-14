@@ -510,12 +510,16 @@ def stop(update: Update, context: CallbackContext) -> None:
         update.message.reply_text("❓ You're not in a chat\\. Use /start to find a partner\\.", parse_mode="MarkdownV2")
 
 def next_chat(update: Update, context: CallbackContext) -> None:
+def next_chat(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     if is_banned(user_id):
         update.message.reply_text("🚫 You are currently banned.", parse_mode="MarkdownV2")
         return
     if not check_rate_limit(user_id):
-        update.message.reply_text(f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.", parse_mode="MarkdownV2")
+        update.message.reply_text(
+            f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.",
+            parse_mode="MarkdownV2"
+        )
         return
     stop(update, context)
     if get_user(user_id).get("consent"):
@@ -524,10 +528,15 @@ def next_chat(update: Update, context: CallbackContext) -> None:
                 waiting_users.insert(0, user_id)
             else:
                 waiting_users.append(user_id)
-            update.message.reply_text("🔍 Looking for a new chat partner... Please wait!", parse_mode="MarkdownV2")
+            # Escape the message before sending
+            message = escape_markdown_v2("🔍 Looking for a new chat partner... Please wait!")
+            update.message.reply_text(message, parse_mode="MarkdownV2")
         match_users(context)
     else:
-        update.message.reply_text("⚠️ Please agree to the rules first by using /start.", parse_mode="MarkdownV2")
+        update.message.reply_text(
+            "⚠️ Please agree to the rules first by using /start.",
+            parse_mode="MarkdownV2"
+        )
 
 def help_command(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
