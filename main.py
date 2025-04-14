@@ -860,6 +860,7 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             "\\- 25 messages/min\n\n"
             "Start exploring your premium features with `/help` or `/premium`\\!"
         )
+        logger.debug(f"Attempting to send notification to {target_id}: {notification_text}")
         try:
             context.bot.send_message(
                 chat_id=target_id,
@@ -872,6 +873,7 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             update.message.reply_text(f"Premium granted, but failed to notify user {target_id}. They may have blocked the bot.")
     except (IndexError, ValueError):
         update.message.reply_text("Usage: /admin_premium <user_id> <days>")
+
 
 def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
