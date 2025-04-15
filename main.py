@@ -1543,7 +1543,7 @@ def admin_info(update: Update, context: CallbackContext) -> None:
         release_db_connection(conn)
 
     def premiumuserslist(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
+        user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, "🚫 Unauthorized.")
         return
