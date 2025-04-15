@@ -1715,7 +1715,7 @@ def admin_info(update: Update, context: CallbackContext) -> None:
             entry_points=[CommandHandler("settings", settings)],
             states={
                 GENDER: [
-                    CallbackQueryHandler(button, pattern="^(set_gender|set_age|set_tags|set_location|set_bio|set_gender_pref|back_to_settings|back_to_chat|gender_male|gender_female|gender_or|gender_skip|pref_male|pref_female|pref_any)$")
+                    CallbackQueryHandler(button, pattern="^(set_gender|set_age|set_tags|set_location|set_bio|set_gender_pref|back_to_settings|back_to_chat|gender_male|gender_female|gender_other|gender_skip|pref_male|pref_female|pref_any)$")
                 ],
                 AGE: [MessageHandler(Filters.text & ~Filters.command, set_age)],
                 TAGS: [MessageHandler(Filters.text & ~Filters.command, set_tags)],
