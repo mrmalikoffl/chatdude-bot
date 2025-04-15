@@ -1437,7 +1437,7 @@ def admin_access(update: Update, context: CallbackContext) -> None:
         "🔐 *Admin Commands* 🔐\n\n"
         "👤 *User Management* 👤\n"
         "• /admin_userslist - List all users\n"
-        "• /premiumuserslist - List premium users\n"
+        "• /admin_premiumuserslist - List premium users\n"
         "• /admin_info <user_id> - View user details\n"
         "• /admin_delete <user_id> - Delete a user’s data\n"
         "• /admin_premium <user_id> <days> - Grant premium status\n"
