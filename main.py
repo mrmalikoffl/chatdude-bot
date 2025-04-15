@@ -1816,6 +1816,7 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
         if days <= 0:
             raise ValueError("Days must be positive")
         expiry = int(time.time()) + days * 24 * 3600
+        logger.debug(f"Calculated premium_expiry for user {target_id}: {expiry} ({datetime.fromtimestamp(expiry).strftime('%Y-%m-%d %H:%M:%S')})")
         user = get_user(target_id)
         logger.debug(f"User {target_id} before admin_premium: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
         features = user.get("premium_features", {})
@@ -1829,7 +1830,7 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             "vaulted_chats": expiry
         })
         update_user(target_id, {
-            "premium_expiry": expiry,  # Set premium_expiry explicitly
+            "premium_expiry": expiry,
             "premium_features": features,
             "profile": user.get("profile", {}),
             "consent": user.get("consent", False),
@@ -1838,12 +1839,13 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             "ban_expiry": user.get("ban_expiry"),
             "created_at": user.get("created_at", int(time.time()))
         })
+        updated_user = get_user(target_id)
+        logger.debug(f"User {target_id} after admin_premium: premium_expiry={updated_user.get('premium_expiry')} ({datetime.fromtimestamp(updated_user.get('premium_expiry', 0)).strftime('%Y-%m-%d %H:%M:%S') if updated_user.get('premium_expiry') else 'None'}), premium_features={updated_user.get('premium_features')}")
         safe_reply(update, f"🌟 Premium granted to user *{target_id}* for *{days}* days.")
         safe_bot_send_message(context.bot, target_id, f"🎉 You've been granted Premium status for {days} days!")
-        updated_user = get_user(target_id)
         logger.info(f"Admin {user_id} granted premium to {target_id} for {days} days.")
-        logger.debug(f"User {target_id} after admin_premium: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
-    except (IndexError, ValueError):
+    except (IndexError, ValueError) as e:
+        logger.error(f"Error in admin_premium for user {target_id}: {e}")
         safe_reply(update, "⚠️ Usage: /admin_premium <user_id> <days>")
 
 def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
@@ -2071,13 +2073,12 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
         return
     try:
         with conn.cursor() as c:
-            # Include users with either premium_expiry or active premium_features
+            # Select users with valid premium_expiry or active premium_features
             c.execute("""
                 SELECT user_id, premium_expiry, premium_features, profile 
                 FROM users 
                 WHERE premium_expiry > %s 
-                   OR premium_features ?| array['flare_messages', 'shine_profile', 'mood_match', 'partner_details', 'vaulted_chats']
-                ORDER BY premium_expiry
+                ORDER BY premium_expiry DESC
             """, (int(time.time()),))
             users = c.fetchall()
             if not users:
@@ -2089,11 +2090,13 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
                 user_id, premium_expiry, premium_features_json, profile_json = user
                 profile = profile_json or {}
                 premium_features = premium_features_json or {}
-                expiry_date = (
-                    datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
-                    if premium_expiry and premium_expiry > time.time()
-                    else "No expiry set"
-                )
+                logger.debug(f"Premium user {user_id}: premium_expiry={premium_expiry} ({datetime.fromtimestamp(premium_expiry).strftime('%Y-%m-%d %H:%M:%S') if premium_expiry else 'None'})")
+                # Format expiry date
+                if premium_expiry and isinstance(premium_expiry, (int, float)) and premium_expiry > time.time():
+                    expiry_date = datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
+                else:
+                    expiry_date = "No expiry set"
+                    logger.warning(f"Unexpected premium_expiry for user {user_id}: {premium_expiry}")
                 name = profile.get("name", "Not set")
                 active_features = [
                     k for k, v in premium_features.items()
@@ -2286,7 +2289,7 @@ def error_handler(update: Update, context: CallbackContext) -> None:
         logger.error(f"Failed to send error message: {e}")
 
 def main() -> None:
-    token = os.getenv("TOKEN")  # Changed from TOKEN to BOT_TOKEN for consistency
+    token = os.getenv("TOKEN")
     if not token:
         logger.error("TOKEN not set.")
         exit(1)
