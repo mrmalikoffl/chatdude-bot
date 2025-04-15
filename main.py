@@ -1699,7 +1699,7 @@ def admin_info(update: Update, context: CallbackContext) -> None:
             logger.warning(f"Failed to notify admin {admin_id}: {e}")
 
     def main() -> None:
-    """Initialize and run the Telegram bot."""
+        """Initialize and run the Telegram bot."""
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not bot_token:
         logger.error("TELEGRAM_BOT_TOKEN environment variable not set.")
