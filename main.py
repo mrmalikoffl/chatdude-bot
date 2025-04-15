@@ -329,55 +329,35 @@ def is_safe_message(text: str) -> bool:
     return True
 
 def escape_markdown_v2(text: str) -> str:
-    """
-    Escape special characters for MarkdownV2, preserving * for bold and _ for italic.
-    Escapes _, [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., ! when not part of formatting.
-    """
-    special_chars = r'_[]()~`>#+-|=}{.!'
+    """Escape special characters for MarkdownV2, preserving formatting."""
+    special_chars = r'_[]()~`>#+-=|{}.!'
     result = []
     i = 0
     while i < len(text):
-        if i < len(text) - 1 and text[i] == '*' and text[i + 1] != ' ' and i > 0 and text[i - 1] != '\\':
-            # Preserve * for bold
-            result.append('*')
-            i += 1
-            while i < len(text) and text[i] != '*' and text[i] != '\n':
-                if text[i] in special_chars and text[i] not in '*_':
-                    result.append(f'\\{text[i]}')
-                else:
-                    result.append(text[i])
+        char = text[i]
+        # Preserve * for bold and _ for italic when used correctly
+        if char in '*_' and i > 0 and i < len(text) - 1:
+            prev_char = text[i - 1]
+            next_char = text[i + 1]
+            # Check if * or _ is part of formatting (e.g., *text* or _text_)
+            if (char == '*' and prev_char != '\\' and next_char != ' ') or \
+               (char == '_' and prev_char != '\\' and next_char not in ' \n'):
+                result.append(char)
                 i += 1
-            if i < len(text) and text[i] == '*':
-                result.append('*')
-                i += 1
-        elif i < len(text) - 1 and text[i] == '_' and text[i + 1] != ' ' and i > 0 and text[i - 1] != '\\':
-            # Preserve _ for italic
-            result.append('_')
-            i += 1
-            while i < len(text) and text[i] != '_' and text[i] != '\n':
-                if text[i] in special_chars and text[i] not in '*_':
-                    result.append(f'\\{text[i]}')
-                else:
-                    result.append(text[i])
-                i += 1
-            if i < len(text) and text[i] == '_':
-                result.append('_')
-                i += 1
-        elif text[i] in special_chars and text[i] not in '*_':
-            result.append(f'\\{text[i]}')
-            i += 1
+                continue
+        if char in special_chars:
+            result.append(f'\\{char}')
         else:
-            result.append(text[i])
-            i += 1
+            result.append(char)
+        i += 1
     return ''.join(result)
 
 def safe_reply(update: Update, text: str, parse_mode: str = "MarkdownV2", **kwargs) -> None:
-    """
-    Send a reply with MarkdownV2 formatting, falling back to plain text if parsing fails.
-    """
+    """Send a reply with proper MarkdownV2 handling and fallback."""
     try:
         if parse_mode == "MarkdownV2":
             escaped_text = escape_markdown_v2(text)
+            logger.debug(f"Escaped text: {escaped_text}")
         else:
             escaped_text = text
         if update.message:
@@ -387,12 +367,11 @@ def safe_reply(update: Update, text: str, parse_mode: str = "MarkdownV2", **kwar
             query.answer()
             query.message.reply_text(escaped_text, parse_mode=parse_mode, **kwargs)
         else:
-            logger.error(f"No message or callback query found in update: {update}")
+            logger.error(f"No message or callback query in update: {update}")
     except telegram.error.BadRequest as bre:
         logger.warning(f"MarkdownV2 parsing failed: {bre}. Text: {text[:200]}")
-        # Clean text for fallback
-        clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', r'\\\1', text)
-        clean_text = clean_text.replace('\\*', '*').replace('\\_', '_')
+        # Fallback to plain text
+        clean_text = text.replace('*', '').replace('_', '').replace('`', '').replace('[', '(').replace(']', ')')
         try:
             if update.callback_query:
                 update.callback_query.message.reply_text(clean_text, parse_mode=None, **kwargs)
@@ -652,19 +631,8 @@ def help_command(update: Update, context: CallbackContext) -> None:
     if user_id in ADMIN_IDS:
         help_text += (
             "━━━━━\n\n"
-            "🔐 *Admin Commands* 🔐\n"
-            "• /admin - View all admin tools\n"
-            "• /admin_userslist - List all users\n"
-            "• /premiumuserslist - List premium users\n"
-            "• /admin_info <user_id> - User details\n"
-            "• /admin_delete <user_id> - Delete user\n"
-            "• /admin_premium <user_id> <days> - Grant premium\n"
-            "• /admin_revoke_premium <user_id> - Revoke premium\n"
-            "• /admin_ban <user_id> <days/permanent> - Ban user\n"
-            "• /admin_unban <user_id> - Unban user\n"
-            "• /admin_reports - View reports\n"
-            "• /admin_clear_reports <user_id> - Clear reports\n"
-            "• /admin_broadcast <message> - Broadcast message\n"
+            "🔐 *Admin Access* 🔐\n"
+            "• /admin - View admin tools and commands\n"
         )
     help_text += "\nUse the buttons below to get started! 👇"
     safe_reply(update, help_text, reply_markup=reply_markup)
@@ -1303,22 +1271,24 @@ def admin_access(update: Update, context: CallbackContext) -> None:
         return
     access_text = (
         "🔐 *Admin Commands* 🔐\n\n"
-        "👤 *User Management*\n"
+        "👤 *User Management* 👤\n"
+        "• /admin_userslist - List all users\n"
+        "• /premiumuserslist - List premium users\n"
+        "• /admin_info <user_id> - View user details\n"
         "• /admin_delete <user_id> - Delete a user’s data\n"
         "• /admin_premium <user_id> <days> - Grant premium status\n"
-        "• /admin_revoke_premium <user_id> - Revoke premium status\n\n"
-        "🚫 *Ban Management*\n"
+        "• /admin_revoke_premium <user_id> - Revoke premium status\n"
+        "━━━━━\n\n"
+        "🚫 *Ban Management* 🚫\n"
         "• /admin_ban <user_id> <days/permanent> - Ban a user\n"
-        "• /admin_unban <user_id> - Unban a user\n\n"
-        "📊 *Reports & Info*\n"
-        "• /admin_info <user_id> - View user details\n"
+        "• /admin_unban <user_id> - Unban a user\n"
+        "━━━━━\n\n"
+        "📊 *Reports & Info* 📊\n"
         "• /admin_reports - List reported users\n"
-        "• /admin_clear_reports <user_id> - Clear reports\n\n"
-        "📢 *Broadcast*\n"
-        "• /admin_broadcast <message> - Send message to all users\n\n"
-        "📋 *User Lists*\n"
-        "• /admin_userslist - List all bot users\n"
-        "• /premiumuserslist - List premium users\n"
+        "• /admin_clear_reports <user_id> - Clear reports\n"
+        "━━━━━\n\n"
+        "📢 *Broadcast* 📢\n"
+        "• /admin_broadcast <message> - Send message to all users\n"
     )
     safe_reply(update, access_text)
 
