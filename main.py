@@ -1571,15 +1571,21 @@ def settings(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     if is_banned(user_id):
         user = get_user(user_id)
-        ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
-                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
+        ban_msg = (
+            "🚫 You are permanently banned. Contact support to appeal."
+            if user["ban_type"] == "permanent"
+            else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
+        )
         safe_reply(update, ban_msg)
         return ConversationHandler.END
+
     if not check_rate_limit(user_id):
         safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.")
         return ConversationHandler.END
+
     user = get_user(user_id)
     profile = user.get("profile", {})
+    # Prepare settings menu with current profile data
     keyboard = [
         [
             InlineKeyboardButton(f"🧑 Name: {profile.get('name', 'Not set')}", callback_data="set_name"),
@@ -1590,20 +1596,21 @@ def settings(update: Update, context: CallbackContext) -> int:
             InlineKeyboardButton(f"📍 Location: {profile.get('location', 'Not set')}", callback_data="set_location")
         ],
         [
-            InlineKeyboardButton(f"🏷️ Tags: {', '.join(profile.get('tags', [])) or 'Not set'}", callback_data="set_tags"),
-            InlineKeyboardButton(f"📝 Bio: {profile.get('bio', 'Not set')[:20] + '...' if profile.get('bio') else 'Not set'}", callback_data="set_bio")
+            InlineKeyboardButton(f"📝 Bio: {profile.get('bio', 'Not set')[:20] + '...' if profile.get('bio') else 'Not set'}", callback_data="set_bio"),
+            InlineKeyboardButton(f"🏷️ Tags: {', '.join(profile.get('tags', [])) or 'Not set'}", callback_data="set_tags")
         ],
         [
-            InlineKeyboardButton("❤️ Gender Preference", callback_data="set_gender_pref"),
+            InlineKeyboardButton(f"❤️ Gender Pref: {profile.get('gender_preference', 'Any')}", callback_data="set_gender_pref"),
             InlineKeyboardButton("🔙 Back to Chat", callback_data="back_to_chat")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     settings_text = (
         "⚙️ *Your Profile Settings* ⚙️\n\n"
-        "Customize your profile below. Tap an option to edit it!"
+        "Customize your profile by selecting an option below:"
     )
     safe_reply(update, settings_text, reply_markup=reply_markup)
+    logger.info(f"User {user_id} opened settings menu.")
     return NAME
 
 def button(update: Update, context: CallbackContext) -> int:
@@ -1630,58 +1637,7 @@ def button(update: Update, context: CallbackContext) -> int:
         if data == "start_chat":
             start(update, context)
             return ConversationHandler.END
-        elif data == "next_chat":
-            next_chat(update, context)
-            return ConversationHandler.END
-        elif data == "stop_chat":
-            stop(update, context)
-            return ConversationHandler.END
-        elif data == "settings_menu":
-            return settings(update, context)
-        elif data == "premium_menu":
-            premium(update, context)
-            return ConversationHandler.END
-        elif data == "history_menu":
-            history(update, context)
-            return ConversationHandler.END
-        elif data == "report_user":
-            report(update, context)
-            return ConversationHandler.END
-        elif data == "rematch_partner":
-            rematch(update, context)
-            return ConversationHandler.END
-        elif data == "delete_profile":
-            delete_profile(update, context)
-            return ConversationHandler.END
-        elif data == "set_name":
-            context.user_data["awaiting"] = "name"
-            safe_reply(update, "🧑 *Set Your Name* 🧑\n\nPlease enter your name:")
-            return NAME
-        elif data == "set_gender":
-            keyboard = [
-                [
-                    InlineKeyboardButton("👨 Male", callback_data="gender_male"),
-                    InlineKeyboardButton("👩 Female", callback_data="gender_female"),
-                    InlineKeyboardButton("🌈 Other", callback_data="gender_other")
-                ],
-                [
-                    InlineKeyboardButton("➖ Skip", callback_data="gender_skip"),
-                    InlineKeyboardButton("🔙 Back", callback_data="back_to_settings")
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            safe_reply(update, "👤 *Set Your Gender* 👤\n\nChoose your gender below:", reply_markup=reply_markup)
-            return GENDER
-        elif data == "set_age":
-            context.user_data["awaiting"] = "age"
-            safe_reply(update, "🎂 *Set Your Age* 🎂\n\nPlease enter your age (e.g., 25):")
-            return AGE
-        elif data == "set_location":
-            context.user_data["awaiting"] = "location"
-            safe_reply(update, "📍 *Set Your Location* 📍\n\nPlease enter your location (e.g., New York):")
-            return LOCATION
-        elif data == "set_bio":
-            
+
 def button(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     if not query:
@@ -1707,9 +1663,27 @@ def button(update: Update, context: CallbackContext) -> int:
             safe_reply(update, ban_msg)
             return ConversationHandler.END
 
-        # Retrieve user data once to reduce database calls
+        # Retrieve user data
         user = get_user(user_id)
         profile = user.get("profile", {})
+
+        # Handle premium purchase buttons
+        if data in ["buy_flare", "buy_instant", "buy_shine", "buy_mood", "buy_partner_details", "buy_vault", "buy_premium_pass"]:
+            buy_premium(update, context)
+            return ConversationHandler.END
+
+        # Handle emoji verification
+        if data.startswith("emoji_"):
+            return verify_emoji(update, context)
+
+        # Handle consent buttons
+        if data.startswith("consent_"):
+            return consent_handler(update, context)
+
+        # Handle mood setting
+        if data.startswith("mood_"):
+            set_mood(update, context)
+            return ConversationHandler.END
 
         # Handle rematch requests
         if data.startswith("rematch_accept_"):
@@ -1721,13 +1695,12 @@ def button(update: Update, context: CallbackContext) -> int:
                 safe_reply(update, "❌ The requester is no longer available.")
                 return ConversationHandler.END
 
-            # Validate rematch request
             rematch_requests = context.bot_data.get("rematch_requests", {})
             if rematch_requests.get(user_id, {}).get("requester_id") != requester_id:
                 safe_reply(update, "❌ This rematch request is no longer valid.")
                 return ConversationHandler.END
 
-            # Connect the users
+            # Connect users
             user_pairs[user_id] = requester_id
             user_pairs[requester_id] = user_id
 
@@ -1747,9 +1720,9 @@ def button(update: Update, context: CallbackContext) -> int:
                         "created_at": requester_data.get("created_at", int(time.time()))
                     })
 
-            # Send connection messages
+            # Prepare connection messages
             user_message = (
-                "✅ *Reconnected!* Start chatting now! 🗣️\n\n"
+                f"✅ *Reconnected!* Start chatting now! 🗣️\n\n"
                 f"👤 *Partner Details*:\n"
                 f"🧑 *Name*: {requester_data.get('profile', {}).get('name', 'Not set')}\n"
                 f"🎂 *Age*: {requester_data.get('profile', {}).get('age', 'Not set')}\n"
@@ -1763,7 +1736,7 @@ def button(update: Update, context: CallbackContext) -> int:
                 "Use /help for more options."
             )
             requester_message = (
-                "✅ *Reconnected!* Start chatting now! 🗣️\n\n"
+                f"✅ *Reconnected!* Start chatting now! 🗣️\n\n"
                 f"👤 *Partner Details*:\n"
                 f"🧑 *Name*: {profile.get('name', 'Not set')}\n"
                 f"🎂 *Age*: {profile.get('age', 'Not set')}\n"
@@ -1793,7 +1766,7 @@ def button(update: Update, context: CallbackContext) -> int:
 
             return ConversationHandler.END
 
-        elif data == "rematch_decline":
+        if data == "rematch_decline":
             rematch_requests = context.bot_data.get("rematch_requests", {})
             requester_id = rematch_requests.get(user_id, {}).get("requester_id")
             if requester_id:
@@ -1804,13 +1777,69 @@ def button(update: Update, context: CallbackContext) -> int:
             safe_reply(update, "❌ You declined the rematch request.")
             return ConversationHandler.END
 
-        # Handle tag setting
+        # Handle main menu buttons
+        if data == "start_chat":
+            return start(update, context)
+        elif data == "next_chat":
+            next_chat(update, context)
+            return ConversationHandler.END
+        elif data == "stop_chat":
+            stop(update, context)
+            return ConversationHandler.END
+        elif data == "settings_menu":
+            return settings(update, context)
+        elif data == "premium_menu":
+            premium(update, context)
+            return ConversationHandler.END
+        elif data == "history_menu":
+            history(update, context)
+            return ConversationHandler.END
+        elif data == "report_user":
+            report(update, context)
+            return ConversationHandler.END
+        elif data == "rematch_partner":
+            instant(update, context)  # Assuming /rematch uses instant rematch logic
+            return ConversationHandler.END
+        elif data == "delete_profile":
+            delete_profile(update, context)
+            return ConversationHandler.END
+
+        # Handle settings buttons
+        if data == "set_name":
+            context.user_data["awaiting"] = "name"
+            safe_reply(update, "🧑 *Set Your Name* 🧑\n\nPlease enter your name:")
+            return NAME
+        elif data == "set_age":
+            context.user_data["awaiting"] = "age"
+            safe_reply(update, "🎂 *Set Your Age* 🎂\n\nPlease enter your age (e.g., 25):")
+            return AGE
+        elif data == "set_gender":
+            keyboard = [
+                [
+                    InlineKeyboardButton("👨 Male", callback_data="gender_male"),
+                    InlineKeyboardButton("👩 Female", callback_data="gender_female"),
+                    InlineKeyboardButton("🌈 Other", callback_data="gender_other")
+                ],
+                [
+                    InlineKeyboardButton("➖ Skip", callback_data="gender_skip"),
+                    InlineKeyboardButton("🔙 Back", callback_data="back_to_settings")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            safe_reply(update, "👤 *Set Your Gender* 👤\n\nChoose your gender below:", reply_markup=reply_markup)
+            return GENDER
+        elif data == "set_location":
+            context.user_data["awaiting"] = "location"
+            safe_reply(update, "📍 *Set Your Location* 📍\n\nPlease enter your location (e.g., New York):")
+            return LOCATION
+        elif data == "set_bio":
+            context.user_data["awaiting"] = "bio"
+            safe_reply(update, "📝 *Set Your Bio* 📝\n\nEnter a short bio (max 500 characters):")
+            return BIO
         elif data == "set_tags":
             context.user_data["awaiting"] = "tags"
             safe_reply(update, f"🏷️ *Set Your Tags* 🏷️\n\nEnter interests (e.g., music, gaming). Choose from: {', '.join(ALLOWED_TAGS)}.\nSeparate with commas, max 5 tags.")
             return TAGS
-
-        # Handle gender preference setting
         elif data == "set_gender_pref":
             keyboard = [
                 [
@@ -1825,15 +1854,12 @@ def button(update: Update, context: CallbackContext) -> int:
             reply_markup = InlineKeyboardMarkup(keyboard)
             safe_reply(update, "❤️ *Set Gender Preference* ❤️\n\nWho would you like to chat with?", reply_markup=reply_markup)
             return GENDER
-
-        # Handle gender preference selection
         elif data.startswith("pref_"):
             pref = data.split("_")[1]
             gender_map = {"male": "Male", "female": "Female", "any": None}
             if pref not in gender_map:
                 safe_reply(update, "❌ Invalid gender preference.")
-                return ConversationHandler.END
-
+                return settings(update, context)
             profile["gender_preference"] = gender_map[pref]
             update_user(user_id, {
                 "profile": profile,
@@ -1845,43 +1871,18 @@ def button(update: Update, context: CallbackContext) -> int:
             })
             safe_reply(update, f"❤️ Gender preference set to: *{pref.capitalize()}*!")
             return settings(update, context)
-
-        # Handle gender setting
-        elif data.startswith("gender_"):
-            return set_gender(update, context)
-
-        # Handle skipping gender setting
         elif data == "gender_skip":
             safe_reply(update, "👤 Gender setting skipped.")
             return settings(update, context)
-
-        # Handle back to settings
         elif data == "back_to_settings":
             return settings(update, context)
-
-        # Handle back to chat
         elif data == "back_to_chat":
             safe_reply(update, "🔙 Returned to chat. Use /help for more options.")
             return ConversationHandler.END
 
-        # Handle consent
-        elif data.startswith("consent_"):
-            return consent_handler(update, context)
-
-        # Handle mood setting
-        elif data.startswith("mood_"):
-            set_mood(update, context)
-            return ConversationHandler.END
-
-        # Handle admin actions
-        elif data.startswith("admin_"):
-            admin_button(update, context)
-            return ConversationHandler.END
-
-        # Handle unknown actions
-        else:
-            safe_reply(update, "❓ Unknown action.")
-            return ConversationHandler.END
+        # Handle unknown buttons
+        safe_reply(update, "❓ Unknown action. Please try again.")
+        return ConversationHandler.END
 
     except telegram.error.TelegramError as e:
         logger.error(f"Telegram error in button handler for user {user_id}: {e}")
@@ -1902,7 +1903,7 @@ def cleanup_rematch_requests(context: CallbackContext) -> None:
             try:
                 safe_bot_send_message(context.bot, request["requester_id"],
                                      "⏳ Your rematch request timed out.")
-                logger.info(f"Rematch request from {request['requester_id']} to {partner_id} timed out")
+              logger.info(f"Rematch request from {request['requester_id']} to {partner_id} timed out")
             except telegram.error.TelegramError:
                 logger.warning(f"Failed to notify {request['requester_id']} of timeout")
     for partner_id in expired:
