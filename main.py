@@ -120,21 +120,24 @@ def init_db():
                     created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
                 )
             """)
-            
-            # Add created_at column to existing users table if missing
+            # Add created_at column if missing
             c.execute("""
                 ALTER TABLE users 
                 ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
             """)
-            
-            # Backfill created_at with consent_time for existing users where possible
+            # Backfill created_at with consent_time where possible
             c.execute("""
                 UPDATE users 
                 SET created_at = consent_time 
                 WHERE created_at IS NULL AND consent_time IS NOT NULL
             """)
-            
-            # Create reports table (unchanged)
+            # Set created_at to now for remaining NULLs
+            c.execute("""
+                UPDATE users 
+                SET created_at = EXTRACT(EPOCH FROM NOW()) 
+                WHERE created_at IS NULL
+            """)
+            # Create reports table
             c.execute("""
                 CREATE TABLE IF NOT EXISTS reports (
                     report_id SERIAL PRIMARY KEY,
@@ -146,7 +149,6 @@ def init_db():
                     reported_profile JSONB
                 )
             """)
-            
             conn.commit()
             logger.info("Database tables initialized successfully.")
     except Exception as e:
@@ -177,11 +179,12 @@ def cleanup_in_memory(context: CallbackContext):
 def get_user(user_id: int) -> dict:
     conn = get_db_connection()
     if not conn:
+        logger.error(f"Failed to get database connection for user_id={user_id}")
         return {}
     try:
         with conn.cursor() as c:
             c.execute(
-                "SELECT profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified, premium_features "
+                "SELECT profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified, premium_features, created_at "
                 "FROM users WHERE user_id = %s",
                 (user_id,)
             )
@@ -195,11 +198,42 @@ def get_user(user_id: int) -> dict:
                     "ban_type": result[4],
                     "ban_expiry": result[5],
                     "verified": result[6],
-                    "premium_features": result[7] or {}
+                    "premium_features": result[7] or {},
+                    "created_at": result[8]
                 }
-            return {}
+            # Create new user
+            new_user = {
+                "profile": {},
+                "consent": False,
+                "consent_time": None,
+                "premium_expiry": None,
+                "ban_type": None,
+                "ban_expiry": None,
+                "verified": False,
+                "premium_features": {},
+                "created_at": int(time.time())
+            }
+            c.execute("""
+                INSERT INTO users (user_id, profile, consent, consent_time, premium_expiry, 
+                                 ban_type, ban_expiry, verified, premium_features, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                user_id,
+                json.dumps(new_user["profile"]),
+                new_user["consent"],
+                new_user["consent_time"],
+                new_user["premium_expiry"],
+                new_user["ban_type"],
+                new_user["ban_expiry"],
+                new_user["verified"],
+                json.dumps(new_user["premium_features"]),
+                new_user["created_at"]
+            ))
+            conn.commit()
+            logger.info(f"Created new user with user_id={user_id}")
+            return new_user
     except Exception as e:
-        logger.error(f"Failed to get user {user_id}: {e}")
+        logger.error(f"Failed to get or create user {user_id}: {e}")
         return {}
     finally:
         release_db_connection(conn)
@@ -211,14 +245,14 @@ def update_user(user_id: int, data: dict):
     try:
         with conn.cursor() as c:
             c.execute("""
-                INSERT INTO users (user_id, profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified, premium_features)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO users (user_id, profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified, premium_features, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id) DO UPDATE
                 SET profile = %s, consent = %s, consent_time = %s, premium_expiry = %s, ban_type = %s, ban_expiry = %s, verified = %s, premium_features = %s
             """, (
                 user_id, json.dumps(data.get("profile", {})), data.get("consent", False), data.get("consent_time"),
                 data.get("premium_expiry"), data.get("ban_type"), data.get("ban_expiry"), data.get("verified", False),
-                json.dumps(data.get("premium_features", {})),
+                json.dumps(data.get("premium_features", {})), data.get("created_at", int(time.time())),
                 json.dumps(data.get("profile", {})), data.get("consent", False), data.get("consent_time"),
                 data.get("premium_expiry"), data.get("ban_type"), data.get("ban_expiry"), data.get("verified", False),
                 json.dumps(data.get("premium_features", {}))
@@ -296,23 +330,40 @@ def is_safe_message(text: str) -> bool:
 
 def escape_markdown_v2(text: str) -> str:
     """
-    Escape MarkdownV2 special characters, preserving formatting like *bold*.
-    Escapes non-formatting occurrences of _, *, [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., !.
+    Escape special characters for MarkdownV2, preserving * for bold and _ for italic.
+    Escapes _, [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., ! when not part of formatting.
     """
     special_chars = r'_[]()~`>#+-|=}{.!'
     result = []
     i = 0
     while i < len(text):
-        if i < len(text) - 1 and text[i] == '*' and text[i + 1] != ' ':  # Preserve * for bold
-            result.append(text[i])
+        if i < len(text) - 1 and text[i] == '*' and text[i + 1] != ' ' and i > 0 and text[i - 1] != '\\':
+            # Preserve * for bold
+            result.append('*')
             i += 1
             while i < len(text) and text[i] != '*' and text[i] != '\n':
-                result.append(text[i])
+                if text[i] in special_chars and text[i] not in '*_':
+                    result.append(f'\\{text[i]}')
+                else:
+                    result.append(text[i])
                 i += 1
-            if i < len(text):
-                result.append(text[i])
+            if i < len(text) and text[i] == '*':
+                result.append('*')
                 i += 1
-        elif text[i] in special_chars:
+        elif i < len(text) - 1 and text[i] == '_' and text[i + 1] != ' ' and i > 0 and text[i - 1] != '\\':
+            # Preserve _ for italic
+            result.append('_')
+            i += 1
+            while i < len(text) and text[i] != '_' and text[i] != '\n':
+                if text[i] in special_chars and text[i] not in '*_':
+                    result.append(f'\\{text[i]}')
+                else:
+                    result.append(text[i])
+                i += 1
+            if i < len(text) and text[i] == '_':
+                result.append('_')
+                i += 1
+        elif text[i] in special_chars and text[i] not in '*_':
             result.append(f'\\{text[i]}')
             i += 1
         else:
@@ -320,28 +371,35 @@ def escape_markdown_v2(text: str) -> str:
             i += 1
     return ''.join(result)
 
-def safe_reply(update: Update, text: str, **kwargs) -> None:
+def safe_reply(update: Update, text: str, parse_mode: str = "MarkdownV2", **kwargs) -> None:
+    """
+    Send a reply with MarkdownV2 formatting, falling back to plain text if parsing fails.
+    """
     try:
-        parse_mode = kwargs.pop("parse_mode", "MarkdownV2")
         if parse_mode == "MarkdownV2":
-            text = escape_markdown_v2(text)  # Apply new escaping
+            escaped_text = escape_markdown_v2(text)
+        else:
+            escaped_text = text
         if update.message:
-            update.message.reply_text(text, parse_mode=parse_mode, **kwargs)
+            update.message.reply_text(escaped_text, parse_mode=parse_mode, **kwargs)
         elif update.callback_query:
             query = update.callback_query
             query.answer()
-            query.message.reply_text(text, parse_mode=parse_mode, **kwargs)
+            query.message.reply_text(escaped_text, parse_mode=parse_mode, **kwargs)
         else:
             logger.error(f"No message or callback query found in update: {update}")
     except telegram.error.BadRequest as bre:
-        logger.warning(f"MarkdownV2 parsing failed: {bre}. Sending without parse mode. Text: {text[:200]}")
+        logger.warning(f"MarkdownV2 parsing failed: {bre}. Text: {text[:200]}")
+        # Clean text for fallback
+        clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', r'\\\1', text)
+        clean_text = clean_text.replace('\\*', '*').replace('\\_', '_')
         try:
             if update.callback_query:
-                update.callback_query.message.reply_text(text, parse_mode=None, **kwargs)
+                update.callback_query.message.reply_text(clean_text, parse_mode=None, **kwargs)
             elif update.message:
-                update.message.reply_text(text, parse_mode=None, **kwargs)
+                update.message.reply_text(clean_text, parse_mode=None, **kwargs)
         except Exception as fallback_bre:
-            logger.error(f"Failed to send fallback message without parse mode: {fallback_bre}")
+            logger.error(f"Failed to send fallback message: {fallback_bre}")
     except Exception as e:
         logger.error(f"Failed to send message: {e}")
         try:
@@ -354,14 +412,18 @@ def safe_reply(update: Update, text: str, **kwargs) -> None:
             logger.error(f"Failed to send fallback error message: {fallback_e}")
 
 def safe_bot_send_message(bot, chat_id: int, text: str, parse_mode: str = "MarkdownV2", **kwargs):
-    """Safely send a message via bot, escaping MarkdownV2 if needed and falling back if parsing fails."""
+    """
+    Safely send a message via bot, escaping MarkdownV2 if needed and falling back if parsing fails.
+    """
     try:
         if parse_mode == "MarkdownV2":
             text = escape_markdown_v2(text)
         bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, **kwargs)
     except telegram.error.BadRequest as e:
-        logger.warning(f"MarkdownV2 parsing failed for chat {chat_id}: {e}. Sending without parsing: {text}")
-        bot.send_message(chat_id=chat_id, text=text, parse_mode=None, **kwargs)
+        logger.warning(f"MarkdownV2 parsing failed for chat {chat_id}: {e}. Text: {text[:200]}")
+        clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', r'\\\1', text)
+        clean_text = clean_text.replace('\\*', '*').replace('\\_', '_')
+        bot.send_message(chat_id=chat_id, text=clean_text, parse_mode=None, **kwargs)
     except Exception as e:
         logger.error(f"Failed to send message to {chat_id}: {e}")
 
@@ -418,7 +480,8 @@ def consent_handler(update: Update, context: CallbackContext) -> int:
         update_user(user_id, {
             "consent": True,
             "consent_time": int(time.time()),
-            "profile": get_user(user_id).get("profile", {})
+            "profile": get_user(user_id).get("profile", {}),
+            "created_at": get_user(user_id).get("created_at", int(time.time()))
         })
         safe_reply(update, "✅ Thank you for agreeing! Let’s verify your profile next.")
         safe_reply(update, "✍️ Enter a short verification phrase (e.g., I’m here to chat respectfully):")
@@ -438,7 +501,8 @@ def verification_handler(update: Update, context: CallbackContext) -> int:
     update_user(user_id, {
         "verified": True,
         "profile": user.get("profile", {}),
-        "consent": user.get("consent", False)
+        "consent": user.get("consent", False),
+        "created_at": user.get("created_at", int(time.time()))
     })
     safe_reply(update, "🎉 Profile verified successfully! Let’s get started.")
     if user_id not in waiting_users:
@@ -561,27 +625,47 @@ def help_command(update: Update, context: CallbackContext) -> None:
     reply_markup = InlineKeyboardMarkup(keyboard)
     help_text = (
         "🌟 *Talk2Anyone Help Menu* 🌟\n\n"
-        "Here’s how you can use the bot:\n"
-        "💬 *Chat Commands*\n"
+        "Explore all the ways to connect and customize your experience:\n\n"
+        "💬 *Chat Commands* 💬\n"
         "• /start - Begin a new anonymous chat\n"
         "• /next - Find a new chat partner\n"
         "• /stop - End the current chat\n"
-        "⚙️ *Profile & Settings*\n"
+        "━━━━━\n\n"
+        "⚙️ *Profile & Settings* ⚙️\n"
         "• /settings - Customize your profile\n"
         "• /deleteprofile - Erase your data\n"
-        "🌟 *Premium Features*\n"
+        "━━━━━\n\n"
+        "🌟 *Premium Features* 🌟\n"
         "• /premium - Unlock amazing features\n"
-        "• /history - View past chats [Premium]\n"
-        "• /rematch - Reconnect with past partners [Premium]\n"
-        "• /shine - Boost your profile [Premium]\n"
-        "• /instant - Instant rematch [Premium]\n"
-        "• /mood - Set chat mood [Premium]\n"
-        "• /vault - Save chats forever [Premium]\n"
-        "• /flare - Add sparkle to messages [Premium]\n"
-        "🚨 *Safety*\n"
+        "• /history - View past chats\n"
+        "• /rematch - Reconnect with past partners\n"
+        "• /shine - Boost your profile\n"
+        "• /instant - Instant rematch\n"
+        "• /mood - Set chat mood\n"
+        "• /vault - Save chats forever\n"
+        "• /flare - Add sparkle to messages\n"
+        "━━━━━\n\n"
+        "🚨 *Safety* 🚨\n"
         "• /report - Report inappropriate behavior\n"
-        "Use the buttons below to explore! 👇"
     )
+    if user_id in ADMIN_IDS:
+        help_text += (
+            "━━━━━\n\n"
+            "🔐 *Admin Commands* 🔐\n"
+            "• /admin - View all admin tools\n"
+            "• /admin_userslist - List all users\n"
+            "• /premiumuserslist - List premium users\n"
+            "• /admin_info <user_id> - User details\n"
+            "• /admin_delete <user_id> - Delete user\n"
+            "• /admin_premium <user_id> <days> - Grant premium\n"
+            "• /admin_revoke_premium <user_id> - Revoke premium\n"
+            "• /admin_ban <user_id> <days/permanent> - Ban user\n"
+            "• /admin_unban <user_id> - Unban user\n"
+            "• /admin_reports - View reports\n"
+            "• /admin_clear_reports <user_id> - Clear reports\n"
+            "• /admin_broadcast <message> - Broadcast message\n"
+        )
+    help_text += "\nUse the buttons below to get started! 👇"
     safe_reply(update, help_text, reply_markup=reply_markup)
 
 def premium(update: Update, context: CallbackContext) -> None:
@@ -600,14 +684,14 @@ def premium(update: Update, context: CallbackContext) -> None:
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = (
         "🌟 *Unlock Premium Features!* 🌟\n\n"
-        "Enhance your experience with these perks:\n"
+        "Enhance your chat experience with these exclusive perks:\n\n"
         "• *Flare Messages* - Add sparkle effects for 7 days (100 ⭐)\n"
-        "• *Instant Rematch* - Reconnect anytime (100 ⭐)\n"
+        "• *Instant Rematch* - Reconnect instantly (100 ⭐)\n"
         "• *Shine Profile* - Priority matching for 24 hours (250 ⭐)\n"
         "• *Mood Match* - Vibe-based matches for 30 days (250 ⭐)\n"
         "• *Vaulted Chats* - Save chats forever (500 ⭐)\n"
         "• *Premium Pass* - All features for 30 days + 5 Instant Rematches (1000 ⭐)\n\n"
-        "👇 Tap a button to purchase with Telegram Stars!"
+        "Tap a button to purchase with Telegram Stars! 👇"
     )
     safe_reply(update, message_text, reply_markup=reply_markup)
 
@@ -673,12 +757,12 @@ def successful_payment(update: Update, context: CallbackContext) -> None:
     payload = payment.invoice_payload
     current_time = int(time.time())
     feature_map = {
-        "flare_messages": (7 * 24 * 3600, "✨ Flare Messages activated for 7 days! Your messages will now sparkle!"),
-        "instant_rematch": (None, "🔄 Instant Rematch unlocked! Use /instant to reconnect."),
-        "shine_profile": (24 * 3600, "🌟 Shine Profile activated for 24 hours! You’re now at the top of the match list!"),
-        "mood_match": (30 * 24 * 3600, "😊 Mood Match activated for 30 days! Find users with similar vibes!"),
-        "vaulted_chats": (None, "📜 Vaulted Chats unlocked forever! Save your chats with /vault!"),
-        "premium_pass": (None, "🎉 Premium Pass activated! Enjoy all features for 30 days + 5 Instant Rematches!"),
+        "flare_messages": (7 * 24 * 3600, "✨ *Flare Messages* activated for 7 days! Your messages will now sparkle!"),
+        "instant_rematch": (None, "🔄 *Instant Rematch* unlocked! Use /instant to reconnect."),
+        "shine_profile": (24 * 3600, "🌟 *Shine Profile* activated for 24 hours! You’re now at the top of the match list!"),
+        "mood_match": (30 * 24 * 3600, "😊 *Mood Match* activated for 30 days! Find users with similar vibes!"),
+        "vaulted_chats": (None, "📜 *Vaulted Chats* unlocked forever! Save your chats with /vault!"),
+        "premium_pass": (None, "🎉 *Premium Pass* activated! Enjoy all features for 30 days + 5 Instant Rematches!"),
     }
     user = get_user(user_id)
     features = user.get("premium_features", {})
@@ -696,7 +780,10 @@ def successful_payment(update: Update, context: CallbackContext) -> None:
                     features["instant_rematch_count"] = features.get("instant_rematch_count", 0) + 1
                 else:
                     features[feature] = expiry
-            update_user(user_id, {"premium_features": features})
+            update_user(user_id, {
+                "premium_features": features,
+                "created_at": user.get("created_at", int(time.time()))
+            })
             safe_reply(update, message)
             logger.info(f"User {user_id} purchased {feature} with Stars")
             break
@@ -710,7 +797,7 @@ def shine(update: Update, context: CallbackContext) -> None:
         safe_reply(update, "🚫 You are currently banned.")
         return
     if not has_premium_feature(user_id, "shine_profile"):
-        safe_reply(update, "🌟 Shine Profile is a premium feature. Buy it with /premium!")
+        safe_reply(update, "🌟 *Shine Profile* is a premium feature. Buy it with /premium!")
         return
     if user_id not in waiting_users and user_id not in user_pairs:
         waiting_users.insert(0, user_id)
@@ -728,7 +815,7 @@ def instant(update: Update, context: CallbackContext) -> None:
     features = user.get("premium_features", {})
     rematch_count = features.get("instant_rematch_count", 0)
     if rematch_count <= 0:
-        safe_reply(update, "🔄 You need an Instant Rematch! Buy one with /premium!")
+        safe_reply(update, "🔄 You need an *Instant Rematch*! Buy one with /premium!")
         return
     partners = user.get("profile", {}).get("past_partners", [])
     if not partners:
@@ -743,9 +830,12 @@ def instant(update: Update, context: CallbackContext) -> None:
     user_pairs[user_id] = partner_id
     user_pairs[partner_id] = user_id
     features["instant_rematch_count"] = rematch_count - 1
-    update_user(user_id, {"premium_features": features})
-    safe_reply(update, "🔄 Instantly reconnected! Start chatting! 🗣️")
-    safe_bot_send_message(context.bot, partner_id, "🔄 Instantly reconnected! Start chatting! 🗣️")
+    update_user(user_id, {
+        "premium_features": features,
+        "created_at": user.get("created_at", int(time.time()))
+    })
+    safe_reply(update, "🔄 *Instantly reconnected!* Start chatting! 🗣️")
+    safe_bot_send_message(context.bot, partner_id, "🔄 *Instantly reconnected!* Start chatting! 🗣️")
     logger.info(f"User {user_id} used Instant Rematch with {partner_id}")
 
 def mood(update: Update, context: CallbackContext) -> None:
@@ -754,7 +844,7 @@ def mood(update: Update, context: CallbackContext) -> None:
         safe_reply(update, "🚫 You are currently banned.")
         return
     if not has_premium_feature(user_id, "mood_match"):
-        safe_reply(update, "😊 Mood Match is a premium feature. Buy it with /premium!")
+        safe_reply(update, "😊 *Mood Match* is a premium feature. Buy it with /premium!")
         return
     keyboard = [
         [InlineKeyboardButton("😎 Chill", callback_data="mood_chill"),
@@ -770,7 +860,7 @@ def set_mood(update: Update, context: CallbackContext) -> None:
     query.answer()
     user_id = query.from_user.id
     if not has_premium_feature(user_id, "mood_match"):
-        safe_reply(update, "😊 Mood Match is a premium feature. Buy it with /premium!")
+        safe_reply(update, "😊 *Mood Match* is a premium feature. Buy it with /premium!")
         return
     choice = query.data
     user = get_user(user_id)
@@ -782,7 +872,10 @@ def set_mood(update: Update, context: CallbackContext) -> None:
         mood = choice.split("_")[1]
         profile["mood"] = mood
         safe_reply(update, f"🎭 Mood set to: *{mood.capitalize()}*!")
-    update_user(user_id, {"profile": profile})
+    update_user(user_id, {
+        "profile": profile,
+        "created_at": user.get("created_at", int(time.time()))
+    })
 
 def vault(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
@@ -790,7 +883,7 @@ def vault(update: Update, context: CallbackContext) -> None:
         safe_reply(update, "🚫 You are currently banned.")
         return
     if not has_premium_feature(user_id, "vaulted_chats"):
-        safe_reply(update, "📜 Vaulted Chats is a premium feature. Buy it with /premium!")
+        safe_reply(update, "📜 *Vaulted Chats* is a premium feature. Buy it with /premium!")
         return
     if user_id not in chat_histories or not chat_histories[user_id]:
         safe_reply(update, "❌ No chats saved in your vault.")
@@ -806,14 +899,17 @@ def flare(update: Update, context: CallbackContext) -> None:
         safe_reply(update, "🚫 You are currently banned.")
         return
     if not has_premium_feature(user_id, "flare_messages"):
-        safe_reply(update, "✨ Flare Messages is a premium feature. Buy it with /premium!")
+        safe_reply(update, "✨ *Flare Messages* is a premium feature. Buy it with /premium!")
         return
     user = get_user(user_id)
     features = user.get("premium_features", {})
     flare_active = features.get("flare_active", False)
     features["flare_active"] = not flare_active
-    update_user(user_id, {"premium_features": features})
-    safe_reply(update, f"✨ Flare Messages *{'enabled' if not flare_active else 'disabled'}*!")
+    update_user(user_id, {
+        "premium_features": features,
+        "created_at": user.get("created_at", int(time.time()))
+    })
+    safe_reply(update, f"✨ *Flare Messages* *{'enabled' if not flare_active else 'disabled'}*!")
 
 def history(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
@@ -821,7 +917,7 @@ def history(update: Update, context: CallbackContext) -> None:
         safe_reply(update, "🚫 You are currently banned.")
         return
     if not (is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats")):
-        safe_reply(update, "📜 Chat history is a premium feature. Use /premium to unlock!")
+        safe_reply(update, "📜 *Chat History* is a premium feature. Use /premium to unlock!")
         return
     if user_id not in chat_histories or not chat_histories[user_id]:
         safe_reply(update, "❌ No chat history available.")
@@ -865,7 +961,8 @@ def report(update: Update, context: CallbackContext) -> None:
                         "ban_expiry": int(time.time()) + TEMP_BAN_DURATION,
                         "profile": get_user(partner_id).get("profile", {}),
                         "consent": get_user(partner_id).get("consent", False),
-                        "verified": get_user(partner_id).get("verified", False)
+                        "verified": get_user(partner_id).get("verified", False),
+                        "created_at": get_user(partner_id).get("created_at", int(time.time()))
                     })
                     safe_bot_send_message(context.bot, partner_id, "⚠️ You’ve been temporarily banned due to multiple reports.")
                     stop(update, context)
@@ -1036,7 +1133,6 @@ def button(update: Update, context: CallbackContext) -> int:
         elif data == "back_to_chat":
             safe_reply(update, "👋 Returning to chat! Use /settings to edit your profile again.")
             return ConversationHandler.END
-            
         elif data.startswith("gender_") or data.startswith("pref_"):
             user = get_user(user_id)
             profile = user.get("profile", {})
@@ -1057,13 +1153,13 @@ def button(update: Update, context: CallbackContext) -> int:
             update_user(user_id, {
                 "profile": profile,
                 "consent": user.get("consent", False),
-                "verified": user.get("verified", False)
+                "verified": user.get("verified", False),
+                "created_at": user.get("created_at", int(time.time()))
             })
             return settings(update, context)
         else:
             safe_reply(update, "❌ Unknown action. Please try again.")
             return ConversationHandler.END
-
     except Exception as e:
         logger.error(f"Error in button handler for data '{data}' by user {user_id}: {e}", exc_info=True)
         safe_reply(update, "❌ An error occurred. Please try again.")
@@ -1080,7 +1176,12 @@ def set_age(update: Update, context: CallbackContext) -> int:
             safe_reply(update, "⚠️ Age must be between 13 and 120. Please try again.")
             return AGE
         profile["age"] = age
-        update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
+        update_user(user_id, {
+            "profile": profile,
+            "consent": user.get("consent", False),
+            "verified": user.get("verified", False),
+            "created_at": user.get("created_at", int(time.time()))
+        })
         safe_reply(update, f"🎂 Age set to: *{age}*! 🎉")
         return settings(update, context)
     except ValueError:
@@ -1096,7 +1197,12 @@ def set_tags(update: Update, context: CallbackContext) -> int:
         safe_reply(update, f"⚠️ Invalid tags. Choose from: *{', '.join(ALLOWED_TAGS)}*")
         return TAGS
     profile["tags"] = tags
-    update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
+    update_user(user_id, {
+        "profile": profile,
+        "consent": user.get("consent", False),
+        "verified": user.get("verified", False),
+        "created_at": user.get("created_at", int(time.time()))
+    })
     safe_reply(update, f"🏷️ Tags set to: *{', '.join(tags) if tags else 'None'}*! 🎉")
     return settings(update, context)
 
@@ -1109,7 +1215,12 @@ def set_location(update: Update, context: CallbackContext) -> int:
         safe_reply(update, "⚠️ Location must be under 100 characters.")
         return LOCATION
     profile["location"] = location
-    update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
+    update_user(user_id, {
+        "profile": profile,
+        "consent": user.get("consent", False),
+        "verified": user.get("verified", False),
+        "created_at": user.get("created_at", int(time.time()))
+    })
     safe_reply(update, f"📍 Location set to: *{location}*! 🌍")
     return settings(update, context)
 
@@ -1125,7 +1236,12 @@ def set_bio(update: Update, context: CallbackContext) -> int:
         safe_reply(update, "⚠️ Bio contains inappropriate content. Please try again.")
         return BIO
     profile["bio"] = bio
-    update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
+    update_user(user_id, {
+        "profile": profile,
+        "consent": user.get("consent", False),
+        "verified": user.get("verified", False),
+        "created_at": user.get("created_at", int(time.time()))
+    })
     safe_reply(update, f"📝 Bio set to: *{bio}*! ✨")
     return settings(update, context)
 
@@ -1142,7 +1258,7 @@ def rematch(update: Update, context: CallbackContext) -> None:
         safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.")
         return
     if not is_premium(user_id):
-        safe_reply(update, "🔄 Re-match is a premium feature. Use /premium to unlock!")
+        safe_reply(update, "🔄 *Re-match* is a premium feature. Use /premium to unlock!")
         return
     if user_id in user_pairs:
         safe_reply(update, "💬 You're already in a chat. Use /stop to end it first.")
@@ -1188,8 +1304,8 @@ def admin_access(update: Update, context: CallbackContext) -> None:
         "🔐 *Admin Commands* 🔐\n\n"
         "👤 *User Management*\n"
         "• /admin_delete <user_id> - Delete a user’s data\n"
-        "• /admin_premium <user_id> <days> - Grant premium\n"
-        "• /admin_revoke_premium <user_id> - Revoke premium\n\n"
+        "• /admin_premium <user_id> <days> - Grant premium status\n"
+        "• /admin_revoke_premium <user_id> - Revoke premium status\n\n"
         "🚫 *Ban Management*\n"
         "• /admin_ban <user_id> <days/permanent> - Ban a user\n"
         "• /admin_unban <user_id> - Unban a user\n\n"
@@ -1235,13 +1351,14 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             "premium_expiry": expiry,
             "profile": user.get("profile", {}),
             "consent": user.get("consent", False),
-            "verified": user.get("verified", False)
+            "verified": user.get("verified", False),
+            "created_at": user.get("created_at", int(time.time()))
         })
         safe_reply(update, f"🎉 User *{target_id}* granted premium for *{days}* days!")
         logger.info(f"Admin {user_id} granted premium to {target_id} for {days} days.")
         notification_text = (
             "🎉 *Congratulations!* You’ve been upgraded to premium! 🌟\n\n"
-            f"You now have premium access for *{days} days*, until *{expiry_date}*.\n"
+            f"You now have premium access until *{expiry_date}*.\n"
             "Enjoy these benefits:\n"
             "• Priority matching\n"
             "• Chat history\n"
@@ -1267,7 +1384,8 @@ def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
             "profile": user.get("profile", {}),
             "consent": user.get("consent", False),
             "verified": user.get("verified", False),
-            "premium_features": {}
+            "premium_features": {},
+            "created_at": user.get("created_at", int(time.time()))
         })
         safe_reply(update, f"❌ Premium status revoked for user *{target_id}*.")
         logger.info(f"Admin {user_id} revoked premium for {target_id}.")
@@ -1289,7 +1407,8 @@ def admin_ban(update: Update, context: CallbackContext) -> None:
                 "ban_expiry": None,
                 "profile": user.get("profile", {}),
                 "consent": user.get("consent", False),
-                "verified": user.get("verified", False)
+                "verified": user.get("verified", False),
+                "created_at": user.get("created_at", int(time.time()))
             })
             safe_reply(update, f"🚫 User *{target_id}* permanently banned.")
             logger.info(f"Admin {user_id} permanently banned {target_id}.")
@@ -1301,7 +1420,8 @@ def admin_ban(update: Update, context: CallbackContext) -> None:
                 "ban_expiry": expiry,
                 "profile": user.get("profile", {}),
                 "consent": user.get("consent", False),
-                "verified": user.get("verified", False)
+                "verified": user.get("verified", False),
+                "created_at": user.get("created_at", int(time.time()))
             })
             safe_reply(update, f"🚫 User *{target_id}* banned for *{days}* days.")
             logger.info(f"Admin {user_id} banned {target_id} for {days} days.")
@@ -1326,7 +1446,8 @@ def admin_unban(update: Update, context: CallbackContext) -> None:
             "ban_expiry": None,
             "profile": user.get("profile", {}),
             "consent": user.get("consent", False),
-            "verified": user.get("verified", False)
+            "verified": user.get("verified", False),
+            "created_at": user.get("created_at", int(time.time()))
         })
         safe_reply(update, f"✅ User *{target_id}* unbanned successfully.")
         logger.info(f"Admin {user_id} unbanned {target_id}.")
@@ -1344,80 +1465,150 @@ def admin_info(update: Update, context: CallbackContext) -> None:
         if not user:
             safe_reply(update, f"❌ User *{target_id}* not found.")
             return
-        info = f"👤 *User Info: {target_id}*\n\n"
-        info += f"📋 *Profile*: {json.dumps(user.get('profile', {}), indent=2)}\n"
-        info += f"✅ *Consent*: {user.get('consent', False)}"
-        if user.get("consent_time"):
-            info += f" (given at {datetime.fromtimestamp(user['consent_time'])})\n"
-        else:
-            info += "\n"
-        info += f"🌟 *Premium*: {is_premium(target_id)}"
-        if user.get("premium_expiry"):
-            info += f" (expires at {datetime.fromtimestamp(user['premium_expiry'])})\n"
-        else:
-            info += "\n"
-        info += f"✨ *Features*: {json.dumps(user.get('premium_features', {}), indent=2)}\n"
-        info += f"🚫 *Banned*: {is_banned(target_id)}"
-        if user.get("ban_type"):
-            info += f" ({user['ban_type']}"
-            if user["ban_expiry"]:
-                info += f", expires at {datetime.fromtimestamp(user['ban_expiry'])}"
-            info += ")\n"
-        else:
-            info += "\n"
-        info += f"🔐 *Verified*: {user.get('verified', False)}\n"
-        conn = get_db_connection()
-        if conn:
-            try:
-                with conn.cursor() as c:
-                    c.execute("SELECT COUNT(*), string_agg(reason, '; ') FROM reports WHERE reported_id = %s", (target_id,))
-                    count, reasons = c.fetchone()
-                    info += f"🚨 *Reports*: {count}"
-                    if reasons:
-                        info += f" (Reasons: {reasons})"
-            except Exception as e:
-                logger.error(f"Failed to fetch reports for {target_id}: {e}")
-            finally:
-                release_db_connection(conn)
+        profile = user.get("profile", {})
+        created_at = user.get("created_at")
+        created_at_str = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M:%S") if created_at else "Unknown"
+        consent_time = user.get("consent_time")
+        consent_time_str = datetime.fromtimestamp(consent_time).strftime("%Y-%m-%d %H:%M:%S") if consent_time else "Not given"
+        premium_expiry = user.get("premium_expiry")
+        premium_str = datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d") if premium_expiry and premium_expiry > time.time() else "Not premium"
+        ban_type = user.get("ban_type", "None")
+        ban_expiry = user.get("ban_expiry")
+        ban_expiry_str = datetime.fromtimestamp(ban_expiry).strftime("%Y-%m-%d") if ban_expiry else "N/A"
+        info = (
+            f"👤 *User Info: {target_id}* 👤\n\n"
+            f"*User ID*: {target_id}\n"
+            f"*Created At*: {created_at_str}\n"
+            f"*Consent*: {user.get('consent', False)} ({consent_time_str})\n"
+            f"*Premium Until*: {premium_str}\n"
+            f"*Ban Status*: {ban_type.capitalize()}\n"
+            f"*Ban Expiry*: {ban_expiry_str}\n"
+            f"*Verified*: {user.get('verified', False)}\n"
+            f"*Premium Features*: {json.dumps(user.get('premium_features', {}), indent=2)}\n"
+            f"*Profile*:\n"
+            f"  *Gender*: {profile.get('gender', 'Not set')}\n"
+            f"  *Age*: {profile.get('age', 'Not set')}\n"
+            f"  *Tags*: {', '.join(profile.get('tags', []) or ['None'])}\n"
+            f"  *Location*: {profile.get('location', 'Not set')}\n"
+            f"  *Bio*: {profile.get('bio', 'Not set')}\n"
+            f"  *Gender Preference*: {profile.get('gender_preference', 'Any')}\n"
+            f"  *Mood*: {profile.get('mood', 'Not set')}"
+        )
         safe_reply(update, info)
-        logger.info(f"Admin {user_id} viewed info for {target_id}.")
+        logger.info(f"Admin {user_id} viewed info for user {target_id}.")
     except (IndexError, ValueError):
         safe_reply(update, "⚠️ Usage: /admin_info <user_id>")
 
-def admin_reports(update: Update, context: CallbackContext) -> None:
+    def admin_userslist(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, "🚫 Unauthorized.")
         return
     conn = get_db_connection()
     if not conn:
-        safe_reply(update, "❌ Error fetching reports due to database issue.")
+        safe_reply(update, "❌ Database error.")
         return
     try:
         with conn.cursor() as c:
-            c.execute("""
-                SELECT reported_id, COUNT(*), string_agg(reason, '; ')
-                FROM reports
-                GROUP BY reported_id
-                ORDER BY COUNT(*) DESC
-                LIMIT 10
-            """)
-            results = c.fetchall()
-            if not results:
-                safe_reply(update, "✅ No reported users at the moment.")
+            c.execute("SELECT user_id, created_at, premium_expiry, ban_type, verified FROM users ORDER BY created_at DESC")
+            users = c.fetchall()
+            if not users:
+                safe_reply(update, "📋 *No users found.*")
                 return
-            report_text = "🚨 *Reported Users (Top 10)* 🚨\n\n"
-            for reported_id, count, reasons in results:
-                report_text += f"👤 User *{reported_id}*: {count} reports (Reasons: {reasons or 'None'})\n"
-            safe_reply(update, report_text)
-            logger.info(f"Admin {user_id} viewed reported users.")
+            message = "📋 *All Users* 📋\n\n"
+            for user in users[:50]:  # Limit to 50 to avoid message size issues
+                uid, created_at, premium_expiry, ban_type, verified = user
+                created_at_str = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d") if created_at else "Unknown"
+                premium_status = "Premium" if premium_expiry and premium_expiry > time.time() else "Free"
+                ban_status = ban_type.capitalize() if ban_type else "None"
+                message += (
+                    f"*User ID*: {uid}\n"
+                    f"*First Joined*: {created_at_str}\n"
+                    f"*Premium*: {premium_status}\n"
+                    f"*Ban*: {ban_status}\n"
+                    f"*Verified*: {verified}\n"
+                    "──────────\n"
+                )
+            safe_reply(update, message)
+            logger.info(f"Admin {user_id} viewed users list.")
     except Exception as e:
-        logger.error(f"Failed to fetch reports: {e}")
-        safe_reply(update, "❌ Error fetching reports.")
+        logger.error(f"Failed to fetch users list: {e}")
+        safe_reply(update, "❌ Error retrieving users.")
     finally:
         release_db_connection(conn)
 
-def admin_clear_reports(update: Update, context: CallbackContext) -> None:
+    def premiumuserslist(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        safe_reply(update, "🚫 Unauthorized.")
+        return
+    conn = get_db_connection()
+    if not conn:
+        safe_reply(update, "❌ Database error.")
+        return
+    try:
+        with conn.cursor() as c:
+            c.execute("SELECT user_id, created_at, premium_expiry FROM users WHERE premium_expiry > %s ORDER BY premium_expiry DESC", (int(time.time()),))
+            users = c.fetchall()
+            if not users:
+                safe_reply(update, "🌟 *No premium users found.*")
+                return
+            message = "🌟 *Premium Users* 🌟\n\n"
+            for user in users[:50]:
+                uid, created_at, premium_expiry = user
+                created_at_str = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d") if created_at else "Unknown"
+                expiry_str = datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d") if premium_expiry else "N/A"
+                message += (
+                    f"*User ID*: {uid}\n"
+                    f"*First Joined*: {created_at_str}\n"
+                    f"*Premium Until*: {expiry_str}\n"
+                    "──────────\n"
+                )
+            safe_reply(update, message)
+            logger.info(f"Admin {user_id} viewed premium users list.")
+    except Exception as e:
+        logger.error(f"Failed to fetch premium users: {e}")
+        safe_reply(update, "❌ Error retrieving premium users.")
+    finally:
+        release_db_connection(conn)
+
+    def admin_reports(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        safe_reply(update, "🚫 Unauthorized.")
+        return
+    conn = get_db_connection()
+    if not conn:
+        safe_reply(update, "❌ Database error.")
+        return
+    try:
+        with conn.cursor() as c:
+            c.execute("SELECT report_id, reporter_id, reported_id, timestamp, reason FROM reports ORDER BY timestamp DESC LIMIT 50")
+            reports = c.fetchall()
+            if not reports:
+                safe_reply(update, "📊 *No reports found.*")
+                return
+            message = "📊 *Recent Reports* 📊\n\n"
+            for report in reports:
+                rid, reporter_id, reported_id, timestamp, reason = report
+                time_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S") if timestamp else "Unknown"
+                message += (
+                    f"*Report ID*: {rid}\n"
+                    f"*Reporter*: {reporter_id}\n"
+                    f"*Reported*: {reported_id}\n"
+                    f"*Time*: {time_str}\n"
+                    f"*Reason*: {reason or 'None'}\n"
+                    "──────────\n"
+                )
+            safe_reply(update, message)
+            logger.info(f"Admin {user_id} viewed reports.")
+    except Exception as e:
+        logger.error(f"Failed to fetch reports: {e}")
+        safe_reply(update, "❌ Error retrieving reports.")
+    finally:
+        release_db_connection(conn)
+
+    def admin_clear_reports(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, "🚫 Unauthorized.")
@@ -1426,7 +1617,7 @@ def admin_clear_reports(update: Update, context: CallbackContext) -> None:
         target_id = int(context.args[0])
         conn = get_db_connection()
         if not conn:
-            safe_reply(update, "❌ Error clearing reports due to database issue.")
+            safe_reply(update, "❌ Database error.")
             return
         try:
             with conn.cursor() as c:
@@ -1434,15 +1625,12 @@ def admin_clear_reports(update: Update, context: CallbackContext) -> None:
                 conn.commit()
                 safe_reply(update, f"✅ Reports cleared for user *{target_id}*.")
                 logger.info(f"Admin {user_id} cleared reports for {target_id}.")
-        except Exception as e:
-            logger.error(f"Failed to clear reports for {target_id}: {e}")
-            safe_reply(update, "❌ Error clearing reports.")
         finally:
             release_db_connection(conn)
     except (IndexError, ValueError):
         safe_reply(update, "⚠️ Usage: /admin_clear_reports <user_id>")
 
-def admin_broadcast(update: Update, context: CallbackContext) -> None:
+    def admin_broadcast(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, "🚫 Unauthorized.")
@@ -1453,164 +1641,92 @@ def admin_broadcast(update: Update, context: CallbackContext) -> None:
     message = " ".join(context.args)
     conn = get_db_connection()
     if not conn:
-        safe_reply(update, "❌ Error broadcasting due to database issue.")
+        safe_reply(update, "❌ Database error.")
         return
     try:
         with conn.cursor() as c:
             c.execute("SELECT user_id FROM users")
             users = c.fetchall()
-            for (user_id,) in users:
+            success_count = 0
+            for (uid,) in users:
                 try:
-                    safe_bot_send_message(context.bot, user_id, f"📢 *Announcement*: {message}")
+                    safe_bot_send_message(context.bot, uid, f"📢 *Broadcast*: {message}")
+                    success_count += 1
+                    time.sleep(0.05)  # Avoid hitting Telegram rate limits
                 except Exception as e:
-                    logger.warning(f"Failed to broadcast to {user_id}: {e}")
-            safe_reply(update, "📢 Broadcast sent successfully.")
-            logger.info(f"Admin {user_id} broadcasted message: {message}")
+                    logger.warning(f"Failed to send broadcast to {uid}: {e}")
+            safe_reply(update, f"📢 Broadcast sent to *{success_count}* users.")
+            logger.info(f"Admin {user_id} broadcasted to {success_count} users.")
     except Exception as e:
         logger.error(f"Failed to broadcast: {e}")
         safe_reply(update, "❌ Error sending broadcast.")
     finally:
         release_db_connection(conn)
 
-def admin_userslist(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
-        return
-    conn = get_db_connection()
-    if not conn:
-        safe_reply(update, "❌ Error fetching user list due to database issue.")
-        return
+    def error_handler(update: Update, context: CallbackContext) -> None:
+    """Handle bot errors, notify user, and alert admins."""
+    user_id = update.effective_user.id if update and update.effective_user else "Unknown"
+    message_text = update.message.text if update and update.message else "N/A"
+    logger.error(f"Error for user {user_id}: {context.error}. Update: {update}. Message: {message_text}", exc_info=True)
+    
+    # Notify user
+    error_message = "❌ An error occurred. Please try again or use /help for assistance."
     try:
-        with conn.cursor() as c:
-            # Fetch user_id, consent_time, premium_expiry for up to 50 users
-            c.execute("""
-                SELECT user_id, consent_time, premium_expiry 
-                FROM users 
-                ORDER BY user_id 
-                LIMIT 50
-            """)
-            users = c.fetchall()
-            # Get total user count
-            c.execute("SELECT COUNT(*) FROM users")
-            total_users = c.fetchone()[0]
-            
-            if not users:
-                safe_reply(update, "❌ No users found.")
-                return
-            
-            user_list = "👥 *All Users (Top 50)* 👥\n\n"
-            user_list += "Here’s a list of users who’ve joined the bot:\n"
-            user_list += "━━━━━━━━━━━━━━━━━━━━━\n"
-            
-            for uid, consent_time, premium_expiry in users:
-                # Format first accessed date
-                first_accessed = (
-                    datetime.fromtimestamp(consent_time).strftime("%Y-%m-%d")
-                    if consent_time
-                    else "Unknown"
-                )
-                # Check premium status
-                is_premium = premium_expiry and premium_expiry > int(time.time())
-                premium_status = "🌟 Premium" if is_premium else "Free"
-                
-                user_list += (
-                    f"👤 *User ID*: {uid}\n"
-                    f"📅 *First Joined*: {first_accessed}\n"
-                    f"🔖 *Status*: {premium_status}\n"
-                    "━━━━━━━━━━━━━━━━━━━━━\n"
-                )
-            
-            user_list += f"📊 *Total Users*: *{total_users}*\n"
-            user_list += "Use /admin_info <user_id> for more details!"
-            
-            safe_reply(update, user_list)
-            logger.info(f"Admin {user_id} viewed users list.")
+        if update and update.message:
+            safe_reply(update, error_message)
+        elif update and update.callback_query:
+            update.callback_query.answer()
+            safe_bot_send_message(context.bot, update.callback_query.message.chat_id, error_message)
     except Exception as e:
-        logger.error(f"Failed to fetch users list: {e}", exc_info=True)
-        safe_reply(update, "❌ Error fetching user list.")
-    finally:
-        release_db_connection(conn)
+        logger.warning(f"Failed to notify user {user_id}: {e}")
 
-def premiumuserslist(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
-        return
-    conn = get_db_connection()
-    if not conn:
-        safe_reply(update, "❌ Error fetching premium users due to database issue.")
-        return
-    try:
-        with conn.cursor() as c:
-            # Fetch premium users with user_id, premium_expiry, consent_time
-            c.execute("""
-                SELECT user_id, premium_expiry, consent_time 
-                FROM users 
-                WHERE premium_expiry > %s 
-                ORDER BY premium_expiry DESC 
-                LIMIT 50
-            """, (int(time.time()),))
-            users = c.fetchall()
-            # Get total premium user count
-            c.execute("SELECT COUNT(*) FROM users WHERE premium_expiry > %s", (int(time.time()),))
-            total_premium = c.fetchone()[0]
-            
-            if not users:
-                safe_reply(update, "❌ No premium users found.")
-                return
-            
-            user_list = "🌟 *Premium Users (Top 50)* 🌟\n\n"
-            user_list += "Our valued premium members:\n"
-            user_list += "━━━━━━━━━━━━━━━━━━━━━\n"
-            
-            for uid, premium_expiry, consent_time in users:
-                # Format dates
-                expiry_date = datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
-                first_accessed = (
-                    datetime.fromtimestamp(consent_time).strftime("%Y-%m-%d")
-                    if consent_time
-                    else "Unknown"
-                )
-                
-                user_list += (
-                    f"👤 *User ID*: {uid}\n"
-                    f"📅 *First Joined*: {first_accessed}\n"
-                    f"⏳ *Premium Until*: {expiry_date}\n"
-                    "━━━━━━━━━━━━━━━━━━━━━\n"
-                )
-            
-            user_list += f"📊 *Total Premium Users*: *{total_premium}*\n"
-            user_list += "Use /admin_info <user_id> to view their profiles!"
-            
-            safe_reply(update, user_list)
-            logger.info(f"Admin {user_id} viewed premium users list.")
-    except Exception as e:
-        logger.error(f"Failed to fetch premium users list: {e}", exc_info=True)
-        safe_reply(update, "❌ Error fetching premium users.")
-    finally:
-        release_db_connection(conn)
-
-def error_handler(update: Update, context: CallbackContext) -> None:
-    logger.error(f"Update {update} caused error {context.error}. Message: {update.message.text if update and update.message else 'N/A'}", exc_info=True)
-    if update and update.message:
-        safe_reply(update, "❌ An error occurred. Please try again or use /help for assistance.")
+    # Notify admins
+    error_summary = (
+        f"🚨 *Bot Error* 🚨\n\n"
+        f"*User ID*: {user_id}\n"
+        f"*Message*: {message_text[:100] or 'None'}\n"
+        f"*Error*: {str(context.error)[:200]}"
+    )
     for admin_id in ADMIN_IDS:
         try:
-            context.bot.send_message(admin_id, f"⚠️ Bot error: {context.error}")
+            safe_bot_send_message(context.bot, admin_id, error_summary)
         except Exception as e:
             logger.warning(f"Failed to notify admin {admin_id}: {e}")
 
-def main() -> None:
-    TOKEN = os.getenv("TOKEN")
-    if not TOKEN:
-        logger.error("No TOKEN found in environment variables.")
+    def main() -> None:
+    """Initialize and run the Telegram bot."""
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not bot_token:
+        logger.error("TELEGRAM_BOT_TOKEN environment variable not set.")
+        # Notify admins
+        for admin_id in ADMIN_IDS:
+            try:
+                context.bot.send_message(admin_id, "🚨 Bot failed to start: TELEGRAM_BOT_TOKEN not set.")
+            except:
+                pass
         exit(1)
+
     try:
-        updater = Updater(TOKEN, use_context=True)
+        updater = Updater(bot_token, use_context=True)
         dispatcher = updater.dispatcher
 
-        # Conversation handler for /start (includes consent and verification)
+        # Conversation handler for profile settings
+        conv_handler = ConversationHandler(
+            entry_points=[CommandHandler("settings", settings)],
+            states={
+                GENDER: [
+                    CallbackQueryHandler(button, pattern="^(set_gender|set_age|set_tags|set_location|set_bio|set_gender_pref|back_to_settings|back_to_chat|gender_male|gender_female|gender_or|gender_skip|pref_male|pref_female|pref_any)$")
+                ],
+                AGE: [MessageHandler(Filters.text & ~Filters.command, set_age)],
+                TAGS: [MessageHandler(Filters.text & ~Filters.command, set_tags)],
+                LOCATION: [MessageHandler(Filters.text & ~Filters.command, set_location)],
+                BIO: [MessageHandler(Filters.text & ~Filters.command, set_bio)],
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+            conversation_timeout=300
+        )
+
+        # Conversation handler for start flow
         start_handler = ConversationHandler(
             entry_points=[CommandHandler("start", start)],
             states={
@@ -1621,55 +1737,24 @@ def main() -> None:
             conversation_timeout=300
         )
 
-        # Conversation handler for /settings (profile customization)
-        settings_handler = ConversationHandler(
-            entry_points=[CommandHandler("settings", settings)],
-            states={
-                GENDER: [
-                    CallbackQueryHandler(button, pattern="^(set_gender|set_age|set_tags|set_location|set_bio|set_gender_pref|back_to_settings|back_to_chat)$"),
-                    CallbackQueryHandler(button, pattern="^(gender_male|gender_female|gender_other|gender_skip|pref_male|pref_female|pref_any)$")
-                ],
-                AGE: [MessageHandler(Filters.text & ~Filters.command, set_age)],
-                TAGS: [MessageHandler(Filters.text & ~Filters.command, set_tags)],
-                LOCATION: [MessageHandler(Filters.text & ~Filters.command, set_location)],
-                BIO: [MessageHandler(Filters.text & ~Filters.command, set_bio)]
-            },
-            fallbacks=[CommandHandler("cancel", cancel)],
-            conversation_timeout=300
-        )
-
-        # Add conversation handlers
+        # Register handlers
         dispatcher.add_handler(start_handler)
-        dispatcher.add_handler(settings_handler)
-
-        # Command handlers for chat functionality
+        dispatcher.add_handler(conv_handler)
         dispatcher.add_handler(CommandHandler("stop", stop))
         dispatcher.add_handler(CommandHandler("next", next_chat))
         dispatcher.add_handler(CommandHandler("help", help_command))
-        dispatcher.add_handler(CommandHandler("report", report))
-        dispatcher.add_handler(CommandHandler("deleteprofile", delete_profile))
-
-        # Command handlers for premium features
         dispatcher.add_handler(CommandHandler("premium", premium))
         dispatcher.add_handler(CommandHandler("shine", shine))
         dispatcher.add_handler(CommandHandler("instant", instant))
-        dispatcher.add_handler(CommandHandler("mood", mood))
         dispatcher.add_handler(CommandHandler("vault", vault))
         dispatcher.add_handler(CommandHandler("flare", flare))
         dispatcher.add_handler(CommandHandler("history", history))
+        dispatcher.add_handler(CommandHandler("report", report))
         dispatcher.add_handler(CommandHandler("rematch", rematch))
+        dispatcher.add_handler(CommandHandler("deleteprofile", delete_profile))
+        dispatcher.add_handler(CommandHandler("mood", mood))
 
-        # Callback query handler for buttons
-        dispatcher.add_handler(CallbackQueryHandler(button))
-
-        # Payment handlers for premium features
-        dispatcher.add_handler(PreCheckoutQueryHandler(pre_checkout))
-        dispatcher.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
-
-        # Message handler for chat messages
-        dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-
-        # Admin command handlers
+        # Admin commands
         dispatcher.add_handler(CommandHandler("admin", admin_access))
         dispatcher.add_handler(CommandHandler("admin_delete", admin_delete))
         dispatcher.add_handler(CommandHandler("admin_premium", admin_premium))
@@ -1683,35 +1768,37 @@ def main() -> None:
         dispatcher.add_handler(CommandHandler("admin_userslist", admin_userslist))
         dispatcher.add_handler(CommandHandler("premiumuserslist", premiumuserslist))
 
+        # Payment and button handlers
+        dispatcher.add_handler(CallbackQueryHandler(buy_premium, pattern="^(buy_flare|buy_instant|buy_shine|buy_mood|buy_vault|buy_premium_pass)$"))
+        dispatcher.add_handler(CallbackQueryHandler(set_mood, pattern="^(mood_chill|mood_deep|mood_fun|mood_clear)$"))
+        dispatcher.add_handler(CallbackQueryHandler(button, pattern="^(start_chat|next_chat|stop_chat|settings_menu|premium_menu|history_menu|report_user|rematch_partner|delete_profile|back_to_chat|set_gender|set_age|set_tags|set_location|set_bio|set_gender_pref|back_to_settings|gender_male|gender_female|gender_other|gender_skip|pref_male|pref_female|pref_any)$"))
+        dispatcher.add_handler(PreCheckoutQueryHandler(pre_checkout))
+        dispatcher.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
+
+        # Message handler
+        dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+
         # Error handler
         dispatcher.add_error_handler(error_handler)
 
-        # Schedule periodic cleanup
+        # Job queue for cleanup
         updater.job_queue.run_repeating(cleanup_in_memory, interval=3600, first=10)
-        logger.info("Scheduled periodic cleanup every 3600 seconds.")
 
-        # Start the bot (support both polling and webhook for Heroku)
-        port = int(os.getenv("PORT", 8443))
-        heroku_app_name = os.getenv("HEROKU_APP_NAME")
-        if heroku_app_name:
-            webhook_url = f"https://{heroku_app_name}.herokuapp.com/{TOKEN}"
-            updater.start_webhook(
-                listen="0.0.0.0",
-                port=port,
-                url_path=TOKEN,
-                webhook_url=webhook_url
-            )
-            logger.info(f"Started webhook on port {port} with URL {webhook_url}")
-        else:
-            updater.start_polling(timeout=15, read_latency=4.0)
-            logger.info("Started polling")
-
-        updater.idle()
+        # Start bot
+        updater.start_polling(allowed_updates=Update.ALL_TYPES)
         logger.info("Bot started successfully.")
+        updater.idle()
 
     except Exception as e:
         logger.error(f"Failed to start bot: {e}", exc_info=True)
-        exit(1)
+        # Notify admins
+        for admin_id in ADMIN_IDS:
+            try:
+                context.bot.send_message(admin_id, f"🚨 Bot failed to start: {str(e)[:200]}")
+            except:
+                pass
+        raise
 
 if __name__ == "__main__":
     main()
+       
