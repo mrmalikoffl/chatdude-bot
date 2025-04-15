@@ -552,7 +552,7 @@ def can_match(user1: int, user2: int) -> bool:
         return False
     age1 = profile1.get("age")
     age2 = profile2.get("age")
-    if age1 and age2 and abs29 - age2) > (15 if is_premium(user1) or is_premium(user2) or has_premium_feature(user1, "mood_match") or has_premium_feature(user2, "mood_match") else 10):
+    if age1 and age2 and abs(age1 - age2) > (15 if is_premium(user1) or is_premium(user2) or has_premium_feature(user1, "mood_match") or has_premium_feature(user2, "mood_match") else 10):
         return False
     gender_pref1 = profile1.get("gender_preference")
     gender_pref2 = profile2.get("gender_preference")
@@ -567,6 +567,7 @@ def can_match(user1: int, user2: int) -> bool:
         mood2 = profile2.get("mood")
         if mood1 and mood2 and mood1 != mood2:
             return False
+    return True
     return True
 
 def stop(update: Update, context: CallbackContext) -> None:
