@@ -1829,13 +1829,13 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             "vaulted_chats": expiry
         })
         update_user(target_id, {
-            "premium_expiry": expiry,
+            "premium_expiry": expiry,  # Set premium_expiry explicitly
             "premium_features": features,
             "profile": user.get("profile", {}),
             "consent": user.get("consent", False),
             "verified": user.get("verified", False),
-            "premium_expiry": user.get("premium_expiry"),
-            "premium_features": user.get("premium_features", {}),
+            "ban_type": user.get("ban_type"),
+            "ban_expiry": user.get("ban_expiry"),
             "created_at": user.get("created_at", int(time.time()))
         })
         safe_reply(update, f"🌟 Premium granted to user *{target_id}* for *{days}* days.")
@@ -1861,6 +1861,8 @@ def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
             "profile": user.get("profile", {}),
             "consent": user.get("consent", False),
             "verified": user.get("verified", False),
+            "ban_type": user.get("ban_type"),
+            "ban_expiry": user.get("ban_expiry"),
             "created_at": user.get("created_at", int(time.time()))
         })
         safe_reply(update, f"🌟 Premium status revoked for user *{target_id}*.")
@@ -2008,7 +2010,7 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
         return
     try:
         with conn.cursor() as c:
-            c.execute("SELECT user_id, created_at, premium_expiry, ban_type, verified, profile FROM users ORDER BY user_id")
+            c.execute("SELECT user_id, created_at, premium_expiry, ban_type, verified, profile, premium_features FROM users ORDER BY user_id")
             users = c.fetchall()
             if not users:
                 safe_reply(update, "👤 No users found.")
@@ -2016,10 +2018,21 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
             message = "*All Users List* \\(Sorted by ID\\)\n\n"
             user_count = 0
             for user in users:
-                user_id, created_at, premium_expiry, ban_type, verified, profile_json = user
+                user_id, created_at, premium_expiry, ban_type, verified, profile_json, premium_features_json = user
                 profile = profile_json or {}
+                premium_features = premium_features_json or {}
                 created_date = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d") if created_at else "Unknown"
-                premium_status = "Premium" if premium_expiry and premium_expiry > time.time() else "Not Premium"
+                # Check premium status: either premium_expiry is active or any premium_feature is active
+                has_active_features = any(
+                    v is True or (isinstance(v, int) and v > time.time())
+                    for k, v in premium_features.items()
+                    if k != "instant_rematch_count"
+                )
+                premium_status = (
+                    "Premium"
+                    if (premium_expiry and premium_expiry > time.time()) or has_active_features
+                    else "Not Premium"
+                )
                 ban_status = ban_type.capitalize() if ban_type else "None"
                 verified_status = "Yes" if verified else "No"
                 name = profile.get("name", "Not set")
@@ -2040,6 +2053,7 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
                 message += f"👥 *Total Users*: {user_count}\n"
                 safe_reply(update, message)
             logger.info(f"Admin {user_id} requested users list with {user_count} users.")
+            logger.debug(f"Users list generated with {user_count} users.")
     except Exception as e:
         logger.error(f"Error fetching users list: {e}")
         safe_reply(update, "❌ Error retrieving users list.")
@@ -2057,7 +2071,14 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
         return
     try:
         with conn.cursor() as c:
-            c.execute("SELECT user_id, premium_expiry, premium_features, profile FROM users WHERE premium_expiry > %s ORDER BY premium_expiry", (int(time.time()),))
+            # Include users with either premium_expiry or active premium_features
+            c.execute("""
+                SELECT user_id, premium_expiry, premium_features, profile 
+                FROM users 
+                WHERE premium_expiry > %s 
+                   OR premium_features ?| array['flare_messages', 'shine_profile', 'mood_match', 'partner_details', 'vaulted_chats']
+                ORDER BY premium_expiry
+            """, (int(time.time()),))
             users = c.fetchall()
             if not users:
                 safe_reply(update, "🌟 No premium users found.")
@@ -2068,12 +2089,18 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
                 user_id, premium_expiry, premium_features_json, profile_json = user
                 profile = profile_json or {}
                 premium_features = premium_features_json or {}
-                expiry_date = datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d") if premium_expiry else "Unknown"
+                expiry_date = (
+                    datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
+                    if premium_expiry and premium_expiry > time.time()
+                    else "No expiry set"
+                )
                 name = profile.get("name", "Not set")
                 active_features = [
                     k for k, v in premium_features.items()
                     if v is True or (isinstance(v, int) and v > time.time())
                 ]
+                if "instant_rematch_count" in premium_features and premium_features["instant_rematch_count"] > 0:
+                    active_features.append(f"instant_rematch_count: {premium_features['instant_rematch_count']}")
                 features_str = ", ".join(active_features) or "None"
                 message += (
                     f"👤 *User ID*: {user_id}\n"
@@ -2090,6 +2117,7 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
                 message += f"🌟 *Total Premium Users*: {user_count}\n"
                 safe_reply(update, message)
             logger.info(f"Admin {user_id} requested premium users list with {user_count} users.")
+            logger.debug(f"Premium users list generated with {user_count} users: {[(u[0], u[1]) for u in users]}")
     except Exception as e:
         logger.error(f"Error fetching premium users list: {e}")
         safe_reply(update, "❌ Error retrieving premium users list.")
