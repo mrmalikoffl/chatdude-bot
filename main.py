@@ -1612,6 +1612,7 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
                 safe_reply(update, "❌ No users found.")
                 return
             message = "*All Users List* \\(Sorted by ID\\)\n\n"
+            user_count = 0
             for user in users:
                 user_id, created_at, premium_expiry, ban_type, verified, profile_json = user
                 profile = profile_json or {}
@@ -1621,20 +1622,22 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
                 verified_status = "Yes" if verified else "No"
                 name = profile.get("name", "Not set")
                 message += (
-                    f"*User ID*: {user_id}\n"
-                    f"*Name*: {name}\n"
-                    f"*Created*: {created_date}\n"
-                    f"*Premium*: {premium_status}\n"
-                    f"*Ban*: {ban_status}\n"
-                    f"*Verified*: {verified_status}\n"
+                    f"🆔 *User ID*: {user_id}\n"
+                    f"🧑 *Name*: {name}\n"
+                    f"📅 *Created*: {created_date}\n"
+                    f"🌟 *Premium*: {premium_status}\n"
+                    f"🚫 *Ban*: {ban_status}\n"
+                    f"✅ *Verified*: {verified_status}\n"
                     f"──────────\n"
                 )
+                user_count += 1
                 if len(message.encode('utf-8')) > 4000:  # Telegram's limit is 4096, leave buffer
                     safe_reply(update, message)
                     message = ""
             if message:
+                message += f"📊 *Total Users*: {user_count}\n"
                 safe_reply(update, message)
-            logger.info(f"Admin {user_id} requested users list.")
+            logger.info(f"Admin {user_id} requested users list with {user_count} users.")
     except Exception as e:
         logger.error(f"Error fetching users list: {e}")
         safe_reply(update, "❌ Error retrieving users list.")
@@ -1663,6 +1666,7 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
                 safe_reply(update, "❌ No premium users found.")
                 return
             message = "*Premium Users List* \\(Sorted by Expiry\\)\n\n"
+            user_count = 0
             for user in users:
                 user_id, premium_expiry, premium_features_json, profile_json = user
                 profile = profile_json or {}
@@ -1675,18 +1679,20 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
                 ]
                 features_str = ", ".join(active_features) or "None"
                 message += (
-                    f"*User ID*: {user_id}\n"
-                    f"*Name*: {name}\n"
-                    f"*Premium Until*: {expiry_date}\n"
-                    f"*Features*: {features_str}\n"
+                    f"🆔 *User ID*: {user_id}\n"
+                    f"🧑 *Name*: {name}\n"
+                    f"⏰ *Premium Until*: {expiry_date}\n"
+                    f"🎁 *Features*: {features_str}\n"
                     f"──────────\n"
                 )
+                user_count += 1
                 if len(message.encode('utf-8')) > 4000:
                     safe_reply(update, message)
                     message = ""
             if message:
+                message += f"📊 *Total Premium Users*: {user_count}\n"
                 safe_reply(update, message)
-            logger.info(f"Admin {user_id} requested premium users list.")
+            logger.info(f"Admin {user_id} requested premium users list with {user_count} users.")
     except Exception as e:
         logger.error(f"Error fetching premium users list: {e}")
         safe_reply(update, "❌ Error retrieving premium users list.")
