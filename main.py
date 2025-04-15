@@ -21,6 +21,7 @@ import re
 from collections import defaultdict
 import warnings
 import telegram.error
+import random
 
 # Suppress ConversationHandler warning
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram.ext.conversationhandler")
@@ -58,7 +59,10 @@ message_timestamps = defaultdict(list)
 chat_histories = {}  # Premium feature: in-memory
 
 # Conversation states
-GENDER, AGE, TAGS, LOCATION, BIO, CONSENT, VERIFICATION = range(7)
+NAME, AGE, GENDER, LOCATION, BIO, CONSENT, VERIFICATION, TAGS = range(8)
+
+# Emoji list for verification
+VERIFICATION_EMOJIS = ['😊', '😢', '😡', '😎', '😍', '😉', '😜', '😴']
 
 # Database connection pool
 db_pool = None
@@ -439,8 +443,24 @@ def start(update: Update, context: CallbackContext) -> int:
         safe_reply(update, welcome_text, reply_markup=reply_markup)
         return CONSENT
     if not user.get("verified"):
-        safe_reply(update, "🔐 Please verify your profile to start chatting. Enter a short verification phrase (e.g., I’m here to chat respectfully):")
+        # Emoji verification
+        correct_emoji = random.choice(VERIFICATION_EMOJIS)
+        context.user_data["correct_emoji"] = correct_emoji
+        # Generate 3 incorrect emojis
+        other_emojis = random.sample([e for e in VERIFICATION_EMOJIS if e != correct_emoji], 3)
+        all_emojis = [correct_emoji] + other_emojis
+        random.shuffle(all_emojis)
+        keyboard = [[InlineKeyboardButton(emoji, callback_data=f"emoji_{emoji}") for emoji in all_emojis]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        safe_reply(update, f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{correct_emoji}*", reply_markup=reply_markup)
         return VERIFICATION
+    # Check if profile is complete
+    profile = user.get("profile", {})
+    required_fields = ["name", "age", "gender", "location"]
+    missing_fields = [field for field in required_fields if not profile.get(field)]
+    if missing_fields:
+        safe_reply(update, "✨ Let’s set up your profile to start chatting! Please enter your name:")
+        return NAME
     if user_id not in waiting_users:
         if is_premium(user_id) or has_premium_feature(user_id, "shine_profile"):
             waiting_users.insert(0, user_id)
@@ -463,33 +483,148 @@ def consent_handler(update: Update, context: CallbackContext) -> int:
             "created_at": get_user(user_id).get("created_at", int(time.time()))
         })
         safe_reply(update, "✅ Thank you for agreeing! Let’s verify your profile next.")
-        safe_reply(update, "✍️ Enter a short verification phrase (e.g., I’m here to chat respectfully):")
+        # Emoji verification
+        correct_emoji = random.choice(VERIFICATION_EMOJIS)
+        context.user_data["correct_emoji"] = correct_emoji
+        other_emojis = random.sample([e for e in VERIFICATION_EMOJIS if e != correct_emoji], 3)
+        all_emojis = [correct_emoji] + other_emojis
+        random.shuffle(all_emojis)
+        keyboard = [[InlineKeyboardButton(emoji, callback_data=f"emoji_{emoji}") for emoji in all_emojis]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        safe_reply(update, f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{correct_emoji}*", reply_markup=reply_markup)
         return VERIFICATION
     else:
         safe_reply(update, "❌ You must agree to the rules to use this bot. Use /start to try again.")
         logger.info(f"User {user_id} declined rules.")
         return ConversationHandler.END
 
-def verification_handler(update: Update, context: CallbackContext) -> int:
-    user_id = update.effective_user.id
-    phrase = update.message.text.strip()
-    if len(phrase) < 10 or not is_safe_message(phrase):
-        safe_reply(update, "⚠️ Please provide a valid, respectful verification phrase (min 10 characters).")
+def verify_emoji(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    selected_emoji = query.data.replace("emoji_", "")
+    correct_emoji = context.user_data.get("correct_emoji")
+    if selected_emoji == correct_emoji:
+        user = get_user(user_id)
+        update_user(user_id, {
+            "verified": True,
+            "profile": user.get("profile", {}),
+            "consent": user.get("consent", False),
+            "created_at": user.get("created_at", int(time.time()))
+        })
+        safe_reply(update, "🎉 Profile verified successfully! Let’s set up your profile.")
+        safe_reply(update, "✨ Please enter your name:")
+        return NAME
+    else:
+        # Generate new emoji challenge
+        correct_emoji = random.choice(VERIFICATION_EMOJIS)
+        context.user_data["correct_emoji"] = correct_emoji
+        other_emojis = random.sample([e for e in VERIFICATION_EMOJIS if e != correct_emoji], 3)
+        all_emojis = [correct_emoji] + other_emojis
+        random.shuffle(all_emojis)
+        keyboard = [[InlineKeyboardButton(emoji, callback_data=f"emoji_{emoji}") for emoji in all_emojis]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        safe_reply(update, f"❌ Incorrect emoji. Try again!\nPlease select this emoji: *{correct_emoji}*", reply_markup=reply_markup)
         return VERIFICATION
+
+def set_name(update: Update, context: CallbackContext) -> int:
+    user_id = update.effective_user.id
     user = get_user(user_id)
+    profile = user.get("profile", {})
+    name = update.message.text.strip()
+    if len(name) > 50:
+        safe_reply(update, "⚠️ Name must be under 50 characters.")
+        return NAME
+    if not is_safe_message(name):
+        safe_reply(update, "⚠️ Name contains inappropriate content. Please try again.")
+        return NAME
+    profile["name"] = name
     update_user(user_id, {
-        "verified": True,
-        "profile": user.get("profile", {}),
+        "profile": profile,
         "consent": user.get("consent", False),
+        "verified": user.get("verified", False),
         "created_at": user.get("created_at", int(time.time()))
     })
-    safe_reply(update, "🎉 Profile verified successfully! Let’s get started.")
+    safe_reply(update, f"🧑 Name set to: *{name}*! 🎉")
+    safe_reply(update, "🎂 Please enter your age (e.g., 25):")
+    return AGE
+
+def set_age(update: Update, context: CallbackContext) -> int:
+    user_id = update.effective_user.id
+    user = get_user(user_id)
+    profile = user.get("profile", {})
+    age_text = update.message.text.strip()
+    try:
+        age = int(age_text)
+        if age < 13 or age > 120:
+            safe_reply(update, "⚠️ Age must be between 13 and 120. Please try again.")
+            return AGE
+        profile["age"] = age
+        update_user(user_id, {
+            "profile": profile,
+            "consent": user.get("consent", False),
+            "verified": user.get("verified", False),
+            "created_at": user.get("created_at", int(time.time()))
+        })
+        safe_reply(update, f"🎂 Age set to: *{age}*! 🎉")
+        keyboard = [
+            [
+                InlineKeyboardButton("👨 Male", callback_data="gender_male"),
+                InlineKeyboardButton("👩 Female", callback_data="gender_female"),
+                InlineKeyboardButton("🌈 Other", callback_data="gender_other")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        safe_reply(update, "👤 *Set Your Gender* 👤\n\nChoose your gender below:", reply_markup=reply_markup)
+        return GENDER
+    except ValueError:
+        safe_reply(update, "⚠️ Please enter a valid number for your age (e.g., 25).")
+        return AGE
+
+def set_gender(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    data = query.data
+    user = get_user(user_id)
+    profile = user.get("profile", {})
+    if data.startswith("gender_"):
+        gender = data.split("_")[1].capitalize()
+        profile["gender"] = gender
+        update_user(user_id, {
+            "profile": profile,
+            "consent": user.get("consent", False),
+            "verified": user.get("verified", False),
+            "created_at": user.get("created_at", int(time.time()))
+        })
+        safe_reply(update, f"👤 Gender set to: *{gender}*! 🎉")
+        safe_reply(update, "📍 Please enter your location (e.g., New York):")
+        return LOCATION
+    safe_reply(update, "⚠️ Invalid selection. Please choose a gender.")
+    return GENDER
+
+def set_location(update: Update, context: CallbackContext) -> int:
+    user_id = update.effective_user.id
+    user = get_user(user_id)
+    profile = user.get("profile", {})
+    location = update.message.text.strip()
+    if len(location) > 100:
+        safe_reply(update, "⚠️ Location must be under 100 characters.")
+        return LOCATION
+    profile["location"] = location
+    update_user(user_id, {
+        "profile": profile,
+        "consent": user.get("consent", False),
+        "verified": user.get("verified", False),
+        "created_at": user.get("created_at", int(time.time()))
+    })
+    safe_reply(update, f"📍 Location set to: *{location}*! 🌍")
     if user_id not in waiting_users:
         if is_premium(user_id) or has_premium_feature(user_id, "shine_profile"):
             waiting_users.insert(0, user_id)
         else:
             waiting_users.append(user_id)
-        safe_reply(update, "🔍 Looking for a chat partner... Please wait!")
+        safe_reply(update, "🎉 Profile setup complete! 🔍 Looking for a chat partner... Please wait!")
     match_users(context)
     return ConversationHandler.END
 
@@ -509,8 +644,54 @@ def match_users(context: CallbackContext) -> None:
                 user_pairs[user2] = user1
                 previous_partners[user1] = user2
                 previous_partners[user2] = user1
-                safe_bot_send_message(context.bot, user1, "✅ *Connected!* Start chatting now! 🗣️\nUse /help for more options.")
-                safe_bot_send_message(context.bot, user2, "✅ *Connected!* Start chatting now! 🗣️\nUse /help for more options.")
+
+                # Get user profiles
+                user1_data = get_user(user1)
+                user2_data = get_user(user2)
+                user1_profile = user1_data.get("profile", {})
+                user2_profile = user2_data.get("profile", {})
+
+                # Prepare notifications based on partner_details feature
+                if has_premium_feature(user1, "partner_details"):
+                    user1_message = (
+                        "✅ *Connected!* Start chatting now! 🗣️\n\n"
+                        f"👤 *Partner Details*:\n"
+                        f"🧑 *Name*: {user2_profile.get('name', 'Not set')}\n"
+                        f"🎂 *Age*: {user2_profile.get('age', 'Not set')}\n"
+                        f"👤 *Gender*: {user2_profile.get('gender', 'Not set')}\n"
+                        f"📍 *Location*: {user2_profile.get('location', 'Not set')}\n\n"
+                        "Use /help for more options."
+                    )
+                else:
+                    user1_message = (
+                        "✅ *Connected!* Start chatting now! 🗣️\n\n"
+                        "🔒 *Partner Details*: Upgrade to *Partner Details Reveal* to view your partner’s name, age, gender, and location!\n"
+                        "Unlock with /premium.\n\n"
+                        "Use /help for more options."
+                    )
+
+                if has_premium_feature(user2, "partner_details"):
+                    user2_message = (
+                        "✅ *Connected!* Start chatting now! 🗣️\n\n"
+                        f"👤 *Partner Details*:\n"
+                        f"🧑 *Name*: {user1_profile.get('name', 'Not set')}\n"
+                        f"🎂 *Age*: {user1_profile.get('age', 'Not set')}\n"
+                        f"👤 *Gender*: {user1_profile.get('gender', 'Not set')}\n"
+                        f"📍 *Location*: {user1_profile.get('location', 'Not set')}\n\n"
+                        "Use /help for more options."
+                    )
+                else:
+                    user2_message = (
+                        "✅ *Connected!* Start chatting now! 🗣️\n\n"
+                        "🔒 *Partner Details*: Upgrade to *Partner Details Reveal* to view your partner’s name, age, gender, and location!\n"
+                        "Unlock with /premium.\n\n"
+                        "Use /help for more options."
+                    )
+
+                # Send notifications
+                safe_bot_send_message(context.bot, user1, user1_message)
+                safe_bot_send_message(context.bot, user2, user2_message)
+
                 logger.info(f"Matched users {user1} and {user2}.")
                 if is_premium(user1) or has_premium_feature(user1, "vaulted_chats"):
                     chat_histories[user1] = []
@@ -546,7 +727,6 @@ def can_match(user1: int, user2: int) -> bool:
         mood2 = profile2.get("mood")
         if mood1 and mood2 and mood1 != mood2:
             return False
-    return True
     return True
 
 def stop(update: Update, context: CallbackContext) -> None:
@@ -647,7 +827,8 @@ def premium(update: Update, context: CallbackContext) -> None:
          InlineKeyboardButton("🔄 Instant Rematch - 100 ⭐", callback_data="buy_instant")],
         [InlineKeyboardButton("🌟 Shine Profile - 250 ⭐", callback_data="buy_shine"),
          InlineKeyboardButton("😊 Mood Match - 250 ⭐", callback_data="buy_mood")],
-        [InlineKeyboardButton("📜 Vaulted Chats - 500 ⭐", callback_data="buy_vault")],
+        [InlineKeyboardButton("👤 Partner Details - 500 ⭐", callback_data="buy_partner_details"),
+         InlineKeyboardButton("📜 Vaulted Chats - 500 ⭐", callback_data="buy_vault")],
         [InlineKeyboardButton("🎉 Premium Pass - 1000 ⭐", callback_data="buy_premium_pass")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -658,6 +839,7 @@ def premium(update: Update, context: CallbackContext) -> None:
         "• *Instant Rematch* - Reconnect instantly (100 ⭐)\n"
         "• *Shine Profile* - Priority matching for 24 hours (250 ⭐)\n"
         "• *Mood Match* - Vibe-based matches for 30 days (250 ⭐)\n"
+        "• *Partner Details* - View name, age, gender, location for 30 days (500 ⭐)\n"
         "• *Vaulted Chats* - Save chats forever (500 ⭐)\n"
         "• *Premium Pass* - All features for 30 days + 5 Instant Rematches (1000 ⭐)\n\n"
         "Tap a button to purchase with Telegram Stars! 👇"
@@ -676,8 +858,9 @@ def buy_premium(update: Update, context: CallbackContext) -> None:
         "buy_instant": ("Instant Rematch", 100, "Reconnect with any past partner instantly!", "instant_rematch"),
         "buy_shine": ("Shine Profile", 250, "Boost your profile to the top for 24 hours!", "shine_profile"),
         "buy_mood": ("Mood Match", 250, "Match with users sharing your vibe for 30 days!", "mood_match"),
+        "buy_partner_details": ("Partner Details", 500, "View your partner’s name, age, gender, and location for 30 days!", "partner_details"),
         "buy_vault": ("Vaulted Chats", 500, "Save your chats forever!", "vaulted_chats"),
-        "buy_premium_pass": ("Premium Pass", 1000, "Unlock Shine Profile, Mood Match, Vaulted Chats, Flare Messages (30 days), and 5 Instant Rematches!", "premium_pass"),
+        "buy_premium_pass": ("Premium Pass", 1000, "Unlock Shine Profile, Mood Match, Partner Details, Vaulted Chats, Flare Messages (30 days), and 5 Instant Rematches!", "premium_pass"),
     }
     choice = query.data
     if choice not in feature_map:
@@ -707,7 +890,7 @@ def pre_checkout(update: Update, context: CallbackContext) -> None:
             query.id, ok=False, error_message="Only Telegram Stars payments are supported."
         )
         return
-    valid_payloads = [f"{key}_{query.from_user.id}" for key in ["flare_messages", "instant_rematch", "shine_profile", "mood_match", "vaulted_chats", "premium_pass"]]
+    valid_payloads = [f"{key}_{query.from_user.id}" for key in ["flare_messages", "instant_rematch", "shine_profile", "mood_match", "partner_details", "vaulted_chats", "premium_pass"]]
     if query.invoice_payload in valid_payloads:
         context.bot.answer_pre_checkout_query(query.id, ok=True)
         logger.info(f"Approved pre-checkout for user {query.from_user.id}: {query.invoice_payload}")
@@ -730,6 +913,7 @@ def successful_payment(update: Update, context: CallbackContext) -> None:
         "instant_rematch": (None, "🔄 *Instant Rematch* unlocked! Use /instant to reconnect."),
         "shine_profile": (24 * 3600, "🌟 *Shine Profile* activated for 24 hours! You’re now at the top of the match list!"),
         "mood_match": (30 * 24 * 3600, "😊 *Mood Match* activated for 30 days! Find users with similar vibes!"),
+        "partner_details": (30 * 24 * 3600, "👤 *Partner Secret Revealed!* View your partner’s name, age, gender, and location for 30 days!"),
         "vaulted_chats": (None, "📜 *Vaulted Chats* unlocked forever! Save your chats with /vault!"),
         "premium_pass": (None, "🎉 *Premium Pass* activated! Enjoy all features for 30 days + 5 Instant Rematches!"),
     }
@@ -740,6 +924,7 @@ def successful_payment(update: Update, context: CallbackContext) -> None:
             if feature == "premium_pass":
                 features["shine_profile"] = current_time + 30 * 24 * 3600
                 features["mood_match"] = current_time + 30 * 24 * 3600
+                features["partner_details"] = current_time + 30 * 24 * 3600
                 features["vaulted_chats"] = True
                 features["flare_messages"] = current_time + 30 * 24 * 3600
                 features["instant_rematch_count"] = features.get("instant_rematch_count", 0) + 5
@@ -990,18 +1175,21 @@ def settings(update: Update, context: CallbackContext) -> int:
     profile = user.get("profile", {})
     keyboard = [
         [
-            InlineKeyboardButton(f"👤 Gender: {profile.get('gender', 'Not set')}", callback_data="set_gender"),
-            InlineKeyboardButton(f"🎂 Age: {profile.get('age', 'Not set')}", callback_data="set_age")
+            InlineKeyboardButton(f"🧑 Name: {profile.get('name', 'Not set')}", callback_data="set_name"),
+            InlineKeyboardButton(f"👤 Gender: {profile.get('gender', 'Not set')}", callback_data="set_gender")
         ],
         [
-            InlineKeyboardButton(f"🏷️ Tags: {', '.join(profile.get('tags', [])) or 'Not set'}", callback_data="set_tags"),
+            InlineKeyboardButton(f"🎂 Age: {profile.get('age', 'Not set')}", callback_data="set_age"),
             InlineKeyboardButton(f"📍 Location: {profile.get('location', 'Not set')}", callback_data="set_location")
         ],
         [
-            InlineKeyboardButton(f"📝 Bio: {profile.get('bio', 'Not set')[:20] + '...' if profile.get('bio') else 'Not set'}", callback_data="set_bio"),
-            InlineKeyboardButton("❤️ Gender Preference", callback_data="set_gender_pref")
+            InlineKeyboardButton(f"🏷️ Tags: {', '.join(profile.get('tags', [])) or 'Not set'}", callback_data="set_tags"),
+            InlineKeyboardButton(f"📝 Bio: {profile.get('bio', 'Not set')[:20] + '...' if profile.get('bio') else 'Not set'}", callback_data="set_bio")
         ],
-        [InlineKeyboardButton("🔙 Back to Chat", callback_data="back_to_chat")]
+        [
+            InlineKeyboardButton("❤️ Gender Preference", callback_data="set_gender_pref"),
+            InlineKeyboardButton("🔙 Back to Chat", callback_data="back_to_chat")
+        ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     settings_text = (
@@ -1009,7 +1197,7 @@ def settings(update: Update, context: CallbackContext) -> int:
         "Customize your profile below. Tap an option to edit it!"
     )
     safe_reply(update, settings_text, reply_markup=reply_markup)
-    return GENDER
+    return NAME
 
 def button(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
@@ -1029,11 +1217,15 @@ def button(update: Update, context: CallbackContext) -> int:
             return ConversationHandler.END
 
         # Handle premium purchase buttons
-        if data in ["buy_flare", "buy_instant", "buy_shine", "buy_mood", "buy_vault", "buy_premium_pass"]:
+        if data in ["buy_flare", "buy_instant", "buy_shine", "buy_mood", "buy_partner_details", "buy_vault", "buy_premium_pass"]:
             buy_premium(update, context)
             return ConversationHandler.END
 
-        # Existing cases (unchanged)
+        # Handle emoji verification
+        if data.startswith("emoji_"):
+            return verify_emoji(update, context)
+
+        # Existing cases
         if data == "start_chat":
             start(update, context)
             return ConversationHandler.END
@@ -1060,6 +1252,10 @@ def button(update: Update, context: CallbackContext) -> int:
         elif data == "delete_profile":
             delete_profile(update, context)
             return ConversationHandler.END
+        elif data == "set_name":
+            context.user_data["awaiting"] = "name"
+            safe_reply(update, "🧑 *Set Your Name* 🧑\n\nPlease enter your name:")
+            return NAME
         elif data == "set_gender":
             keyboard = [
                 [
@@ -1143,29 +1339,6 @@ def button(update: Update, context: CallbackContext) -> int:
         safe_reply(update, "❌ An error occurred. Please try again.")
         return ConversationHandler.END
 
-def set_age(update: Update, context: CallbackContext) -> int:
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    profile = user.get("profile", {})
-    age_text = update.message.text.strip()
-    try:
-        age = int(age_text)
-        if age < 13 or age > 120:
-            safe_reply(update, "⚠️ Age must be between 13 and 120. Please try again.")
-            return AGE
-        profile["age"] = age
-        update_user(user_id, {
-            "profile": profile,
-            "consent": user.get("consent", False),
-            "verified": user.get("verified", False),
-            "created_at": user.get("created_at", int(time.time()))
-        })
-        safe_reply(update, f"🎂 Age set to: *{age}*! 🎉")
-        return settings(update, context)
-    except ValueError:
-        safe_reply(update, "⚠️ Please enter a valid number for your age (e.g., 25).")
-        return AGE
-
 def set_tags(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     user = get_user(user_id)
@@ -1182,24 +1355,6 @@ def set_tags(update: Update, context: CallbackContext) -> int:
         "created_at": user.get("created_at", int(time.time()))
     })
     safe_reply(update, f"🏷️ Tags set to: *{', '.join(tags) if tags else 'None'}*! 🎉")
-    return settings(update, context)
-
-def set_location(update: Update, context: CallbackContext) -> int:
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    profile = user.get("profile", {})
-    location = update.message.text.strip()
-    if len(location) > 100:
-        safe_reply(update, "⚠️ Location must be under 100 characters.")
-        return LOCATION
-    profile["location"] = location
-    update_user(user_id, {
-        "profile": profile,
-        "consent": user.get("consent", False),
-        "verified": user.get("verified", False),
-        "created_at": user.get("created_at", int(time.time()))
-    })
-    safe_reply(update, f"📍 Location set to: *{location}*! 🌍")
     return settings(update, context)
 
 def set_bio(update: Update, context: CallbackContext) -> int:
@@ -1325,29 +1480,28 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
         if days <= 0:
             raise ValueError("Days must be positive")
         expiry = int(time.time()) + days * 24 * 3600
-        expiry_date = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
         user = get_user(target_id)
+        features = user.get("premium_features", {})
+        # Grant all premium features
+        features.update({
+            "flare_messages": expiry,
+            "instant_rematch_count": features.get("instant_rematch_count", 0) + 5,
+            "shine_profile": expiry,
+            "mood_match": expiry,
+            "partner_details": expiry,
+            "vaulted_chats": True
+        })
         update_user(target_id, {
             "premium_expiry": expiry,
+            "premium_features": features,
             "profile": user.get("profile", {}),
             "consent": user.get("consent", False),
             "verified": user.get("verified", False),
             "created_at": user.get("created_at", int(time.time()))
         })
-        safe_reply(update, f"🎉 User *{target_id}* granted premium for *{days}* days!")
+        safe_reply(update, f"🌟 Premium granted to user *{target_id}* for *{days}* days.")
+        safe_bot_send_message(context.bot, target_id, f"🎉 You've been granted Premium status for {days} days!")
         logger.info(f"Admin {user_id} granted premium to {target_id} for {days} days.")
-        notification_text = (
-            "🎉 *Congratulations!* You’ve been upgraded to premium! 🌟\n\n"
-            f"You now have premium access until *{expiry_date}*.\n"
-            "Enjoy these benefits:\n"
-            "• Priority matching\n"
-            "• Chat history\n"
-            "• Advanced filters\n"
-            "• Verified badge\n"
-            "• 25 messages/min\n\n"
-            "Start exploring with /help or /premium!"
-        )
-        safe_bot_send_message(context.bot, target_id, notification_text)
     except (IndexError, ValueError):
         safe_reply(update, "⚠️ Usage: /admin_premium <user_id> <days>")
 
@@ -1361,13 +1515,14 @@ def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
         user = get_user(target_id)
         update_user(target_id, {
             "premium_expiry": None,
+            "premium_features": {},
             "profile": user.get("profile", {}),
             "consent": user.get("consent", False),
             "verified": user.get("verified", False),
-            "premium_features": {},
             "created_at": user.get("created_at", int(time.time()))
         })
-        safe_reply(update, f"❌ Premium status revoked for user *{target_id}*.")
+        safe_reply(update, f"🌟 Premium status revoked for user *{target_id}*.")
+        safe_bot_send_message(context.bot, target_id, "⚠️ Your Premium status has been revoked.")
         logger.info(f"Admin {user_id} revoked premium for {target_id}.")
     except (IndexError, ValueError):
         safe_reply(update, "⚠️ Usage: /admin_revoke_premium <user_id>")
@@ -1382,34 +1537,34 @@ def admin_ban(update: Update, context: CallbackContext) -> None:
         ban_type = context.args[1].lower()
         user = get_user(target_id)
         if ban_type == "permanent":
-            update_user(target_id, {
-                "ban_type": "permanent",
-                "ban_expiry": None,
-                "profile": user.get("profile", {}),
-                "consent": user.get("consent", False),
-                "verified": user.get("verified", False),
-                "created_at": user.get("created_at", int(time.time()))
-            })
-            safe_reply(update, f"🚫 User *{target_id}* permanently banned.")
-            logger.info(f"Admin {user_id} permanently banned {target_id}.")
+            ban_expiry = None
         elif ban_type.isdigit():
             days = int(ban_type)
-            expiry = int(time.time()) + days * 24 * 3600
-            update_user(target_id, {
-                "ban_type": "temporary",
-                "ban_expiry": expiry,
-                "profile": user.get("profile", {}),
-                "consent": user.get("consent", False),
-                "verified": user.get("verified", False),
-                "created_at": user.get("created_at", int(time.time()))
-            })
-            safe_reply(update, f"🚫 User *{target_id}* banned for *{days}* days.")
-            logger.info(f"Admin {user_id} banned {target_id} for {days} days.")
+            if days <= 0:
+                raise ValueError("Days must be positive")
+            ban_expiry = int(time.time()) + days * 24 * 3600
+            ban_type = "temporary"
         else:
-            safe_reply(update, "⚠️ Usage: /admin_ban <user_id> <days/permanent>")
-            return
+            raise ValueError("Invalid ban type")
+        update_user(target_id, {
+            "ban_type": ban_type,
+            "ban_expiry": ban_expiry,
+            "profile": user.get("profile", {}),
+            "consent": user.get("consent", False),
+            "verified": user.get("verified", False),
+            "created_at": user.get("created_at", int(time.time()))
+        })
         if target_id in user_pairs:
-            stop(update, context)
+            partner_id = user_pairs[target_id]
+            del user_pairs[target_id]
+            if partner_id in user_pairs:
+                del user_pairs[partner_id]
+            safe_bot_send_message(context.bot, partner_id, "👋 Your partner has left the chat.")
+        if target_id in waiting_users:
+            waiting_users.remove(target_id)
+        safe_reply(update, f"🚫 User *{target_id}* has been {ban_type} banned.")
+        safe_bot_send_message(context.bot, target_id, f"🚫 You have been {ban_type} banned from Talk2Anyone.")
+        logger.info(f"Admin {user_id} banned user {target_id} ({ban_type}).")
     except (IndexError, ValueError):
         safe_reply(update, "⚠️ Usage: /admin_ban <user_id> <days/permanent>")
 
@@ -1429,55 +1584,11 @@ def admin_unban(update: Update, context: CallbackContext) -> None:
             "verified": user.get("verified", False),
             "created_at": user.get("created_at", int(time.time()))
         })
-        safe_reply(update, f"✅ User *{target_id}* unbanned successfully.")
-        logger.info(f"Admin {user_id} unbanned {target_id}.")
+        safe_reply(update, f"✅ User *{target_id}* has been unbanned.")
+        safe_bot_send_message(context.bot, target_id, "✅ You have been unbanned. Use /start to begin.")
+        logger.info(f"Admin {user_id} unbanned user {target_id}.")
     except (IndexError, ValueError):
         safe_reply(update, "⚠️ Usage: /admin_unban <user_id>")
-
-def admin_info(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
-        return
-    try:
-        target_id = int(context.args[0])
-        user = get_user(target_id)
-        if not user:
-            safe_reply(update, f"❌ User *{target_id}* not found.")
-            return
-        profile = user.get("profile", {})
-        created_at = user.get("created_at")
-        created_at_str = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M:%S") if created_at else "Unknown"
-        consent_time = user.get("consent_time")
-        consent_time_str = datetime.fromtimestamp(consent_time).strftime("%Y-%m-%d %H:%M:%S") if consent_time else "Not given"
-        premium_expiry = user.get("premium_expiry")
-        premium_str = datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d") if premium_expiry and premium_expiry > time.time() else "Not premium"
-        ban_type = user.get("ban_type", "None")
-        ban_expiry = user.get("ban_expiry")
-        ban_expiry_str = datetime.fromtimestamp(ban_expiry).strftime("%Y-%m-%d") if ban_expiry else "N/A"
-        info = (
-            f"👤 *User Info: {target_id}* 👤\n\n"
-            f"*User ID*: {target_id}\n"
-            f"*Created At*: {created_at_str}\n"
-            f"*Consent*: {user.get('consent', False)} ({consent_time_str})\n"
-            f"*Premium Until*: {premium_str}\n"
-            f"*Ban Status*: {ban_type.capitalize()}\n"
-            f"*Ban Expiry*: {ban_expiry_str}\n"
-            f"*Verified*: {user.get('verified', False)}\n"
-            f"*Premium Features*: {json.dumps(user.get('premium_features', {}), indent=2)}\n"
-            f"*Profile*:\n"
-            f"  *Gender*: {profile.get('gender', 'Not set')}\n"
-            f"  *Age*: {profile.get('age', 'Not set')}\n"
-            f"  *Tags*: {', '.join(profile.get('tags', []) or ['None'])}\n"
-            f"  *Location*: {profile.get('location', 'Not set')}\n"
-            f"  *Bio*: {profile.get('bio', 'Not set')}\n"
-            f"  *Gender Preference*: {profile.get('gender_preference', 'Any')}\n"
-            f"  *Mood*: {profile.get('mood', 'Not set')}"
-        )
-        safe_reply(update, info)
-        logger.info(f"Admin {user_id} viewed info for user {target_id}.")
-    except (IndexError, ValueError):
-        safe_reply(update, "⚠️ Usage: /admin_info <user_id>")
 
 def admin_userslist(update: Update, context: CallbackContext) -> None:
     """List all users for admin, showing key details."""
@@ -1495,27 +1606,30 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
         return
     try:
         with conn.cursor() as c:
-            c.execute("SELECT user_id, created_at, premium_expiry, ban_type, verified FROM users ORDER BY user_id")
+            c.execute("SELECT user_id, created_at, premium_expiry, ban_type, verified, profile FROM users ORDER BY user_id")
             users = c.fetchall()
             if not users:
-                safe_reply(update, "📋 No users found.")
+                safe_reply(update, "❌ No users found.")
                 return
-            message = "📋 *All Users List* 📋\n\n"
+            message = "*All Users List* \\(Sorted by ID\\)\n\n"
             for user in users:
-                user_id, created_at, premium_expiry, ban_type, verified = user
+                user_id, created_at, premium_expiry, ban_type, verified, profile_json = user
+                profile = profile_json or {}
                 created_date = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d") if created_at else "Unknown"
                 premium_status = "Premium" if premium_expiry and premium_expiry > time.time() else "Not Premium"
                 ban_status = ban_type.capitalize() if ban_type else "None"
-                verified_status = "✅" if verified else "❌"
+                verified_status = "Yes" if verified else "No"
+                name = profile.get("name", "Not set")
                 message += (
                     f"*User ID*: {user_id}\n"
+                    f"*Name*: {name}\n"
                     f"*Created*: {created_date}\n"
                     f"*Premium*: {premium_status}\n"
                     f"*Ban*: {ban_status}\n"
                     f"*Verified*: {verified_status}\n"
                     f"──────────\n"
                 )
-                if len(message) > 3500:
+                if len(message.encode('utf-8')) > 4000:  # Telegram's limit is 4096, leave buffer
                     safe_reply(update, message)
                     message = ""
             if message:
@@ -1527,7 +1641,7 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
     finally:
         release_db_connection(conn)
 
-def premiumuserslist(update: Update, context: CallbackContext) -> None:
+def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
     """List all premium users for admin."""
     if not update.effective_user:
         logger.error("No effective user in update for premiumuserslist")
@@ -1543,21 +1657,31 @@ def premiumuserslist(update: Update, context: CallbackContext) -> None:
         return
     try:
         with conn.cursor() as c:
-            c.execute("SELECT user_id, premium_expiry FROM users WHERE premium_expiry > %s ORDER BY premium_expiry", (int(time.time()),))
+            c.execute("SELECT user_id, premium_expiry, premium_features, profile FROM users WHERE premium_expiry > %s ORDER BY premium_expiry", (int(time.time()),))
             users = c.fetchall()
             if not users:
-                safe_reply(update, "🌟 No premium users found.")
+                safe_reply(update, "❌ No premium users found.")
                 return
-            message = "🌟 *Premium Users List* 🌟\n\n"
+            message = "*Premium Users List* \\(Sorted by Expiry\\)\n\n"
             for user in users:
-                user_id, premium_expiry = user
-                expiry_date = datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
+                user_id, premium_expiry, premium_features_json, profile_json = user
+                profile = profile_json or {}
+                premium_features = premium_features_json or {}
+                expiry_date = datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d") if premium_expiry else "Unknown"
+                name = profile.get("name", "Not set")
+                active_features = [
+                    k for k, v in premium_features.items()
+                    if v is True or (isinstance(v, int) and v > time.time())
+                ]
+                features_str = ", ".join(active_features) or "None"
                 message += (
                     f"*User ID*: {user_id}\n"
+                    f"*Name*: {name}\n"
                     f"*Premium Until*: {expiry_date}\n"
+                    f"*Features*: {features_str}\n"
                     f"──────────\n"
                 )
-                if len(message) > 3500:
+                if len(message.encode('utf-8')) > 4000:
                     safe_reply(update, message)
                     message = ""
             if message:
@@ -1569,12 +1693,53 @@ def premiumuserslist(update: Update, context: CallbackContext) -> None:
     finally:
         release_db_connection(conn)
 
-def admin_reports(update: Update, context: CallbackContext) -> None:
-    """List all user reports for admin."""
-    if not update.effective_user:
-        logger.error("No effective user in update for admin_reports")
-        safe_reply(update, "❌ Internal error.")
+def admin_info(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        safe_reply(update, "🚫 Unauthorized.")
         return
+    try:
+        target_id = int(context.args[0])
+        user = get_user(target_id)
+        if not user:
+            safe_reply(update, "❌ User not found.")
+            return
+        profile = user.get("profile", {})
+        consent = "✅ Yes" if user.get("consent") else "❌ No"
+        verified = "✅ Yes" if user.get("verified") else "❌ No"
+        premium = user.get("premium_expiry")
+        premium_status = f"🌟 Until {datetime.fromtimestamp(premium).strftime('%Y-%m-%d %H:%M:%S')}" if premium and premium > time.time() else "❌ None"
+        ban_status = user.get("ban_type")
+        if ban_status == "permanent":
+            ban_info = "🚫 Permanent"
+        elif ban_status == "temporary" and user.get("ban_expiry") > time.time():
+            ban_info = f"🚫 Until {datetime.fromtimestamp(user.get('ban_expiry')).strftime('%Y-%m-%d %H:%M:%S')}"
+        else:
+            ban_info = "✅ None"
+        created_at = datetime.fromtimestamp(user.get("created_at", int(time.time()))).strftime("%Y-%m-%d %H:%M:%S")
+        features = ", ".join([k for k, v in user.get("premium_features", {}).items() if v is True or (isinstance(v, int) and v > time.time())]) or "None"
+        message = (
+            f"👤 *User Info: {target_id}*\n\n"
+            f"🧑 *Name*: {profile.get('name', 'Not set')}\n"
+            f"🎂 *Age*: {profile.get('age', 'Not set')}\n"
+            f"👤 *Gender*: {profile.get('gender', 'Not set')}\n"
+            f"📍 *Location*: {profile.get('location', 'Not set')}\n"
+            f"📝 *Bio*: {profile.get('bio', 'Not set')}\n"
+            f"🏷️ *Tags*: {', '.join(profile.get('tags', [])) or 'None'}\n"
+            f"❤️ *Gender Pref*: {profile.get('gender_preference', 'Any')}\n"
+            f"😊 *Mood*: {profile.get('mood', 'Not set')}\n"
+            f"✅ *Consent*: {consent}\n"
+            f"🔐 *Verified*: {verified}\n"
+            f"🌟 *Premium*: {premium_status}\n"
+            f"📜 *Features*: {features}\n"
+            f"🚫 *Ban*: {ban_info}\n"
+            f"📅 *Joined*: {created_at}"
+        )
+        safe_reply(update, message)
+    except (IndexError, ValueError):
+        safe_reply(update, "⚠️ Usage: /admin_info <user_id>")
+
+def admin_reports(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, "🚫 Unauthorized.")
@@ -1585,41 +1750,22 @@ def admin_reports(update: Update, context: CallbackContext) -> None:
         return
     try:
         with conn.cursor() as c:
-            c.execute("SELECT report_id, reporter_id, reported_id, timestamp, reason FROM reports ORDER BY timestamp DESC")
+            c.execute("SELECT reported_id, COUNT(*) as count FROM reports GROUP BY reported_id ORDER BY count DESC LIMIT 20")
             reports = c.fetchall()
             if not reports:
-                safe_reply(update, "📊 No reports found.")
+                safe_reply(update, "❌ No reports found.")
                 return
-            message = "📊 *User Reports* 📊\n\n"
-            for report in reports:
-                report_id, reporter_id, reported_id, timestamp, reason = report
-                report_time = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
-                message += (
-                    f"*Report ID*: {report_id}\n"
-                    f"*Reporter*: {reporter_id}\n"
-                    f"*Reported*: {reported_id}\n"
-                    f"*Time*: {report_time}\n"
-                    f"*Reason*: {reason[:100] + '...' if len(reason) > 100 else reason}\n"
-                    f"──────────\n"
-                )
-                if len(message) > 3500:
-                    safe_reply(update, message)
-                    message = ""
-            if message:
-                safe_reply(update, message)
-            logger.info(f"Admin {user_id} viewed reports.")
+            message = "🚨 *Reported Users* (Top 20)\n\n"
+            for reported_id, count in reports:
+                message += f"🆔 {reported_id} | Reports: {count}\n"
+            safe_reply(update, message)
     except Exception as e:
-        logger.error(f"Error fetching reports: {e}")
+        logger.error(f"Failed to list reports: {e}")
         safe_reply(update, "❌ Error retrieving reports.")
     finally:
         release_db_connection(conn)
 
 def admin_clear_reports(update: Update, context: CallbackContext) -> None:
-    """Clear all reports for a specific user."""
-    if not update.effective_user:
-        logger.error("No effective user in update for admin_clear_reports")
-        safe_reply(update, "❌ Internal error.")
-        return
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, "🚫 Unauthorized.")
@@ -1634,19 +1780,14 @@ def admin_clear_reports(update: Update, context: CallbackContext) -> None:
             with conn.cursor() as c:
                 c.execute("DELETE FROM reports WHERE reported_id = %s", (target_id,))
                 conn.commit()
-                safe_reply(update, f"✅ Cleared all reports for user *{target_id}*.")
-                logger.info(f"Admin {user_id} cleared reports for user {target_id}.")
+                safe_reply(update, f"✅ Reports cleared for user *{target_id}*.")
+                logger.info(f"Admin {user_id} cleared reports for {target_id}.")
         finally:
             release_db_connection(conn)
     except (IndexError, ValueError):
         safe_reply(update, "⚠️ Usage: /admin_clear_reports <user_id>")
 
 def admin_broadcast(update: Update, context: CallbackContext) -> None:
-    """Broadcast a message to all users."""
-    if not update.effective_user:
-        logger.error("No effective user in update for admin_broadcast")
-        safe_reply(update, "❌ Internal error.")
-        return
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, "🚫 Unauthorized.")
@@ -1654,126 +1795,141 @@ def admin_broadcast(update: Update, context: CallbackContext) -> None:
     if not context.args:
         safe_reply(update, "⚠️ Usage: /admin_broadcast <message>")
         return
-    message = " ".join(context.args)
+    message = "📢 *Announcement*: " + " ".join(context.args)
     conn = get_db_connection()
     if not conn:
         safe_reply(update, "❌ Database error.")
         return
     try:
         with conn.cursor() as c:
-            c.execute("SELECT user_id FROM users")
+            c.execute("SELECT user_id FROM users WHERE consent = TRUE")
             users = c.fetchall()
-            success_count = 0
-            fail_count = 0
-            for user in users:
-                target_id = user[0]
+            for (uid,) in users:
                 try:
-                    safe_bot_send_message(context.bot, target_id, f"📢 *Announcement*: {message}")
-                    success_count += 1
+                    safe_bot_send_message(context.bot, uid, message)
                 except Exception as e:
-                    logger.error(f"Failed to broadcast to user {target_id}: {e}")
-                    fail_count += 1
-            safe_reply(update, f"📢 Broadcast sent to *{success_count}* users. Failed for *{fail_count}* users.")
-            logger.info(f"Admin {user_id} broadcasted message to {success_count} users.")
+                    logger.error(f"Failed to send broadcast to {uid}: {e}")
+            safe_reply(update, f"📢 Broadcast sent to {len(users)} users.")
+            logger.info(f"Admin {user_id} sent broadcast to {len(users)} users.")
     except Exception as e:
-        logger.error(f"Error during broadcast: {e}")
+        logger.error(f"Failed to send broadcast: {e}")
         safe_reply(update, "❌ Error sending broadcast.")
     finally:
         release_db_connection(conn)
 
 def error_handler(update: Update, context: CallbackContext) -> None:
-    """Handle errors and notify the user."""
+    logger.error(f"Update {update} caused error: {context.error}")
     try:
-        logger.error(f"Update {update} caused error: {context.error}", exc_info=True)
         if update and (update.message or update.callback_query):
             safe_reply(update, "❌ An error occurred. Please try again later.")
     except Exception as e:
-        logger.error(f"Error in error_handler: {e}")
+        logger.error(f"Failed to send error message: {e}")
 
 def main() -> None:
-    """Start the bot."""
-    try:
-        token = os.getenv("TOKEN")
-        if not token:
-            logger.error("TOKEN environment variable not set.")
-            raise ValueError("TOKEN not set")
-        
-        updater = Updater(token, use_context=True)
-        dp = updater.dispatcher
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        logger.error("TELEGRAM_BOT_TOKEN not set.")
+        exit(1)
 
-        # Conversation handler for profile setup
-        conv_handler = ConversationHandler(
-            entry_points=[CommandHandler("settings", settings)],
-            states={
-                GENDER: [CallbackQueryHandler(button)],
-                AGE: [MessageHandler(Filters.text & ~Filters.command, set_age)],
-                TAGS: [MessageHandler(Filters.text & ~Filters.command, set_tags)],
-                LOCATION: [MessageHandler(Filters.text & ~Filters.command, set_location)],
-                BIO: [MessageHandler(Filters.text & ~Filters.command, set_bio)],
-                CONSENT: [CallbackQueryHandler(consent_handler)],
-                VERIFICATION: [MessageHandler(Filters.text & ~Filters.command, verification_handler)],
-            },
-            fallbacks=[CommandHandler("cancel", cancel)],
-        )
+    updater = Updater(token, use_context=True)
+    dp = updater.dispatcher
 
-        # Add handlers
-        dp.add_handler(conv_handler)
-        dp.add_handler(CommandHandler("start", start))
-        dp.add_handler(CommandHandler("stop", stop))
-        dp.add_handler(CommandHandler("next", next_chat))
-        dp.add_handler(CommandHandler("help", help_command))
-        dp.add_handler(CommandHandler("premium", premium))
-        dp.add_handler(CommandHandler("shine", shine))
-        dp.add_handler(CommandHandler("instant", instant))
-        dp.add_handler(CommandHandler("mood", mood))
-        dp.add_handler(CommandHandler("vault", vault))
-        dp.add_handler(CommandHandler("flare", flare))
-        dp.add_handler(CommandHandler("history", history))
-        dp.add_handler(CommandHandler("report", report))
-        dp.add_handler(CommandHandler("rematch", rematch))
-        dp.add_handler(CommandHandler("deleteprofile", delete_profile))
-        dp.add_handler(CallbackQueryHandler(button))
-        dp.add_handler(PreCheckoutQueryHandler(pre_checkout))
-        dp.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
-        dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+    # Conversation handler
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("start", start),
+            CommandHandler("settings", settings)
+        ],
+        states={
+            NAME: [
+                MessageHandler(Filters.text & ~Filters.command, set_name),
+                CallbackQueryHandler(button)
+            ],
+            AGE: [
+                MessageHandler(Filters.text & ~Filters.command, set_age),
+                CallbackQueryHandler(button)
+            ],
+            GENDER: [
+                CallbackQueryHandler(button)
+            ],
+            LOCATION: [
+                MessageHandler(Filters.text & ~Filters.command, set_location),
+                CallbackQueryHandler(button)
+            ],
+            BIO: [
+                MessageHandler(Filters.text & ~Filters.command, set_bio),
+                CallbackQueryHandler(button)
+            ],
+            CONSENT: [
+                CallbackQueryHandler(consent_handler)
+            ],
+            VERIFICATION: [
+                CallbackQueryHandler(verify_emoji)
+            ],
+            TAGS: [
+                MessageHandler(Filters.text & ~Filters.command, set_tags),
+                CallbackQueryHandler(button)
+            ]
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(button)
+        ]
+    )
 
-        # Admin commands
-        dp.add_handler(CommandHandler("admin", admin_access))
-        dp.add_handler(CommandHandler("admin_delete", admin_delete))
-        dp.add_handler(CommandHandler("admindelete", admin_delete))
-        dp.add_handler(CommandHandler("admin_premium", admin_premium))
-        dp.add_handler(CommandHandler("adminpremium", admin_premium))
-        dp.add_handler(CommandHandler("admin_revoke_premium", admin_revoke_premium))
-        dp.add_handler(CommandHandler("adminrevokepremium", admin_revoke_premium))
-        dp.add_handler(CommandHandler("admin_ban", admin_ban))
-        dp.add_handler(CommandHandler("adminban", admin_ban))
-        dp.add_handler(CommandHandler("admin_unban", admin_unban))
-        dp.add_handler(CommandHandler("adminunban", admin_unban))
-        dp.add_handler(CommandHandler("admin_info", admin_info))
-        dp.add_handler(CommandHandler("admininfo", admin_info))
-        dp.add_handler(CommandHandler("admin_userslist", admin_userslist))
-        dp.add_handler(CommandHandler("adminuserslist", admin_userslist))
-        dp.add_handler(CommandHandler("premiumuserslist", premiumuserslist))
-        dp.add_handler(CommandHandler("admin_reports", admin_reports))
-        dp.add_handler(CommandHandler("adminreports", admin_reports))
-        dp.add_handler(CommandHandler("admin_clear_reports", admin_clear_reports))
-        dp.add_handler(CommandHandler("adminclearreports", admin_clear_reports))
-        dp.add_handler(CommandHandler("admin_broadcast", admin_broadcast))
-        dp.add_handler(CommandHandler("adminbroadcast", admin_broadcast))
+    # Add handlers
+    dp.add_handler(conv_handler)
+    dp.add_handler(CommandHandler("stop", stop))
+    dp.add_handler(CommandHandler("next", next_chat))
+    dp.add_handler(CommandHandler("help", help_command))
+    dp.add_handler(CommandHandler("premium", premium))
+    dp.add_handler(CommandHandler("shine", shine))
+    dp.add_handler(CommandHandler("instant", instant))
+    dp.add_handler(CommandHandler("mood", mood))
+    dp.add_handler(CommandHandler("vault", vault))
+    dp.add_handler(CommandHandler("flare", flare))
+    dp.add_handler(CommandHandler("history", history))
+    dp.add_handler(CommandHandler("report", report))
+    dp.add_handler(CommandHandler("deleteprofile", delete_profile))
+    dp.add_handler(CallbackQueryHandler(button))
+    dp.add_handler(PreCheckoutQueryHandler(pre_checkout))
+    dp.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
 
-        # Error handler
-        dp.add_error_handler(error_handler)
+    # Admin commands
+    dp.add_handler(CommandHandler("admin", admin_access))
+    dp.add_handler(CommandHandler("admin_delete", admin_delete))
+    dp.add_handler(CommandHandler("admindelete", admin_delete))
+    dp.add_handler(CommandHandler("admin_premium", admin_premium))
+    dp.add_handler(CommandHandler("adminpremium", admin_premium))
+    dp.add_handler(CommandHandler("admin_revoke_premium", admin_revoke_premium))
+    dp.add_handler(CommandHandler("adminrevokepremium", admin_revoke_premium))
+    dp.add_handler(CommandHandler("admin_ban", admin_ban))
+    dp.add_handler(CommandHandler("adminban", admin_ban))
+    dp.add_handler(CommandHandler("admin_unban", admin_unban))
+    dp.add_handler(CommandHandler("adminunban", admin_unban))
+    dp.add_handler(CommandHandler("admin_info", admin_info))
+    dp.add_handler(CommandHandler("admininfo", admin_info))
+    dp.add_handler(CommandHandler("admin_userslist", admin_userslist))
+    dp.add_handler(CommandHandler("adminuserslist", admin_userslist))
+    dp.add_handler(CommandHandler("premiumuserslist", premiumuserslist))
+    dp.add_handler(CommandHandler("admin_reports", admin_reports))
+    dp.add_handler(CommandHandler("adminreports", admin_reports))
+    dp.add_handler(CommandHandler("admin_clear_reports", admin_clear_reports))
+    dp.add_handler(CommandHandler("adminclearreports", admin_clear_reports))
+    dp.add_handler(CommandHandler("admin_broadcast", admin_broadcast))
+    dp.add_handler(CommandHandler("adminbroadcast", admin_broadcast))
 
-        # Schedule cleanup job
-        updater.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
+    # Error handler
+    dp.add_error_handler(error_handler)
 
-        # Start the bot
-        updater.start_polling(allowed_updates=Update.ALL_TYPES)
-        logger.info("Bot started successfully.")
-        updater.idle()
-    except Exception as e:
-        logger.error(f"Failed to start bot: {e}", exc_info=True)
-        raise
+    # Periodic cleanup
+    updater.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
+
+    # Start the bot
+    updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("Bot started polling.")
+    updater.idle()
 
 if __name__ == "__main__":
     main()
