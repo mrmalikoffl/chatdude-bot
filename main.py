@@ -284,23 +284,37 @@ def escape_markdown_v2(text: str) -> str:
 
 def safe_reply(update: Update, text: str, **kwargs) -> None:
     try:
+        # Default to MarkdownV2 if parse_mode is not provided
+        parse_mode = kwargs.pop("parse_mode", "MarkdownV2")
+        if parse_mode == "MarkdownV2":
+            text = escape_markdown_v2(text)  # Escape text for MarkdownV2
         if update.message:  # Handle Message updates (e.g., commands)
-            update.message.reply_text(text, parse_mode="MarkdownV2", **kwargs)
+            update.message.reply_text(text, parse_mode=parse_mode, **kwargs)
         elif update.callback_query:  # Handle CallbackQuery updates (e.g., buttons)
             query = update.callback_query
             query.answer()  # Acknowledge the callback query
-            query.message.reply_text(text, parse_mode="MarkdownV2", **kwargs)
+            query.message.reply_text(text, parse_mode=parse_mode, **kwargs)
         else:
-            logger.error("No message or callback query found in update.")
+            logger.error(f"No message or callback query found in update: {update}")
+    except telegram.error.BadRequest as bre:
+        logger.warning(f"MarkdownV2 parsing failed: {bre}. Sending without parse mode. Text: {text}")
+        try:
+            if update.callback_query:
+                update.callback_query.message.reply_text(text, parse_mode=None, **kwargs)
+            elif update.message:
+                update.message.reply_text(text, parse_mode=None, **kwargs)
+        except Exception as fallback_bre:
+            logger.error(f"Failed to send fallback message without parse mode: {fallback_bre}")
     except Exception as e:
         logger.error(f"Failed to send message: {e}")
         try:
+            error_text = "❌ An error occurred. Please try again."
             if update.callback_query:
-                update.callback_query.message.reply_text("❌ An error occurred. Please try again.", parse_mode=None)
+                update.callback_query.message.reply_text(error_text, parse_mode=None)
             elif update.message:
-                update.message.reply_text("❌ An error occurred. Please try again.", parse_mode=None)
+                update.message.reply_text(error_text, parse_mode=None)
         except Exception as fallback_e:
-            logger.error(f"Failed to send fallback message: {fallback_e}")
+            logger.error(f"Failed to send fallback error message: {fallback_e}")
 
 def safe_bot_send_message(bot, chat_id: int, text: str, parse_mode: str = None):
     """Safely send a message via bot, escaping MarkdownV2 if needed and falling back if parsing fails."""
@@ -485,23 +499,20 @@ def stop(update: Update, context: CallbackContext) -> None:
 
 def next_chat(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
-
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are banned from using this bot.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are banned from using this bot.")
         return
-
     if not check_rate_limit(user_id):
-        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.", parse_mode="MarkdownV2")
+        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.")
         return
-
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
         del user_pairs[user_id]
         del user_pairs[partner_id]
-        safe_bot_send_message(context.bot, partner_id, "🔌 Your chat partner disconnected.", parse_mode="MarkdownV2")
-
-    waiting_users.add(user_id)
-    safe_reply(update, "🔍 Looking for a new chat partner...", parse_mode="MarkdownV2")
+        safe_bot_send_message(context.bot, partner_id, "🔌 Your chat partner disconnected.")
+    if user_id not in waiting_users:  # Prevent duplicates
+        waiting_users.append(user_id)
+    safe_reply(update, "🔍 Looking for a new chat partner...")
     match_users(context.bot)
     logger.info(f"User {user_id} requested next chat.")
 
