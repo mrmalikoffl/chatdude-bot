@@ -1028,6 +1028,12 @@ def button(update: Update, context: CallbackContext) -> int:
             safe_reply(update, "🚫 You are banned from using this bot.")
             return ConversationHandler.END
 
+        # Handle premium purchase buttons
+        if data in ["buy_flare", "buy_instant", "buy_shine", "buy_mood", "buy_vault", "buy_premium_pass"]:
+            buy_premium(update, context)
+            return ConversationHandler.END
+
+        # Existing cases (unchanged)
         if data == "start_chat":
             start(update, context)
             return ConversationHandler.END
@@ -1126,6 +1132,9 @@ def button(update: Update, context: CallbackContext) -> int:
                 "created_at": user.get("created_at", int(time.time()))
             })
             return settings(update, context)
+        elif data.startswith("mood_"):
+            set_mood(update, context)
+            return ConversationHandler.END
         else:
             safe_reply(update, "❌ Unknown action. Please try again.")
             return ConversationHandler.END
