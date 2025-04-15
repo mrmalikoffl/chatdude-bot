@@ -1500,6 +1500,11 @@ def admin_info(update: Update, context: CallbackContext) -> None:
         safe_reply(update, "⚠️ Usage: /admin_info <user_id>")
 
     def admin_userslist(update: Update, context: CallbackContext) -> None:
+    """List all users for admin, showing key details."""
+    if not update.effective_user:
+        logger.error("No effective user in update for admin_userslist")
+        safe_reply(update, "❌ Internal error.")
+        return
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, "🚫 Unauthorized.")
