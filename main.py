@@ -1876,9 +1876,12 @@ def cleanup_rematch_requests(context: CallbackContext) -> None:
         if current_time - request["timestamp"] > 300:  # 5 minutes
             expired.append(partner_id)
             try:
-                safe_bot_send_message(context.bot, request["requester_id"],
-                                     "⏳ Your rematch request timed out.")
-              logger.info(f"Rematch request from {request['requester_id']} to {partner_id} timed out")
+                safe_bot_send_message(
+                    context.bot,
+                    request["requester_id"],
+                    "⏳ Your rematch request timed out."
+                )
+                logger.info(f"Rematch request from {request['requester_id']} to {partner_id} timed out")
             except telegram.error.TelegramError:
                 logger.warning(f"Failed to notify {request['requester_id']} of timeout")
     for partner_id in expired:
