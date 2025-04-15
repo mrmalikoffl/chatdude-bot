@@ -1826,9 +1826,9 @@ def error_handler(update: Update, context: CallbackContext) -> None:
         logger.error(f"Failed to send error message: {e}")
 
 def main() -> None:
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    token = os.getenv("TOKEN")
     if not token:
-        logger.error("TELEGRAM_BOT_TOKEN not set.")
+        logger.error("TOKEN not set.")
         exit(1)
 
     updater = Updater(token, use_context=True)
