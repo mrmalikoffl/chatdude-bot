@@ -2055,6 +2055,13 @@ def admin_broadcast(update: Update, context: CallbackContext) -> None:
     finally:
         release_db_connection(conn)
 
+def cancel(update: Update, context: CallbackContext) -> int:
+    user_id = update.effective_user.id
+    safe_reply(update, "❌ Operation cancelled. Use /start to begin again.")
+    logger.info(f"User {user_id} cancelled operation.")
+    context.user_data.clear()
+    return ConversationHandler.END
+
 def error_handler(update: Update, context: CallbackContext) -> None:
     logger.error(f"Update {update} caused error: {context.error}")
     try:
