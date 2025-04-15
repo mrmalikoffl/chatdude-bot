@@ -1539,14 +1539,13 @@ def error_handler(update: Update, context: CallbackContext) -> None:
             logger.warning(f"Failed to notify admin {admin_id}: {e}")
 
 def main() -> None:
+    TOKEN = os.getenv("TOKEN")
+    if not TOKEN:
+        logger.error("No TOKEN found in environment variables.")
+        exit(1)
     try:
-        token = os.getenv("BOT_TOKEN")
-        if not token:
-            logger.error("BOT_TOKEN environment variable not set.")
-            raise ValueError("BOT_TOKEN not set")
-        
-        updater = Updater(token, use_context=True)
-        dp = updater.dispatcher
+        updater = Updater(TOKEN, use_context=True)
+        dispatcher = updater.dispatcher
 
         # Conversation handler for profile settings
         conv_handler = ConversationHandler(
