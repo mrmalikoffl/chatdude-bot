@@ -1714,10 +1714,10 @@ def error_handler(update: Update, context: CallbackContext) -> None:
 def main() -> None:
     """Start the bot."""
     try:
-        token = os.getenv("BOT_TOKEN")
+        token = os.getenv("TOKEN")
         if not token:
-            logger.error("BOT_TOKEN environment variable not set.")
-            raise ValueError("BOT_TOKEN not set")
+            logger.error("TOKEN environment variable not set.")
+            raise ValueError("TOKEN not set")
         
         updater = Updater(token, use_context=True)
         dp = updater.dispatcher
