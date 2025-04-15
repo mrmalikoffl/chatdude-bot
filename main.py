@@ -105,6 +105,7 @@ def init_db():
         return
     try:
         with conn.cursor() as c:
+            # Create users table with created_at
             c.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
@@ -115,9 +116,25 @@ def init_db():
                     ban_type TEXT,
                     ban_expiry BIGINT,
                     verified BOOLEAN DEFAULT FALSE,
-                    premium_features JSONB DEFAULT '{}'
+                    premium_features JSONB DEFAULT '{}',
+                    created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
                 )
             """)
+            
+            # Add created_at column to existing users table if missing
+            c.execute("""
+                ALTER TABLE users 
+                ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
+            """)
+            
+            # Backfill created_at with consent_time for existing users where possible
+            c.execute("""
+                UPDATE users 
+                SET created_at = consent_time 
+                WHERE created_at IS NULL AND consent_time IS NOT NULL
+            """)
+            
+            # Create reports table (unchanged)
             c.execute("""
                 CREATE TABLE IF NOT EXISTS reports (
                     report_id SERIAL PRIMARY KEY,
@@ -129,10 +146,11 @@ def init_db():
                     reported_profile JSONB
                 )
             """)
+            
             conn.commit()
             logger.info("Database tables initialized successfully.")
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
+        logger.error(f"Failed to initialize database: {e}", exc_info=True)
         conn.rollback()
     finally:
         release_db_connection(conn)
@@ -1465,18 +1483,51 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
         return
     try:
         with conn.cursor() as c:
-            c.execute("SELECT user_id FROM users ORDER BY user_id LIMIT 50")
+            # Fetch user_id, consent_time, premium_expiry for up to 50 users
+            c.execute("""
+                SELECT user_id, consent_time, premium_expiry 
+                FROM users 
+                ORDER BY user_id 
+                LIMIT 50
+            """)
             users = c.fetchall()
+            # Get total user count
+            c.execute("SELECT COUNT(*) FROM users")
+            total_users = c.fetchone()[0]
+            
             if not users:
                 safe_reply(update, "❌ No users found.")
                 return
+            
             user_list = "👥 *All Users (Top 50)* 👥\n\n"
-            for (uid,) in users:
-                user_list += f"• User ID: *{uid}*\n"
+            user_list += "Here’s a list of users who’ve joined the bot:\n"
+            user_list += "━━━━━━━━━━━━━━━━━━━━━\n"
+            
+            for uid, consent_time, premium_expiry in users:
+                # Format first accessed date
+                first_accessed = (
+                    datetime.fromtimestamp(consent_time).strftime("%Y-%m-%d")
+                    if consent_time
+                    else "Unknown"
+                )
+                # Check premium status
+                is_premium = premium_expiry and premium_expiry > int(time.time())
+                premium_status = "🌟 Premium" if is_premium else "Free"
+                
+                user_list += (
+                    f"👤 *User ID*: {uid}\n"
+                    f"📅 *First Joined*: {first_accessed}\n"
+                    f"🔖 *Status*: {premium_status}\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
+                )
+            
+            user_list += f"📊 *Total Users*: *{total_users}*\n"
+            user_list += "Use /admin_info <user_id> for more details!"
+            
             safe_reply(update, user_list)
             logger.info(f"Admin {user_id} viewed users list.")
     except Exception as e:
-        logger.error(f"Failed to fetch users list: {e}")
+        logger.error(f"Failed to fetch users list: {e}", exc_info=True)
         safe_reply(update, "❌ Error fetching user list.")
     finally:
         release_db_connection(conn)
@@ -1492,19 +1543,50 @@ def premiumuserslist(update: Update, context: CallbackContext) -> None:
         return
     try:
         with conn.cursor() as c:
-            c.execute("SELECT user_id, premium_expiry FROM users WHERE premium_expiry > %s ORDER BY premium_expiry DESC LIMIT 50", (int(time.time()),))
+            # Fetch premium users with user_id, premium_expiry, consent_time
+            c.execute("""
+                SELECT user_id, premium_expiry, consent_time 
+                FROM users 
+                WHERE premium_expiry > %s 
+                ORDER BY premium_expiry DESC 
+                LIMIT 50
+            """, (int(time.time()),))
             users = c.fetchall()
+            # Get total premium user count
+            c.execute("SELECT COUNT(*) FROM users WHERE premium_expiry > %s", (int(time.time()),))
+            total_premium = c.fetchone()[0]
+            
             if not users:
                 safe_reply(update, "❌ No premium users found.")
                 return
+            
             user_list = "🌟 *Premium Users (Top 50)* 🌟\n\n"
-            for uid, expiry in users:
-                expiry_date = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
-                user_list += f"• User ID: *{uid}* (Expires: *{expiry_date}*)\n"
+            user_list += "Our valued premium members:\n"
+            user_list += "━━━━━━━━━━━━━━━━━━━━━\n"
+            
+            for uid, premium_expiry, consent_time in users:
+                # Format dates
+                expiry_date = datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
+                first_accessed = (
+                    datetime.fromtimestamp(consent_time).strftime("%Y-%m-%d")
+                    if consent_time
+                    else "Unknown"
+                )
+                
+                user_list += (
+                    f"👤 *User ID*: {uid}\n"
+                    f"📅 *First Joined*: {first_accessed}\n"
+                    f"⏳ *Premium Until*: {expiry_date}\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
+                )
+            
+            user_list += f"📊 *Total Premium Users*: *{total_premium}*\n"
+            user_list += "Use /admin_info <user_id> to view their profiles!"
+            
             safe_reply(update, user_list)
             logger.info(f"Admin {user_id} viewed premium users list.")
     except Exception as e:
-        logger.error(f"Failed to fetch premium users list: {e}")
+        logger.error(f"Failed to fetch premium users list: {e}", exc_info=True)
         safe_reply(update, "❌ Error fetching premium users.")
     finally:
         release_db_connection(conn)
