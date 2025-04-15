@@ -1018,6 +1018,7 @@ def button(update: Update, context: CallbackContext) -> int:
         elif data == "back_to_chat":
             safe_reply(update, "👋 Returning to chat! Use /settings to edit your profile again.")
             return ConversationHandler.END
+            
         elif data.startswith("gender_") or data.startswith("pref_"):
             user = get_user(user_id)
             profile = user.get("profile", {})
@@ -1035,7 +1036,11 @@ def button(update: Update, context: CallbackContext) -> int:
                 else:
                     profile["gender_preference"] = pref
                 safe_reply(update, f"❤️ Gender preference set to: *{pref}*! 🎉")
-            update_user(user_id, {"profile": profile, "consent": user.get("consent7000
+            update_user(user_id, {
+                "profile": profile,
+                "consent": user.get("consent", False),
+                "verified": user.get("verified", False)
+            })
             return settings(update, context)
         else:
             safe_reply(update, "❌ Unknown action. Please try again.")
