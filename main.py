@@ -277,27 +277,46 @@ def is_safe_message(text: str) -> bool:
     return True
 
 def escape_markdown_v2(text: str) -> str:
-    special_chars = r'_*\[\]()~`>#+\-=|{}.!'
-    for char in special_chars:
-        text = text.replace(char, f'\\{char}')
-    return text
+    """
+    Escape MarkdownV2 special characters, preserving formatting like *bold*.
+    Escapes non-formatting occurrences of _, *, [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., !.
+    """
+    special_chars = r'_[]()~`>#+-|=}{.!'
+    result = []
+    i = 0
+    while i < len(text):
+        if i < len(text) - 1 and text[i] == '*' and text[i + 1] != ' ':  # Preserve * for bold
+            result.append(text[i])
+            i += 1
+            while i < len(text) and text[i] != '*' and text[i] != '\n':
+                result.append(text[i])
+                i += 1
+            if i < len(text):
+                result.append(text[i])
+                i += 1
+        elif text[i] in special_chars:
+            result.append(f'\\{text[i]}')
+            i += 1
+        else:
+            result.append(text[i])
+            i += 1
+    return ''.join(result)
 
 def safe_reply(update: Update, text: str, **kwargs) -> None:
     try:
-        # Default to MarkdownV2 if parse_mode is not provided
         parse_mode = kwargs.pop("parse_mode", "MarkdownV2")
         if parse_mode == "MarkdownV2":
-            text = escape_markdown_v2(text)  # Escape text for MarkdownV2
-        if update.message:  # Handle Message updates (e.g., commands)
+            text = escape_markdown_v2(text)  # Apply new escaping
+        if update.message:
             update.message.reply_text(text, parse_mode=parse_mode, **kwargs)
-        elif update.callback_query:  # Handle CallbackQuery updates (e.g., buttons)
+        elif update.callback_query:
             query = update.callback_query
-            query.answer()  # Acknowledge the callback query
+            query.answer()
             query.message.reply_text(text, parse_mode=parse_mode, **kwargs)
         else:
             logger.error(f"No message or callback query found in update: {update}")
     except telegram.error.BadRequest as bre:
-        logger.warning(f"MarkdownV2 parsing failed: {bre}. Sending without parse mode. Text: {text}")
+        logger.warning(f"MarkdownV2 parsing failed: {bre}. Sending without parse mode. Text: {text[:200]}")
         try:
             if update.callback_query:
                 update.callback_query.message.reply_text(text, parse_mode=None, **kwargs)
@@ -331,14 +350,14 @@ def safe_bot_send_message(bot, chat_id: int, text: str, parse_mode: str = "Markd
 def start(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned. Contact support if you believe this is an error.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned. Contact support if you believe this is an error.")
         logger.info(f"Banned user {user_id} attempted to start a chat.")
         return ConversationHandler.END
     if not check_rate_limit(user_id):
-        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.", parse_mode="MarkdownV2")
+        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.")
         return ConversationHandler.END
     if user_id in user_pairs:
-        safe_reply(update, "💬 You're already in a chat. Use /next to switch or /stop to end.", parse_mode="MarkdownV2")
+        safe_reply(update, "💬 You're already in a chat. Use /next to switch or /stop to end.")
         return ConversationHandler.END
     user = get_user(user_id)
     if not user.get("consent"):
@@ -351,24 +370,24 @@ def start(update: Update, context: CallbackContext) -> int:
             "🌟 *Welcome to Talk2Anyone!* 🌟\n\n"
             "Chat anonymously with people worldwide! 🌍\n"
             "Here are the rules to keep it fun and safe:\n"
-            "🚫 No harassment, spam, or inappropriate content\n"
-            "🤝 Respect everyone at all times\n"
-            "📢 Report issues with /report\n"
-            "⚠️ Violations may lead to bans\n\n"
+            "• No harassment, spam, or inappropriate content\n"
+            "• Respect everyone at all times\n"
+            "• Report issues with /report\n"
+            "• Violations may lead to bans\n\n"
             "🔒 *Privacy*: We only store your user ID, profile, and consent securely. Use /deleteprofile to remove your data.\n\n"
             "Do you agree to the rules?"
         )
-        safe_reply(update, welcome_text, parse_mode="MarkdownV2", reply_markup=reply_markup)
+        safe_reply(update, welcome_text, reply_markup=reply_markup)
         return CONSENT
     if not user.get("verified"):
-        safe_reply(update, "🔐 Please verify your profile to start chatting. Enter a short verification phrase (e.g., 'I’m here to chat respectfully'):", parse_mode="MarkdownV2")
+        safe_reply(update, "🔐 Please verify your profile to start chatting. Enter a short verification phrase (e.g., I’m here to chat respectfully):")
         return VERIFICATION
     if user_id not in waiting_users:
         if is_premium(user_id) or has_premium_feature(user_id, "shine_profile"):
             waiting_users.insert(0, user_id)
         else:
             waiting_users.append(user_id)
-        safe_reply(update, "🔍 Looking for a chat partner... Please wait!", parse_mode="MarkdownV2")
+        safe_reply(update, "🔍 Looking for a chat partner... Please wait!")
     match_users(context)
     return ConversationHandler.END
 
@@ -383,20 +402,11 @@ def consent_handler(update: Update, context: CallbackContext) -> int:
             "consent_time": int(time.time()),
             "profile": get_user(user_id).get("profile", {})
         })
-        try:
-            query.message.edit_text(escape_markdown_v2("✅ Thank you for agreeing! Let’s verify your profile next."), parse_mode="MarkdownV2")
-            query.message.reply_text(escape_markdown_v2("✍️ Enter a short verification phrase (e.g., 'I’m here to chat respectfully'):"), parse_mode="MarkdownV2")
-        except telegram.error.BadRequest as e:
-            logger.warning(f"Failed to edit consent message: {e}")
-            query.message.reply_text("✅ Thank you for agreeing! Let’s verify your profile next.", parse_mode=None)
-            query.message.reply_text("✍️ Enter a short verification phrase (e.g., 'I’m here to chat respectfully'):", parse_mode=None)
+        safe_reply(update, "✅ Thank you for agreeing! Let’s verify your profile next.")
+        safe_reply(update, "✍️ Enter a short verification phrase (e.g., I’m here to chat respectfully):")
         return VERIFICATION
     else:
-        try:
-            query.message.edit_text(escape_markdown_v2("❌ You must agree to the rules to use this bot. Use /start to try again."), parse_mode="MarkdownV2")
-        except telegram.error.BadRequest as e:
-            logger.warning(f"Failed to edit consent disagree message: {e}")
-            query.message.reply_text("❌ You must agree to the rules to use this bot. Use /start to try again.", parse_mode=None)
+        safe_reply(update, "❌ You must agree to the rules to use this bot. Use /start to try again.")
         logger.info(f"User {user_id} declined rules.")
         return ConversationHandler.END
 
@@ -404,7 +414,7 @@ def verification_handler(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     phrase = update.message.text.strip()
     if len(phrase) < 10 or not is_safe_message(phrase):
-        safe_reply(update, "⚠️ Please provide a valid, respectful verification phrase (min 10 characters).", parse_mode="MarkdownV2")
+        safe_reply(update, "⚠️ Please provide a valid, respectful verification phrase (min 10 characters).")
         return VERIFICATION
     user = get_user(user_id)
     update_user(user_id, {
@@ -412,13 +422,13 @@ def verification_handler(update: Update, context: CallbackContext) -> int:
         "profile": user.get("profile", {}),
         "consent": user.get("consent", False)
     })
-    safe_reply(update, "🎉 Profile verified successfully! Let’s get started.", parse_mode="MarkdownV2")
+    safe_reply(update, "🎉 Profile verified successfully! Let’s get started.")
     if user_id not in waiting_users:
         if is_premium(user_id) or has_premium_feature(user_id, "shine_profile"):
             waiting_users.insert(0, user_id)
         else:
             waiting_users.append(user_id)
-        safe_reply(update, "🔍 Looking for a chat partner... Please wait!", parse_mode="MarkdownV2")
+        safe_reply(update, "🔍 Looking for a chat partner... Please wait!")
     match_users(context)
     return ConversationHandler.END
 
@@ -438,8 +448,8 @@ def match_users(context: CallbackContext) -> None:
                 user_pairs[user2] = user1
                 previous_partners[user1] = user2
                 previous_partners[user2] = user1
-                safe_bot_send_message(context.bot, user1, "✅ *Connected!* Start chatting now! 🗣️\nUse /help for more options.", parse_mode="MarkdownV2")
-                safe_bot_send_message(context.bot, user2, "✅ *Connected!* Start chatting now! 🗣️\nUse /help for more options.", parse_mode="MarkdownV2")
+                safe_bot_send_message(context.bot, user1, "✅ *Connected!* Start chatting now! 🗣️\nUse /help for more options.")
+                safe_bot_send_message(context.bot, user2, "✅ *Connected!* Start chatting now! 🗣️\nUse /help for more options.")
                 logger.info(f"Matched users {user1} and {user2}.")
                 if is_premium(user1) or has_premium_feature(user1, "vaulted_chats"):
                     chat_histories[user1] = []
@@ -480,20 +490,20 @@ def can_match(user1: int, user2: int) -> bool:
 def stop(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
         del user_pairs[user_id]
         if partner_id in user_pairs:
             del user_pairs[partner_id]
-        safe_bot_send_message(context.bot, partner_id, "👋 Your partner has left the chat. Use /start to find a new one.", parse_mode="MarkdownV2")
-        safe_reply(update, "👋 Chat ended. Use /start to begin a new chat.", parse_mode="MarkdownV2")
+        safe_bot_send_message(context.bot, partner_id, "👋 Your partner has left the chat. Use /start to find a new one.")
+        safe_reply(update, "👋 Chat ended. Use /start to begin a new chat.")
         logger.info(f"User {user_id} stopped chat with {partner_id}.")
         if user_id in chat_histories and not has_premium_feature(user_id, "vaulted_chats"):
             del chat_histories[user_id]
     else:
-        safe_reply(update, "❓ You're not in a chat. Use /start to find a partner.", parse_mode="MarkdownV2")
+        safe_reply(update, "❓ You're not in a chat. Use /start to find a partner.")
 
 def next_chat(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
@@ -508,17 +518,16 @@ def next_chat(update: Update, context: CallbackContext) -> None:
         del user_pairs[user_id]
         del user_pairs[partner_id]
         safe_bot_send_message(context.bot, partner_id, "🔌 Your chat partner disconnected.")
-    if user_id not in waiting_users:  # Prevent duplicates
+    if user_id not in waiting_users:
         waiting_users.append(user_id)
     safe_reply(update, "🔍 Looking for a new chat partner...")
-    match_users(context.bot)
+    match_users(context)
     logger.info(f"User {user_id} requested next chat.")
-
 
 def help_command(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return
     keyboard = [
         [InlineKeyboardButton("💬 Start Chat", callback_data="start_chat"),
@@ -555,12 +564,12 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "• /report - Report inappropriate behavior\n"
         "Use the buttons below to explore! 👇"
     )
-    safe_reply(update, help_text, parse_mode="MarkdownV2", reply_markup=reply_markup)
+    safe_reply(update, help_text, reply_markup=reply_markup)
 
 def premium(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return
     keyboard = [
         [InlineKeyboardButton("✨ Flare Messages - 100 ⭐", callback_data="buy_flare"),
@@ -573,26 +582,23 @@ def premium(update: Update, context: CallbackContext) -> None:
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = (
         "🌟 *Unlock Premium Features!* 🌟\n\n"
-        "Enhance your chat experience with these amazing perks:\n"
-        "✨ *Flare Messages* - Add sparkle effects for 7 days (100 ⭐)\n"
-        "🔄 *Instant Rematch* - Reconnect anytime (100 ⭐)\n"
-        "🌟 *Shine Profile* - Priority matching for 24 hours (250 ⭐)\n"
-        "😊 *Mood Match* - Vibe-based matches for 30 days (250 ⭐)\n"
-        "📜 *Vaulted Chats* - Save chats forever (500 ⭐)\n"
-        "🎉 *Premium Pass* - All features for 30 days + 5 Instant Rematches (1000 ⭐)\n\n"
+        "Enhance your experience with these perks:\n"
+        "• *Flare Messages* - Add sparkle effects for 7 days (100 ⭐)\n"
+        "• *Instant Rematch* - Reconnect anytime (100 ⭐)\n"
+        "• *Shine Profile* - Priority matching for 24 hours (250 ⭐)\n"
+        "• *Mood Match* - Vibe-based matches for 30 days (250 ⭐)\n"
+        "• *Vaulted Chats* - Save chats forever (500 ⭐)\n"
+        "• *Premium Pass* - All features for 30 days + 5 Instant Rematches (1000 ⭐)\n\n"
         "👇 Tap a button to purchase with Telegram Stars!"
     )
-    safe_reply(update, message_text, parse_mode="MarkdownV2", reply_markup=reply_markup)
+    safe_reply(update, message_text, reply_markup=reply_markup)
 
 def buy_premium(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     query.answer()
     user_id = query.from_user.id
     if is_banned(user_id):
-        try:
-            query.message.edit_text(escape_markdown_v2("🚫 You are currently banned."), parse_mode="MarkdownV2")
-        except telegram.error.BadRequest:
-            query.message.reply_text("🚫 You are currently banned.", parse_mode=None)
+        safe_reply(update, "🚫 You are currently banned.")
         return
     feature_map = {
         "buy_flare": ("Flare Messages", 100, "Add sparkle effects to your messages for 7 days!", "flare_messages"),
@@ -604,10 +610,7 @@ def buy_premium(update: Update, context: CallbackContext) -> None:
     }
     choice = query.data
     if choice not in feature_map:
-        try:
-            query.message.edit_text(escape_markdown_v2("❌ Invalid feature selected."), parse_mode="MarkdownV2")
-        except telegram.error.BadRequest:
-            query.message.reply_text("❌ Invalid feature selected.", parse_mode=None)
+        safe_reply(update, "❌ Invalid feature selected.")
         return
     title, stars, desc, feature_key = feature_map[choice]
     try:
@@ -624,10 +627,7 @@ def buy_premium(update: Update, context: CallbackContext) -> None:
         logger.info(f"Sent Stars invoice for user {user_id}: {title} ({stars} Stars)")
     except Exception as e:
         logger.error(f"Failed to send invoice for user {user_id}: {e}")
-        try:
-            query.message.edit_text(escape_markdown_v2("❌ Error generating payment invoice. Please try again."), parse_mode="MarkdownV2")
-        except telegram.error.BadRequest:
-            query.message.reply_text("❌ Error generating payment invoice. Please try again.", parse_mode=None)
+        safe_reply(update, "❌ Error generating payment invoice. Please try again.")
 
 def pre_checkout(update: Update, context: CallbackContext) -> None:
     query = update.pre_checkout_query
@@ -679,46 +679,46 @@ def successful_payment(update: Update, context: CallbackContext) -> None:
                 else:
                     features[feature] = expiry
             update_user(user_id, {"premium_features": features})
-            safe_reply(update, message, parse_mode="MarkdownV2")
+            safe_reply(update, message)
             logger.info(f"User {user_id} purchased {feature} with Stars")
             break
     else:
         logger.warning(f"Unknown payload for user {user_id}: {payload}")
-        safe_reply(update, "❌ Unknown purchase error. Please contact support.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ Unknown purchase error. Please contact support.")
 
 def shine(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return
     if not has_premium_feature(user_id, "shine_profile"):
-        safe_reply(update, "🌟 Shine Profile is a premium feature. Buy it with /premium!", parse_mode="MarkdownV2")
+        safe_reply(update, "🌟 Shine Profile is a premium feature. Buy it with /premium!")
         return
     if user_id not in waiting_users and user_id not in user_pairs:
         waiting_users.insert(0, user_id)
-        safe_reply(update, "✨ Your profile is now shining! You’re first in line for matches!", parse_mode="MarkdownV2")
+        safe_reply(update, "✨ Your profile is now shining! You’re first in line for matches!")
         match_users(context)
     else:
-        safe_reply(update, "❓ You're already in a chat or waiting list.", parse_mode="MarkdownV2")
+        safe_reply(update, "❓ You're already in a chat or waiting list.")
 
 def instant(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return
     user = get_user(user_id)
     features = user.get("premium_features", {})
     rematch_count = features.get("instant_rematch_count", 0)
     if rematch_count <= 0:
-        safe_reply(update, "🔄 You need an Instant Rematch! Buy one with /premium!", parse_mode="MarkdownV2")
+        safe_reply(update, "🔄 You need an Instant Rematch! Buy one with /premium!")
         return
     partners = user.get("profile", {}).get("past_partners", [])
     if not partners:
-        safe_reply(update, "❌ No past partners to rematch with.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ No past partners to rematch with.")
         return
     partner_id = partners[-1]
     if partner_id in user_pairs:
-        safe_reply(update, "❌ Your previous partner is currently in another chat.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ Your previous partner is currently in another chat.")
         return
     if partner_id in waiting_users:
         waiting_users.remove(partner_id)
@@ -726,17 +726,17 @@ def instant(update: Update, context: CallbackContext) -> None:
     user_pairs[partner_id] = user_id
     features["instant_rematch_count"] = rematch_count - 1
     update_user(user_id, {"premium_features": features})
-    safe_reply(update, "🔄 Instantly reconnected! Start chatting! 🗣️", parse_mode="MarkdownV2")
-    safe_bot_send_message(context.bot, partner_id, "🔄 Instantly reconnected! Start chatting! 🗣️", parse_mode="MarkdownV2")
+    safe_reply(update, "🔄 Instantly reconnected! Start chatting! 🗣️")
+    safe_bot_send_message(context.bot, partner_id, "🔄 Instantly reconnected! Start chatting! 🗣️")
     logger.info(f"User {user_id} used Instant Rematch with {partner_id}")
 
 def mood(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return
     if not has_premium_feature(user_id, "mood_match"):
-        safe_reply(update, "😊 Mood Match is a premium feature. Buy it with /premium!", parse_mode="MarkdownV2")
+        safe_reply(update, "😊 Mood Match is a premium feature. Buy it with /premium!")
         return
     keyboard = [
         [InlineKeyboardButton("😎 Chill", callback_data="mood_chill"),
@@ -745,96 +745,87 @@ def mood(update: Update, context: CallbackContext) -> None:
          InlineKeyboardButton("❌ Clear Mood", callback_data="mood_clear")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    safe_reply(update, "🎭 Choose your chat mood:", parse_mode="MarkdownV2", reply_markup=reply_markup)
+    safe_reply(update, "🎭 Choose your chat mood:", reply_markup=reply_markup)
 
 def set_mood(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     query.answer()
     user_id = query.from_user.id
     if not has_premium_feature(user_id, "mood_match"):
-        try:
-            query.message.edit_text(escape_markdown_v2("😊 Mood Match is a premium feature. Buy it with /premium!"), parse_mode="MarkdownV2")
-        except telegram.error.BadRequest:
-            query.message.reply_text("😊 Mood Match is a premium feature. Buy it with /premium!", parse_mode=None)
+        safe_reply(update, "😊 Mood Match is a premium feature. Buy it with /premium!")
         return
     choice = query.data
     user = get_user(user_id)
     profile = user.get("profile", {})
     if choice == "mood_clear":
         profile.pop("mood", None)
-        try:
-            query.message.edit_text(escape_markdown_v2("❌ Mood cleared successfully."), parse_mode="MarkdownV2")
-        except telegram.error.BadRequest:
-            query.message.reply_text("❌ Mood cleared successfully.", parse_mode=None)
+        safe_reply(update, "❌ Mood cleared successfully.")
     else:
         mood = choice.split("_")[1]
         profile["mood"] = mood
-        try:
-            query.message.edit_text(escape_markdown_v2(f"🎭 Mood set to: *{mood.capitalize()}*!"), parse_mode="MarkdownV2")
-        except telegram.error.BadRequest:
-            query.message.reply_text(f"🎭 Mood set to: {mood.capitalize()}!", parse_mode=None)
+        safe_reply(update, f"🎭 Mood set to: *{mood.capitalize()}*!")
     update_user(user_id, {"profile": profile})
 
 def vault(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return
     if not has_premium_feature(user_id, "vaulted_chats"):
-        safe_reply(update, "📜 Vaulted Chats is a premium feature. Buy it with /premium!", parse_mode="MarkdownV2")
+        safe_reply(update, "📜 Vaulted Chats is a premium feature. Buy it with /premium!")
         return
     if user_id not in chat_histories or not chat_histories[user_id]:
-        safe_reply(update, "❌ No chats saved in your vault.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ No chats saved in your vault.")
         return
     history_text = "📜 *Your Vaulted Chats* 📜\n\n"
     for msg in chat_histories[user_id][-10:]:
-        history_text += f"[{msg['time']}]: {escape_markdown_v2(msg['text'])}\n"
-    safe_reply(update, history_text, parse_mode="MarkdownV2")
+        history_text += f"[{msg['time']}]: {msg['text']}\n"
+    safe_reply(update, history_text)
 
 def flare(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return
     if not has_premium_feature(user_id, "flare_messages"):
-        safe_reply(update, "✨ Flare Messages is a premium feature. Buy it with /premium!", parse_mode="MarkdownV2")
+        safe_reply(update, "✨ Flare Messages is a premium feature. Buy it with /premium!")
         return
     user = get_user(user_id)
     features = user.get("premium_features", {})
     flare_active = features.get("flare_active", False)
     features["flare_active"] = not flare_active
     update_user(user_id, {"premium_features": features})
-    safe_reply(update, f"✨ Flare Messages *{'enabled' if not flare_active else 'disabled'}*!", parse_mode="MarkdownV2")
+    safe_reply(update, f"✨ Flare Messages *{'enabled' if not flare_active else 'disabled'}*!")
 
 def history(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return
     if not (is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats")):
-        safe_reply(update, "📜 Chat history is a premium feature. Use /premium to unlock!", parse_mode="MarkdownV2")
+        safe_reply(update, "📜 Chat history is a premium feature. Use /premium to unlock!")
         return
     if user_id not in chat_histories or not chat_histories[user_id]:
-        safe_reply(update, "❌ No chat history available.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ No chat history available.")
         return
     history_text = "📜 *Your Chat History* 📜\n\n"
     for msg in chat_histories[user_id][-10:]:
-        history_text += f"[{msg['time']}]: {escape_markdown_v2(msg['text'])}\n"
-    safe_reply(update, history_text, parse_mode="MarkdownV2")
+        history_text += f"[{msg['time']}]: {msg['text']}\n"
+    safe_reply(update, history_text)
 
 def report(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return
     if not check_rate_limit(user_id):
-        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.", parse_mode="MarkdownV2")
+        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.")
         return
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
         conn = get_db_connection()
         if not conn:
-            safe_reply(update, "❌ Error processing report due to database issue.", parse_mode="MarkdownV2")
+            safe_reply(update, "❌ Error processing report due to database issue.")
             return
         try:
             with conn.cursor() as c:
@@ -858,38 +849,37 @@ def report(update: Update, context: CallbackContext) -> None:
                         "consent": get_user(partner_id).get("consent", False),
                         "verified": get_user(partner_id).get("verified", False)
                     })
-                    safe_bot_send_message(context.bot, partner_id, "⚠️ You’ve been temporarily banned due to multiple reports.", parse_mode="MarkdownV2")
-                    logger.warning(f"User {partner_id} banned temporarily due to {report_count} reports.")
+                    safe_bot_send_message(context.bot, partner_id, "⚠️ You’ve been temporarily banned due to multiple reports.")
                     stop(update, context)
-                safe_reply(update, "✅ Thank you for reporting. We’ll review it. Use /next to find a new partner.", parse_mode="MarkdownV2")
+                safe_reply(update, "✅ Thank you for reporting. We’ll review it. Use /next to find a new partner.")
                 logger.info(f"User {user_id} reported user {partner_id}. Reason: {reason}. Total reports: {report_count}.")
         except Exception as e:
             logger.error(f"Failed to log report: {e}")
-            safe_reply(update, "❌ Error processing report.", parse_mode="MarkdownV2")
+            safe_reply(update, "❌ Error processing report.")
         finally:
             release_db_connection(conn)
     else:
-        safe_reply(update, "❓ You're not in a chat. Use /start to begin.", parse_mode="MarkdownV2")
+        safe_reply(update, "❓ You're not in a chat. Use /start to begin.")
 
 def handle_message(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return
     if not check_message_rate_limit(user_id):
-        safe_reply(update, "⏳ You're sending messages too fast. Please slow down.", parse_mode="MarkdownV2")
+        safe_reply(update, "⏳ You're sending messages too fast. Please slow down.")
         logger.info(f"User {user_id} hit message rate limit.")
         return
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
         message_text = update.message.text
         if not is_safe_message(message_text):
-            safe_reply(update, "⚠️ Inappropriate content detected. Please keep the chat respectful.", parse_mode="MarkdownV2")
+            safe_reply(update, "⚠️ Inappropriate content detected. Please keep the chat respectful.")
             logger.info(f"User {user_id} sent unsafe message: {message_text}")
             return
         flare = has_premium_feature(user_id, "flare_messages") and get_user(user_id).get("premium_features", {}).get("flare_active", False)
-        final_text = f"✨ {escape_markdown_v2(message_text)} ✨" if flare else escape_markdown_v2(message_text)
-        safe_bot_send_message(context.bot, partner_id, final_text, parse_mode="MarkdownV2")
+        final_text = f"✨ {message_text} ✨" if flare else message_text
+        safe_bot_send_message(context.bot, partner_id, final_text)
         logger.info(f"Message from {user_id} to {partner_id}: {message_text}")
         if is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats"):
             if user_id in chat_histories:
@@ -907,10 +897,10 @@ def handle_message(update: Update, context: CallbackContext) -> None:
 def settings(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return ConversationHandler.END
     if not check_rate_limit(user_id):
-        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.", parse_mode="MarkdownV2")
+        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.")
         return ConversationHandler.END
     user = get_user(user_id)
     profile = user.get("profile", {})
@@ -934,7 +924,7 @@ def settings(update: Update, context: CallbackContext) -> int:
         "⚙️ *Your Profile Settings* ⚙️\n\n"
         "Customize your profile below. Tap an option to edit it!"
     )
-    safe_reply(update, settings_text, parse_mode="MarkdownV2", reply_markup=reply_markup)
+    safe_reply(update, settings_text, reply_markup=reply_markup)
     return GENDER
 
 def button(update: Update, context: CallbackContext) -> int:
@@ -945,19 +935,15 @@ def button(update: Update, context: CallbackContext) -> int:
 
     user_id = query.from_user.id
     data = query.data
+    logger.info(f"Button pressed by user {user_id}: {data}")
 
     try:
-        query.answer()  # Acknowledge the callback query
+        query.answer()
 
-        # Check for bans
         if is_banned(user_id):
-            try:
-                query.message.reply_text(escape_markdown_v2("🚫 You are banned from using this bot."), parse_mode="MarkdownV2")
-            except telegram.error.BadRequest:
-                logger.warning(f"Failed to send ban message to user {user_id}.")
+            safe_reply(update, "🚫 You are banned from using this bot.")
             return ConversationHandler.END
 
-        # Main menu buttons
         if data == "start_chat":
             start(update, context)
             return ConversationHandler.END
@@ -984,8 +970,6 @@ def button(update: Update, context: CallbackContext) -> int:
         elif data == "delete_profile":
             delete_profile(update, context)
             return ConversationHandler.END
-
-        # Settings menu buttons
         elif data == "set_gender":
             keyboard = [
                 [
@@ -999,80 +983,23 @@ def button(update: Update, context: CallbackContext) -> int:
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            try:
-                query.message.edit_text(
-                    escape_markdown_v2("👤 *Set Your Gender* 👤\n\nChoose your gender below:"),
-                    parse_mode="MarkdownV2",
-                    reply_markup=reply_markup
-                )
-            except telegram.error.BadRequest:
-                query.message.reply_text(
-                    "👤 Set Your Gender 👤\n\nChoose your gender below:",
-                    parse_mode="MarkdownV2",
-                    reply_markup=reply_markup
-                )
+            safe_reply(update, "👤 *Set Your Gender* 👤\n\nChoose your gender below:", reply_markup=reply_markup)
             return GENDER
         elif data == "set_age":
-            try:
-                query.message.edit_text(
-                    escape_markdown_v2("🎂 *Set Your Age* 🎂\n\nPlease enter your age (e.g., 25):"),
-                    parse_mode="MarkdownV2"
-                )
-            except telegram.error.BadRequest:
-                query.message.reply_text(
-                    "🎂 Set Your Age 🎂\n\nPlease enter your age (e.g., 25):",
-                    parse_mode="MarkdownV2"
-                )
+            context.user_data["awaiting"] = "age"
+            safe_reply(update, "🎂 *Set Your Age* 🎂\n\nPlease enter your age (e.g., 25):")
             return AGE
         elif data == "set_tags":
-            try:
-                query.message.edit_text(
-                    escape_markdown_v2(
-                        "🏷️ *Set Your Tags* 🏷️\n\n"
-                        f"Enter tags to match with others (comma-separated, e.g., music, gaming).\n"
-                        f"Available tags: {', '.join(ALLOWED_TAGS)}"
-                    ),
-                    parse_mode="MarkdownV2"
-                )
-            except telegram.error.BadRequest:
-                query.message.reply_text(
-                    escape_markdown_v2(
-                        "🏷️ *Set Your Tags* 🏷️\n\n"
-                        f"Enter tags to match with others (comma-separated, e.g., music, gaming).\n"
-                        f"Available tags: {', '.join(ALLOWED_TAGS)}"
-                    ),
-                    parse_mode="MarkdownV2"
-                )
+            context.user_data["awaiting"] = "tags"
+            safe_reply(update, f"🏷️ *Set Your Tags* 🏷️\n\nEnter tags to match with others (comma-separated, e.g., music, gaming).\nAvailable tags: {', '.join(ALLOWED_TAGS)}")
             return TAGS
         elif data == "set_location":
-            try:
-                query.message.edit_text(
-                    escape_markdown_v2("📍 *Set Your Location* 📍\n\nEnter your location (e.g., New York):"),
-                    parse_mode="MarkdownV2"
-                )
-            except telegram.error.BadRequest:
-                query.message.reply_text(
-                    "📍 Set Your Location 📍\n\nEnter your location (e.g., New York):",
-                    parse_mode="MarkdownV2"
-                )
+            context.user_data["awaiting"] = "location"
+            safe_reply(update, "📍 *Set Your Location* 📍\n\nEnter your location (e.g., New York):")
             return LOCATION
         elif data == "set_bio":
-            try:
-                query.message.edit_text(
-                    escape_markdown_v2(
-                        "📝 *Set Your Bio* 📝\n\n"
-                        f"Enter a short bio (max {MAX_PROFILE_LENGTH} characters):"
-                    ),
-                    parse_mode="MarkdownV2"
-                )
-            except telegram.error.BadRequest:
-                query.message.reply_text(
-                    escape_markdown_v2(
-                        "📝 *Set Your Bio* 📝\n\n"
-                        f"Enter a short bio (max {MAX_PROFILE_LENGTH} characters):"
-                    ),
-                    parse_mode="MarkdownV2"
-                )
+            context.user_data["awaiting"] = "bio"
+            safe_reply(update, f"📝 *Set Your Bio* 📝\n\nEnter a short bio (max {MAX_PROFILE_LENGTH} characters):")
             return BIO
         elif data == "set_gender_pref":
             keyboard = [
@@ -1084,92 +1011,39 @@ def button(update: Update, context: CallbackContext) -> int:
                 [InlineKeyboardButton("🔙 Back", callback_data="back_to_settings")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            try:
-                query.message.edit_text(
-                    escape_markdown_v2("❤️ *Set Gender Preference* ❤️\n\nSelect preferred gender to match with:"),
-                    parse_mode="MarkdownV2",
-                    reply_markup=reply_markup
-                )
-            except telegram.error.BadRequest:
-                query.message.reply_text(
-                    "❤️ Set Gender Preference ❤️\n\nSelect preferred gender to match with:",
-                    parse_mode="MarkdownV2",
-                    reply_markup=reply_markup
-                )
+            safe_reply(update, "❤️ *Set Gender Preference* ❤️\n\nSelect preferred gender to match with:", reply_markup=reply_markup)
             return GENDER
         elif data == "back_to_settings":
             return settings(update, context)
         elif data == "back_to_chat":
-            try:
-                query.message.edit_text(
-                    escape_markdown_v2("👋 Returning to chat! Use /settings to edit your profile again."),
-                    parse_mode="MarkdownV2"
-                )
-            except telegram.error.BadRequest:
-                query.message.reply_text(
-                    "👋 Returning to chat! Use /settings to edit your profile again.",
-                    parse_mode="MarkdownV2"
-                )
+            safe_reply(update, "👋 Returning to chat! Use /settings to edit your profile again.")
             return ConversationHandler.END
-
-        # Gender and preference selections
         elif data.startswith("gender_") or data.startswith("pref_"):
             user = get_user(user_id)
             profile = user.get("profile", {})
             if data.startswith("gender_"):
                 if data == "gender_skip":
-                    try:
-                        query.message.edit_text(
-                            escape_markdown_v2("👤 Gender skipped."),
-                            parse_mode="MarkdownV2"
-                        )
-                    except telegram.error.BadRequest:
-                        query.message.reply_text("👤 Gender skipped.", parse_mode="MarkdownV2")
+                    safe_reply(update, "👤 Gender skipped.")
                 else:
                     gender = data.split("_")[1].capitalize()
                     profile["gender"] = gender
-                    try:
-                        query.message.edit_text(
-                            escape_markdown_v2(f"👤 Gender set to: *{gender}*! 🎉"),
-                            parse_mode="MarkdownV2"
-                        )
-                    except telegram.error.BadRequest:
-                        query.message.reply_text(f"👤 Gender set to: {gender}! 🎉", parse_mode="MarkdownV2")
+                    safe_reply(update, f"👤 Gender set to: *{gender}*! 🎉")
             elif data.startswith("pref_"):
                 pref = data.split("_")[1].capitalize()
                 if pref == "Any":
                     profile.pop("gender_preference", None)
                 else:
                     profile["gender_preference"] = pref
-                try:
-                    query.message.edit_text(
-                        escape_markdown_v2(f"❤️ Gender preference set to: *{pref}*! 🎉"),
-                        parse_mode="MarkdownV2"
-                    )
-                except telegram.error.BadRequest:
-                    query.message.reply_text(f"❤️ Gender preference set to: {pref}! 🎉", parse_mode="MarkdownV2")
-            update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
+                safe_reply(update, f"❤️ Gender preference set to: *{pref}*! 🎉")
+            update_user(user_id, {"profile": profile, "consent": user.get("consent7000
             return settings(update, context)
-
         else:
-            try:
-                query.message.reply_text(
-                    escape_markdown_v2("❌ Unknown action. Please try again."),
-                    parse_mode="MarkdownV2"
-                )
-            except telegram.error.BadRequest:
-                logger.warning(f"Failed to send unknown action message to user {user_id}.")
+            safe_reply(update, "❌ Unknown action. Please try again.")
             return ConversationHandler.END
 
     except Exception as e:
         logger.error(f"Error in button handler for data '{data}' by user {user_id}: {e}", exc_info=True)
-        try:
-            query.message.reply_text(
-                escape_markdown_v2("❌ An error occurred. Please try again."),
-                parse_mode="MarkdownV2"
-            )
-        except telegram.error.BadRequest:
-            logger.warning(f"Failed to send error message to user {user_id}.")
+        safe_reply(update, "❌ An error occurred. Please try again.")
         return ConversationHandler.END
 
 def set_age(update: Update, context: CallbackContext) -> int:
@@ -1180,14 +1054,14 @@ def set_age(update: Update, context: CallbackContext) -> int:
     try:
         age = int(age_text)
         if age < 13 or age > 120:
-            safe_reply(update, "⚠️ Age must be between 13 and 120. Please try again.", parse_mode="MarkdownV2")
+            safe_reply(update, "⚠️ Age must be between 13 and 120. Please try again.")
             return AGE
         profile["age"] = age
         update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
-        safe_reply(update, f"🎂 Age set to: *{age}*! 🎉", parse_mode="MarkdownV2")
+        safe_reply(update, f"🎂 Age set to: *{age}*! 🎉")
         return settings(update, context)
     except ValueError:
-        safe_reply(update, "⚠️ Please enter a valid number for your age (e.g., 25).", parse_mode="MarkdownV2")
+        safe_reply(update, "⚠️ Please enter a valid number for your age (e.g., 25).")
         return AGE
 
 def set_tags(update: Update, context: CallbackContext) -> int:
@@ -1196,11 +1070,11 @@ def set_tags(update: Update, context: CallbackContext) -> int:
     profile = user.get("profile", {})
     tags = [tag.strip().lower() for tag in update.message.text.split(",") if tag.strip().lower() in ALLOWED_TAGS]
     if not tags and update.message.text.strip():
-        safe_reply(update, f"⚠️ Invalid tags. Choose from: *{', '.join(ALLOWED_TAGS)}*", parse_mode="MarkdownV2")
+        safe_reply(update, f"⚠️ Invalid tags. Choose from: *{', '.join(ALLOWED_TAGS)}*")
         return TAGS
     profile["tags"] = tags
     update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
-    safe_reply(update, f"🏷️ Tags set to: *{', '.join(tags) if tags else 'None'}*! 🎉", parse_mode="MarkdownV2")
+    safe_reply(update, f"🏷️ Tags set to: *{', '.join(tags) if tags else 'None'}*! 🎉")
     return settings(update, context)
 
 def set_location(update: Update, context: CallbackContext) -> int:
@@ -1209,11 +1083,11 @@ def set_location(update: Update, context: CallbackContext) -> int:
     profile = user.get("profile", {})
     location = update.message.text.strip()
     if len(location) > 100:
-        safe_reply(update, "⚠️ Location must be under 100 characters.", parse_mode="MarkdownV2")
+        safe_reply(update, "⚠️ Location must be under 100 characters.")
         return LOCATION
     profile["location"] = location
     update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
-    safe_reply(update, f"📍 Location set to: *{location}*! 🌍", parse_mode="MarkdownV2")
+    safe_reply(update, f"📍 Location set to: *{location}*! 🌍")
     return settings(update, context)
 
 def set_bio(update: Update, context: CallbackContext) -> int:
@@ -1222,47 +1096,47 @@ def set_bio(update: Update, context: CallbackContext) -> int:
     profile = user.get("profile", {})
     bio = update.message.text.strip()
     if len(bio) > MAX_PROFILE_LENGTH:
-        safe_reply(update, f"⚠️ Bio must be under {MAX_PROFILE_LENGTH} characters.", parse_mode="MarkdownV2")
+        safe_reply(update, f"⚠️ Bio must be under {MAX_PROFILE_LENGTH} characters.")
         return BIO
     if not is_safe_message(bio):
-        safe_reply(update, "⚠️ Bio contains inappropriate content. Please try again.", parse_mode="MarkdownV2")
+        safe_reply(update, "⚠️ Bio contains inappropriate content. Please try again.")
         return BIO
     profile["bio"] = bio
     update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
-    safe_reply(update, f"📝 Bio set to: *{bio}*! ✨", parse_mode="MarkdownV2")
+    safe_reply(update, f"📝 Bio set to: *{bio}*! ✨")
     return settings(update, context)
 
 def cancel(update: Update, context: CallbackContext) -> int:
-    safe_reply(update, "❌ Operation cancelled. Use /settings to try again.", parse_mode="MarkdownV2")
+    safe_reply(update, "❌ Operation cancelled. Use /settings to try again.")
     return ConversationHandler.END
 
 def rematch(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return
     if not check_rate_limit(user_id):
-        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.", parse_mode="MarkdownV2")
+        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.")
         return
     if not is_premium(user_id):
-        safe_reply(update, "🔄 Re-match is a premium feature. Use /premium to unlock!", parse_mode="MarkdownV2")
+        safe_reply(update, "🔄 Re-match is a premium feature. Use /premium to unlock!")
         return
     if user_id in user_pairs:
-        safe_reply(update, "💬 You're already in a chat. Use /stop to end it first.", parse_mode="MarkdownV2")
+        safe_reply(update, "💬 You're already in a chat. Use /stop to end it first.")
         return
     previous_partner = previous_partners.get(user_id)
     if not previous_partner:
-        safe_reply(update, "❌ You don't have a previous partner to re-match with.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ You don't have a previous partner to re-match with.")
         return
     if previous_partner in user_pairs:
-        safe_reply(update, "❌ Your previous partner is currently in another chat.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ Your previous partner is currently in another chat.")
         return
     if previous_partner in waiting_users:
         waiting_users.remove(previous_partner)
     user_pairs[user_id] = previous_partner
     user_pairs[previous_partner] = user_id
-    safe_reply(update, "🔄 *Re-connected!* You're back with your previous partner! 🗣️", parse_mode="MarkdownV2")
-    safe_bot_send_message(context.bot, previous_partner, "🔄 *Re-connected!* Your previous partner is back! 🗣️", parse_mode="MarkdownV2")
+    safe_reply(update, "🔄 *Re-connected!* You're back with your previous partner! 🗣️")
+    safe_bot_send_message(context.bot, previous_partner, "🔄 *Re-connected!* Your previous partner is back! 🗣️")
     logger.info(f"User {user_id} rematched with {previous_partner}.")
     if is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats"):
         chat_histories[user_id] = chat_histories.get(user_id, [])
@@ -1272,19 +1146,19 @@ def rematch(update: Update, context: CallbackContext) -> None:
 def delete_profile(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are currently banned.")
         return
     if not check_rate_limit(user_id):
-        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.", parse_mode="MarkdownV2")
+        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.")
         return
     delete_user(user_id)
-    safe_reply(update, "🗑️ Your profile and data have been deleted. Goodbye! 👋", parse_mode="MarkdownV2")
+    safe_reply(update, "🗑️ Your profile and data have been deleted. Goodbye! 👋")
     logger.info(f"User {user_id} deleted their profile.")
 
 def admin_access(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 Unauthorized.")
         logger.info(f"Unauthorized access attempt by user_id={user_id}")
         return
     access_text = (
@@ -1306,25 +1180,25 @@ def admin_access(update: Update, context: CallbackContext) -> None:
         "• /admin_userslist - List all bot users\n"
         "• /premiumuserslist - List premium users\n"
     )
-    safe_reply(update, access_text, parse_mode="MarkdownV2")
+    safe_reply(update, access_text)
 
 def admin_delete(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
         delete_user(target_id)
-        safe_reply(update, f"🗑️ User *{target_id}* data deleted successfully.", parse_mode="MarkdownV2")
+        safe_reply(update, f"🗑️ User *{target_id}* data deleted successfully.")
         logger.info(f"Admin {user_id} deleted user {target_id}.")
     except (IndexError, ValueError):
-        safe_reply(update, "⚠️ Usage: /admin_delete <user_id>", parse_mode="MarkdownV2")
+        safe_reply(update, "⚠️ Usage: /admin_delete <user_id>")
 
 def admin_premium(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
@@ -1340,27 +1214,27 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             "consent": user.get("consent", False),
             "verified": user.get("verified", False)
         })
-        safe_reply(update, f"🎉 User *{target_id}* granted premium for *{days}* days!", parse_mode="MarkdownV2")
+        safe_reply(update, f"🎉 User *{target_id}* granted premium for *{days}* days!")
         logger.info(f"Admin {user_id} granted premium to {target_id} for {days} days.")
         notification_text = (
             "🎉 *Congratulations!* You’ve been upgraded to premium! 🌟\n\n"
             f"You now have premium access for *{days} days*, until *{expiry_date}*.\n"
             "Enjoy these benefits:\n"
-            "🌟 Priority matching\n"
-            "📜 Chat history\n"
-            "🔍 Advanced filters\n"
-            "✅ Verified badge\n"
-            "💬 25 messages/min\n\n"
+            "• Priority matching\n"
+            "• Chat history\n"
+            "• Advanced filters\n"
+            "• Verified badge\n"
+            "• 25 messages/min\n\n"
             "Start exploring with /help or /premium!"
         )
-        safe_bot_send_message(context.bot, target_id, notification_text, parse_mode="MarkdownV2")
+        safe_bot_send_message(context.bot, target_id, notification_text)
     except (IndexError, ValueError):
-        safe_reply(update, "⚠️ Usage: /admin_premium <user_id> <days>", parse_mode="MarkdownV2")
+        safe_reply(update, "⚠️ Usage: /admin_premium <user_id> <days>")
 
 def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
@@ -1372,15 +1246,15 @@ def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
             "verified": user.get("verified", False),
             "premium_features": {}
         })
-        safe_reply(update, f"❌ Premium status revoked for user *{target_id}*.", parse_mode="MarkdownV2")
+        safe_reply(update, f"❌ Premium status revoked for user *{target_id}*.")
         logger.info(f"Admin {user_id} revoked premium for {target_id}.")
     except (IndexError, ValueError):
-        safe_reply(update, "⚠️ Usage: /admin_revoke_premium <user_id>", parse_mode="MarkdownV2")
+        safe_reply(update, "⚠️ Usage: /admin_revoke_premium <user_id>")
 
 def admin_ban(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
@@ -1394,7 +1268,7 @@ def admin_ban(update: Update, context: CallbackContext) -> None:
                 "consent": user.get("consent", False),
                 "verified": user.get("verified", False)
             })
-            safe_reply(update, f"🚫 User *{target_id}* permanently banned.", parse_mode="MarkdownV2")
+            safe_reply(update, f"🚫 User *{target_id}* permanently banned.")
             logger.info(f"Admin {user_id} permanently banned {target_id}.")
         elif ban_type.isdigit():
             days = int(ban_type)
@@ -1406,20 +1280,20 @@ def admin_ban(update: Update, context: CallbackContext) -> None:
                 "consent": user.get("consent", False),
                 "verified": user.get("verified", False)
             })
-            safe_reply(update, f"🚫 User *{target_id}* banned for *{days}* days.", parse_mode="MarkdownV2")
+            safe_reply(update, f"🚫 User *{target_id}* banned for *{days}* days.")
             logger.info(f"Admin {user_id} banned {target_id} for {days} days.")
         else:
-            safe_reply(update, "⚠️ Usage: /admin_ban <user_id> <days/permanent>", parse_mode="MarkdownV2")
+            safe_reply(update, "⚠️ Usage: /admin_ban <user_id> <days/permanent>")
             return
         if target_id in user_pairs:
             stop(update, context)
     except (IndexError, ValueError):
-        safe_reply(update, "⚠️ Usage: /admin_ban <user_id> <days/permanent>", parse_mode="MarkdownV2")
+        safe_reply(update, "⚠️ Usage: /admin_ban <user_id> <days/permanent>")
 
 def admin_unban(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
@@ -1431,21 +1305,21 @@ def admin_unban(update: Update, context: CallbackContext) -> None:
             "consent": user.get("consent", False),
             "verified": user.get("verified", False)
         })
-        safe_reply(update, f"✅ User *{target_id}* unbanned successfully.", parse_mode="MarkdownV2")
+        safe_reply(update, f"✅ User *{target_id}* unbanned successfully.")
         logger.info(f"Admin {user_id} unbanned {target_id}.")
     except (IndexError, ValueError):
-        safe_reply(update, "⚠️ Usage: /admin_unban <user_id>", parse_mode="MarkdownV2")
+        safe_reply(update, "⚠️ Usage: /admin_unban <user_id>")
 
 def admin_info(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
         user = get_user(target_id)
         if not user:
-            safe_reply(update, f"❌ User *{target_id}* not found.", parse_mode="MarkdownV2")
+            safe_reply(update, f"❌ User *{target_id}* not found.")
             return
         info = f"👤 *User Info: {target_id}*\n\n"
         info += f"📋 *Profile*: {json.dumps(user.get('profile', {}), indent=2)}\n"
@@ -1482,19 +1356,19 @@ def admin_info(update: Update, context: CallbackContext) -> None:
                 logger.error(f"Failed to fetch reports for {target_id}: {e}")
             finally:
                 release_db_connection(conn)
-        safe_reply(update, info, parse_mode="MarkdownV2")
+        safe_reply(update, info)
         logger.info(f"Admin {user_id} viewed info for {target_id}.")
     except (IndexError, ValueError):
-        safe_reply(update, "⚠️ Usage: /admin_info <user_id>", parse_mode="MarkdownV2")
+        safe_reply(update, "⚠️ Usage: /admin_info <user_id>")
 
 def admin_reports(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 Unauthorized.")
         return
     conn = get_db_connection()
     if not conn:
-        safe_reply(update, "❌ Error fetching reports due to database issue.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ Error fetching reports due to database issue.")
         return
     try:
         with conn.cursor() as c:
@@ -1507,56 +1381,56 @@ def admin_reports(update: Update, context: CallbackContext) -> None:
             """)
             results = c.fetchall()
             if not results:
-                safe_reply(update, "✅ No reported users at the moment.", parse_mode="MarkdownV2")
+                safe_reply(update, "✅ No reported users at the moment.")
                 return
             report_text = "🚨 *Reported Users (Top 10)* 🚨\n\n"
             for reported_id, count, reasons in results:
                 report_text += f"👤 User *{reported_id}*: {count} reports (Reasons: {reasons or 'None'})\n"
-            safe_reply(update, report_text, parse_mode="MarkdownV2")
+            safe_reply(update, report_text)
             logger.info(f"Admin {user_id} viewed reported users.")
     except Exception as e:
         logger.error(f"Failed to fetch reports: {e}")
-        safe_reply(update, "❌ Error fetching reports.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ Error fetching reports.")
     finally:
         release_db_connection(conn)
 
 def admin_clear_reports(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
         conn = get_db_connection()
         if not conn:
-            safe_reply(update, "❌ Error clearing reports due to database issue.", parse_mode="MarkdownV2")
+            safe_reply(update, "❌ Error clearing reports due to database issue.")
             return
         try:
             with conn.cursor() as c:
                 c.execute("DELETE FROM reports WHERE reported_id = %s", (target_id,))
                 conn.commit()
-                safe_reply(update, f"✅ Reports cleared for user *{target_id}*.", parse_mode="MarkdownV2")
+                safe_reply(update, f"✅ Reports cleared for user *{target_id}*.")
                 logger.info(f"Admin {user_id} cleared reports for {target_id}.")
         except Exception as e:
             logger.error(f"Failed to clear reports for {target_id}: {e}")
-            safe_reply(update, "❌ Error clearing reports.", parse_mode="MarkdownV2")
+            safe_reply(update, "❌ Error clearing reports.")
         finally:
             release_db_connection(conn)
     except (IndexError, ValueError):
-        safe_reply(update, "⚠️ Usage: /admin_clear_reports <user_id>", parse_mode="MarkdownV2")
+        safe_reply(update, "⚠️ Usage: /admin_clear_reports <user_id>")
 
 def admin_broadcast(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 Unauthorized.")
         return
     if not context.args:
-        safe_reply(update, "⚠️ Usage: /admin_broadcast <message>", parse_mode="MarkdownV2")
+        safe_reply(update, "⚠️ Usage: /admin_broadcast <message>")
         return
     message = " ".join(context.args)
     conn = get_db_connection()
     if not conn:
-        safe_reply(update, "❌ Error broadcasting due to database issue.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ Error broadcasting due to database issue.")
         return
     try:
         with conn.cursor() as c:
@@ -1564,76 +1438,76 @@ def admin_broadcast(update: Update, context: CallbackContext) -> None:
             users = c.fetchall()
             for (user_id,) in users:
                 try:
-                    safe_bot_send_message(context.bot, user_id, f"📢 *Announcement*: {message}", parse_mode="MarkdownV2")
+                    safe_bot_send_message(context.bot, user_id, f"📢 *Announcement*: {message}")
                 except Exception as e:
                     logger.warning(f"Failed to broadcast to {user_id}: {e}")
-            safe_reply(update, "📢 Broadcast sent successfully.", parse_mode="MarkdownV2")
+            safe_reply(update, "📢 Broadcast sent successfully.")
             logger.info(f"Admin {user_id} broadcasted message: {message}")
     except Exception as e:
         logger.error(f"Failed to broadcast: {e}")
-        safe_reply(update, "❌ Error sending broadcast.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ Error sending broadcast.")
     finally:
         release_db_connection(conn)
 
 def admin_userslist(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 Unauthorized.")
         return
     conn = get_db_connection()
     if not conn:
-        safe_reply(update, "❌ Error fetching user list due to database issue.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ Error fetching user list due to database issue.")
         return
     try:
         with conn.cursor() as c:
             c.execute("SELECT user_id FROM users ORDER BY user_id LIMIT 50")
             users = c.fetchall()
             if not users:
-                safe_reply(update, "❌ No users found.", parse_mode="MarkdownV2")
+                safe_reply(update, "❌ No users found.")
                 return
             user_list = "👥 *All Users (Top 50)* 👥\n\n"
             for (uid,) in users:
                 user_list += f"• User ID: *{uid}*\n"
-            safe_reply(update, user_list, parse_mode="MarkdownV2")
+            safe_reply(update, user_list)
             logger.info(f"Admin {user_id} viewed users list.")
     except Exception as e:
         logger.error(f"Failed to fetch users list: {e}")
-        safe_reply(update, "❌ Error fetching user list.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ Error fetching user list.")
     finally:
         release_db_connection(conn)
 
 def premiumuserslist(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 Unauthorized.")
         return
     conn = get_db_connection()
     if not conn:
-        safe_reply(update, "❌ Error fetching premium users due to database issue.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ Error fetching premium users due to database issue.")
         return
     try:
         with conn.cursor() as c:
             c.execute("SELECT user_id, premium_expiry FROM users WHERE premium_expiry > %s ORDER BY premium_expiry DESC LIMIT 50", (int(time.time()),))
             users = c.fetchall()
             if not users:
-                safe_reply(update, "❌ No premium users found.", parse_mode="MarkdownV2")
+                safe_reply(update, "❌ No premium users found.")
                 return
             user_list = "🌟 *Premium Users (Top 50)* 🌟\n\n"
             for uid, expiry in users:
                 expiry_date = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
                 user_list += f"• User ID: *{uid}* (Expires: *{expiry_date}*)\n"
-            safe_reply(update, user_list, parse_mode="MarkdownV2")
+            safe_reply(update, user_list)
             logger.info(f"Admin {user_id} viewed premium users list.")
     except Exception as e:
         logger.error(f"Failed to fetch premium users list: {e}")
-        safe_reply(update, "❌ Error fetching premium users.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ Error fetching premium users.")
     finally:
         release_db_connection(conn)
 
 def error_handler(update: Update, context: CallbackContext) -> None:
     logger.error(f"Update {update} caused error {context.error}. Message: {update.message.text if update and update.message else 'N/A'}", exc_info=True)
     if update and update.message:
-        safe_reply(update, "❌ An error occurred\\. Please try again or use /help for assistance\\.", parse_mode="MarkdownV2")
+        safe_reply(update, "❌ An error occurred. Please try again or use /help for assistance.")
     for admin_id in ADMIN_IDS:
         try:
             context.bot.send_message(admin_id, f"⚠️ Bot error: {context.error}")
@@ -1649,26 +1523,7 @@ def main() -> None:
         updater = Updater(TOKEN, use_context=True)
         dispatcher = updater.dispatcher
 
-        # Conversation handler for profile settings
-        conv_handler = ConversationHandler(
-            entry_points=[CommandHandler("settings", settings)],
-            states={
-                GENDER: [
-                    CallbackQueryHandler(button, pattern="^(set_gender|set_age|set_tags|set_location|set_bio|set_gender_pref|back_to_settings|back_to_chat)$"),
-                    CallbackQueryHandler(button, pattern="^(gender_male|gender_female|gender_other|gender_skip|pref_male|pref_female|pref_any)$")
-                ],
-                AGE: [MessageHandler(Filters.text & ~Filters.command, set_age)],
-                TAGS: [MessageHandler(Filters.text & ~Filters.command, set_tags)],
-                LOCATION: [MessageHandler(Filters.text & ~Filters.command, set_location)],
-                BIO: [MessageHandler(Filters.text & ~Filters.command, set_bio)],
-                CONSENT: [CallbackQueryHandler(consent_handler, pattern="^(consent_agree|consent_disagree)$")],
-                VERIFICATION: [MessageHandler(Filters.text & ~Filters.command, verification_handler)]
-            },
-            fallbacks=[CommandHandler("cancel", cancel)],
-            conversation_timeout=300
-        )
-
-        # Conversation handler for start flow (consent + verification)
+        # Conversation handler for /start (includes consent and verification)
         start_handler = ConversationHandler(
             entry_points=[CommandHandler("start", start)],
             states={
@@ -1679,24 +1534,55 @@ def main() -> None:
             conversation_timeout=300
         )
 
-        # Register handlers
+        # Conversation handler for /settings (profile customization)
+        settings_handler = ConversationHandler(
+            entry_points=[CommandHandler("settings", settings)],
+            states={
+                GENDER: [
+                    CallbackQueryHandler(button, pattern="^(set_gender|set_age|set_tags|set_location|set_bio|set_gender_pref|back_to_settings|back_to_chat)$"),
+                    CallbackQueryHandler(button, pattern="^(gender_male|gender_female|gender_other|gender_skip|pref_male|pref_female|pref_any)$")
+                ],
+                AGE: [MessageHandler(Filters.text & ~Filters.command, set_age)],
+                TAGS: [MessageHandler(Filters.text & ~Filters.command, set_tags)],
+                LOCATION: [MessageHandler(Filters.text & ~Filters.command, set_location)],
+                BIO: [MessageHandler(Filters.text & ~Filters.command, set_bio)]
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+            conversation_timeout=300
+        )
+
+        # Add conversation handlers
         dispatcher.add_handler(start_handler)
-        dispatcher.add_handler(conv_handler)
+        dispatcher.add_handler(settings_handler)
+
+        # Command handlers for chat functionality
         dispatcher.add_handler(CommandHandler("stop", stop))
         dispatcher.add_handler(CommandHandler("next", next_chat))
         dispatcher.add_handler(CommandHandler("help", help_command))
+        dispatcher.add_handler(CommandHandler("report", report))
+        dispatcher.add_handler(CommandHandler("deleteprofile", delete_profile))
+
+        # Command handlers for premium features
         dispatcher.add_handler(CommandHandler("premium", premium))
         dispatcher.add_handler(CommandHandler("shine", shine))
         dispatcher.add_handler(CommandHandler("instant", instant))
+        dispatcher.add_handler(CommandHandler("mood", mood))
         dispatcher.add_handler(CommandHandler("vault", vault))
         dispatcher.add_handler(CommandHandler("flare", flare))
         dispatcher.add_handler(CommandHandler("history", history))
-        dispatcher.add_handler(CommandHandler("report", report))
         dispatcher.add_handler(CommandHandler("rematch", rematch))
-        dispatcher.add_handler(CommandHandler("deleteprofile", delete_profile))
-        dispatcher.add_handler(CommandHandler("mood", mood))
 
-        # Admin commands
+        # Callback query handler for buttons
+        dispatcher.add_handler(CallbackQueryHandler(button))
+
+        # Payment handlers for premium features
+        dispatcher.add_handler(PreCheckoutQueryHandler(pre_checkout))
+        dispatcher.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
+
+        # Message handler for chat messages
+        dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+
+        # Admin command handlers
         dispatcher.add_handler(CommandHandler("admin", admin_access))
         dispatcher.add_handler(CommandHandler("admin_delete", admin_delete))
         dispatcher.add_handler(CommandHandler("admin_premium", admin_premium))
@@ -1708,33 +1594,37 @@ def main() -> None:
         dispatcher.add_handler(CommandHandler("admin_clear_reports", admin_clear_reports))
         dispatcher.add_handler(CommandHandler("admin_broadcast", admin_broadcast))
         dispatcher.add_handler(CommandHandler("admin_userslist", admin_userslist))
-        dispatcher.add_handler(CommandHandler("premiumuserslist", premiumuserslist))  # Update to premium_users_list if that's the correct function
-
-        # Payment and button handlers
-        dispatcher.add_handler(CallbackQueryHandler(buy_premium, pattern="^(buy_flare|buy_instant|buy_shine|buy_mood|buy_vault|buy_premium_pass)$"))
-        dispatcher.add_handler(CallbackQueryHandler(set_mood, pattern="^(mood_chill|mood_deep|mood_fun|mood_clear)$"))
-        dispatcher.add_handler(CallbackQueryHandler(button))
-        dispatcher.add_handler(PreCheckoutQueryHandler(pre_checkout))
-        dispatcher.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
-
-        # Message handler
-        dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+        dispatcher.add_handler(CommandHandler("premiumuserslist", premiumuserslist))
 
         # Error handler
         dispatcher.add_error_handler(error_handler)
 
-        # Job queue for cleanup
+        # Schedule periodic cleanup
         updater.job_queue.run_repeating(cleanup_in_memory, interval=3600, first=10)
+        logger.info("Scheduled periodic cleanup every 3600 seconds.")
 
-        # Start bot
-        updater.start_polling(allowed_updates=Update.ALL_TYPES)
-        logger.info("Bot started successfully.")
+        # Start the bot (support both polling and webhook for Heroku)
+        port = int(os.getenv("PORT", 8443))
+        heroku_app_name = os.getenv("HEROKU_APP_NAME")
+        if heroku_app_name:
+            webhook_url = f"https://{heroku_app_name}.herokuapp.com/{TOKEN}"
+            updater.start_webhook(
+                listen="0.0.0.0",
+                port=port,
+                url_path=TOKEN,
+                webhook_url=webhook_url
+            )
+            logger.info(f"Started webhook on port {port} with URL {webhook_url}")
+        else:
+            updater.start_polling(timeout=15, read_latency=4.0)
+            logger.info("Started polling")
+
         updater.idle()
+        logger.info("Bot started successfully.")
 
     except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
-        raise
+        logger.error(f"Failed to start bot: {e}", exc_info=True)
+        exit(1)
 
 if __name__ == "__main__":
     main()
-           
