@@ -316,17 +316,15 @@ def safe_reply(update: Update, text: str, **kwargs) -> None:
         except Exception as fallback_e:
             logger.error(f"Failed to send fallback error message: {fallback_e}")
 
-def safe_bot_send_message(bot, chat_id: int, text: str, parse_mode: str = None):
+def safe_bot_send_message(bot, chat_id: int, text: str, parse_mode: str = "MarkdownV2", **kwargs):
     """Safely send a message via bot, escaping MarkdownV2 if needed and falling back if parsing fails."""
     try:
         if parse_mode == "MarkdownV2":
             text = escape_markdown_v2(text)
-            bot.send_message(chat_id=chat_id, text=text, parse_mode="MarkdownV2")
-        else:
-            bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+        bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, **kwargs)
     except telegram.error.BadRequest as e:
         logger.warning(f"MarkdownV2 parsing failed for chat {chat_id}: {e}. Sending without parsing: {text}")
-        bot.send_message(chat_id=chat_id, text=text)
+        bot.send_message(chat_id=chat_id, text=text, parse_mode=None, **kwargs)
     except Exception as e:
         logger.error(f"Failed to send message to {chat_id}: {e}")
 
