@@ -1617,31 +1617,6 @@ def button(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     if not query:
         logger.error("No callback query found in update.")
-        return ConversationHandler.END
-    user_id = query.from_user.id
-    data = query.data
-    logger.info(f"Button pressed by user {user_id}: {data}")
-    try:
-        query.answer()
-        if is_banned(user_id):
-            user = get_user(user_id)
-            ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
-                      f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
-            safe_reply(update, ban_msg)
-            return ConversationHandler.END
-        if data in ["buy_flare", "buy_instant", "buy_shine", "buy_mood", "buy_partner_details", "buy_vault", "buy_premium_pass"]:
-            buy_premium(update, context)
-            return ConversationHandler.END
-        if data.startswith("emoji_"):
-            return verify_emoji(update, context)
-        if data == "start_chat":
-            start(update, context)
-            return ConversationHandler.END
-
-def button(update: Update, context: CallbackContext) -> int:
-    query = update.callback_query
-    if not query:
-        logger.error("No callback query found in update.")
         safe_reply(update, "❌ No action received. Please try again.")
         return ConversationHandler.END
 
