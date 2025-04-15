@@ -1669,7 +1669,7 @@ def admin_info(update: Update, context: CallbackContext) -> None:
         release_db_connection(conn)
 
     def error_handler(update: Update, context: CallbackContext) -> None:
-    """Handle bot errors, notify user, and alert admins."""
+        """Handle bot errors, notify user, and alert admins."""
         user_id = update.effective_user.id if update and update.effective_user else "Unknown"
     message_text = update.message.text if update and update.message else "N/A"
     logger.error(f"Error for user {user_id}: {context.error}. Update: {update}. Message: {message_text}", exc_info=True)
@@ -1699,7 +1699,7 @@ def admin_info(update: Update, context: CallbackContext) -> None:
             logger.warning(f"Failed to notify admin {admin_id}: {e}")
 
     def main() -> None:
-    """Initialize and run the Telegram bot."""
+        """Initialize and run the Telegram bot."""
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not bot_token:
         logger.error("TELEGRAM_BOT_TOKEN environment variable not set.")
