@@ -1840,7 +1840,8 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
             "created_at": user.get("created_at", int(time.time()))
         })
         updated_user = get_user(target_id)
-        logger.debug(f"User {target_id} after admin_premium: premium_expiry={updated_user.get('premium_expiry')} ({datetime.fromtimestamp(updated_user.get('premium_expiry', 0)).strftime('%Y-%m-%d %H:%M:%S') if updated_user.get('premium_expiry') else 'None'}), premium_features={updated_user.get('premium_features')}")
+        expiry_date = datetime.fromtimestamp(updated_user.get('premium_expiry', 0)).strftime('%Y-%m-%d %H:%M:%S') if updated_user.get('premium_expiry') else 'None'
+        logger.debug(f"User {target_id} after admin_premium: premium_expiry={updated_user.get('premium_expiry')} ({expiry_date}), premium_features={updated_user.get('premium_features')}")
         safe_reply(update, f"🌟 Premium granted to user *{target_id}* for *{days}* days.")
         safe_bot_send_message(context.bot, target_id, f"🎉 You've been granted Premium status for {days} days!")
         logger.info(f"Admin {user_id} granted premium to {target_id} for {days} days.")
@@ -2072,17 +2073,21 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
         safe_reply(update, "❌ Database error.")
         return
     try:
+        current_time = int(time.time())
+        logger.debug(f"Fetching premium users with premium_expiry > {current_time} ({datetime.fromtimestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')})")
         with conn.cursor() as c:
-            # Select users with valid premium_expiry or active premium_features
-            c.execute("""
-                SELECT user_id, premium_expiry, premium_features, profile 
-                FROM users 
-                WHERE premium_expiry > %s 
-                ORDER BY premium_expiry DESC
-            """, (int(time.time()),))
+            c.execute(
+                "SELECT user_id, premium_expiry, premium_features, profile "
+                "FROM users "
+                "WHERE premium_expiry IS NOT NULL AND premium_expiry > %s "
+                "ORDER BY premium_expiry DESC",
+                (current_time,)
+            )
             users = c.fetchall()
+            logger.debug(f"Query returned {len(users)} premium users")
             if not users:
                 safe_reply(update, "🌟 No premium users found.")
+                logger.debug("No premium users found in database")
                 return
             message = "*Premium Users List* \\(Sorted by Expiry\\)\n\n"
             user_count = 0
@@ -2090,17 +2095,16 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
                 user_id, premium_expiry, premium_features_json, profile_json = user
                 profile = profile_json or {}
                 premium_features = premium_features_json or {}
-                logger.debug(f"Premium user {user_id}: premium_expiry={premium_expiry} ({datetime.fromtimestamp(premium_expiry).strftime('%Y-%m-%d %H:%M:%S') if premium_expiry else 'None'})")
-                # Format expiry date
-                if premium_expiry and isinstance(premium_expiry, (int, float)) and premium_expiry > time.time():
-                    expiry_date = datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
-                else:
-                    expiry_date = "No expiry set"
-                    logger.warning(f"Unexpected premium_expiry for user {user_id}: {premium_expiry}")
+                expiry_date = (
+                    datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
+                    if premium_expiry and isinstance(premium_expiry, (int, float)) and premium_expiry > current_time
+                    else "No expiry set"
+                )
+                logger.debug(f"User {user_id}: premium_expiry={premium_expiry} ({datetime.fromtimestamp(premium_expiry).strftime('%Y-%m-%d %H:%M:%S') if premium_expiry else 'None'}), expiry_date={expiry_date}")
                 name = profile.get("name", "Not set")
                 active_features = [
                     k for k, v in premium_features.items()
-                    if v is True or (isinstance(v, int) and v > time.time())
+                    if v is True or (isinstance(v, int) and v > current_time)
                 ]
                 if "instant_rematch_count" in premium_features and premium_features["instant_rematch_count"] > 0:
                     active_features.append(f"instant_rematch_count: {premium_features['instant_rematch_count']}")
@@ -2120,7 +2124,7 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
                 message += f"🌟 *Total Premium Users*: {user_count}\n"
                 safe_reply(update, message)
             logger.info(f"Admin {user_id} requested premium users list with {user_count} users.")
-            logger.debug(f"Premium users list generated with {user_count} users: {[(u[0], u[1]) for u in users]}")
+            logger.debug(f"Premium users list: {[(u[0], u[1]) for u in users]}")
     except Exception as e:
         logger.error(f"Error fetching premium users list: {e}")
         safe_reply(update, "❌ Error retrieving premium users list.")
