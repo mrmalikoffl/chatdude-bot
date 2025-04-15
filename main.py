@@ -496,7 +496,16 @@ def is_banned(user_id: int) -> bool:
 
 def is_premium(user_id: int) -> bool:
     user = get_user(user_id)
-    return user.get("premium_expiry") and user["premium_expiry"] > time.time()
+    current_time = int(time.time())
+    premium_expiry = user.get("premium_expiry")
+    features = user.get("premium_features", {})
+    # Premium if either premium_expiry is active or any premium feature is active
+    has_active_features = any(
+        v is True or (isinstance(v, int) and v > current_time)
+        for k, v in features.items()
+        if k != "instant_rematch_count"
+    )
+    return (premium_expiry and premium_expiry > current_time) or has_active_features
 
 def has_premium_feature(user_id: int, feature: str) -> bool:
     user = get_user(user_id)
@@ -857,46 +866,65 @@ def match_users(context: CallbackContext) -> None:
                 waiting_users.remove(user2)
                 user_pairs[user1] = user2
                 user_pairs[user2] = user1
-                previous_partners[user1] = user2
-                previous_partners[user2] = user1
+
+                # Update past_partners in the database
                 user1_data = get_user(user1)
                 user2_data = get_user(user2)
                 user1_profile = user1_data.get("profile", {})
                 user2_profile = user2_data.get("profile", {})
-                if has_premium_feature(user1, "partner_details"):
-                    user1_message = (
-                        "✅ *Connected!* Start chatting now! 🗣️\n\n"
-                        f"👤 *Partner Details*:\n"
-                        f"🧑 *Name*: {user2_profile.get('name', 'Not set')}\n"
-                        f"🎂 *Age*: {user2_profile.get('age', 'Not set')}\n"
-                        f"👤 *Gender*: {user2_profile.get('gender', 'Not set')}\n"
-                        f"📍 *Location*: {user2_profile.get('location', 'Not set')}\n\n"
-                        "Use /help for more options."
-                    )
-                else:
-                    user1_message = (
-                        "✅ *Connected!* Start chatting now! 🗣️\n\n"
-                        "🔒 *Partner Details*: Upgrade to *Partner Details Reveal* to view your partner’s name, age, gender, and location!\n"
-                        "Unlock with /premium.\n\n"
-                        "Use /help for more options."
-                    )
-                if has_premium_feature(user2, "partner_details"):
-                    user2_message = (
-                        "✅ *Connected!* Start chatting now! 🗣️\n\n"
-                        f"👤 *Partner Details*:\n"
-                        f"🧑 *Name*: {user1_profile.get('name', 'Not set')}\n"
-                        f"🎂 *Age*: {user1_profile.get('age', 'Not set')}\n"
-                        f"👤 *Gender*: {user1_profile.get('gender', 'Not set')}\n"
-                        f"📍 *Location*: {user1_profile.get('location', 'Not set')}\n\n"
-                        "Use /help for more options."
-                    )
-                else:
-                    user2_message = (
-                        "✅ *Connected!* Start chatting now! 🗣️\n\n"
-                        "🔒 *Partner Details*: Upgrade to *Partner Details Reveal* to view your partner’s name, age, gender, and location!\n"
-                        "Unlock with /premium.\n\n"
-                        "Use /help for more options."
-                    )
+                user1_past = user1_profile.get("past_partners", [])
+                user2_past = user2_profile.get("past_partners", [])
+                if user2 not in user1_past:
+                    user1_past.append(user2)
+                if user1 not in user2_past:
+                    user2_past.append(user1)
+                user1_profile["past_partners"] = user1_past[-5:]  # Limit to last 5 partners
+                user2_profile["past_partners"] = user2_past[-5:]
+                update_user(user1, {
+                    "profile": user1_profile,
+                    "consent": user1_data.get("consent", False),
+                    "verified": user1_data.get("verified", False),
+                    "premium_expiry": user1_data.get("premium_expiry"),
+                    "premium_features": user1_data.get("premium_features", {}),
+                    "created_at": user1_data.get("created_at", int(time.time()))
+                })
+                update_user(user2, {
+                    "profile": user2_profile,
+                    "consent": user2_data.get("consent", False),
+                    "verified": user2_data.get("verified", False),
+                    "premium_expiry": user2_data.get("premium_expiry"),
+                    "premium_features": user2_data.get("premium_features", {}),
+                    "created_at": user2_data.get("created_at", int(time.time()))
+                })
+
+                user1_message = (
+                    "✅ *Connected!* Start chatting now! 🗣️\n\n"
+                    f"👤 *Partner Details*:\n"
+                    f"🧑 *Name*: {user2_profile.get('name', 'Not set')}\n"
+                    f"🎂 *Age*: {user2_profile.get('age', 'Not set')}\n"
+                    f"👤 *Gender*: {user2_profile.get('gender', 'Not set')}\n"
+                    f"📍 *Location*: {user2_profile.get('location', 'Not set')}\n\n"
+                    "Use /help for more options."
+                ) if has_premium_feature(user1, "partner_details") else (
+                    "✅ *Connected!* Start chatting now! 🗣️\n\n"
+                    "🔒 *Partner Details*: Upgrade to *Partner Details Reveal* to view your partner’s name, age, gender, and location!\n"
+                    "Unlock with /premium.\n\n"
+                    "Use /help for more options."
+                )
+                user2_message = (
+                    "✅ *Connected!* Start chatting now! 🗣️\n\n"
+                    f"👤 *Partner Details*:\n"
+                    f"🧑 *Name*: {user1_profile.get('name', 'Not set')}\n"
+                    f"🎂 *Age*: {user1_profile.get('age', 'Not set')}\n"
+                    f"👤 *Gender*: {user1_profile.get('gender', 'Not set')}\n"
+                    f"📍 *Location*: {user1_profile.get('location', 'Not set')}\n\n"
+                    "Use /help for more options."
+                ) if has_premium_feature(user2, "partner_details") else (
+                    "✅ *Connected!* Start chatting now! 🗣️\n\n"
+                    "🔒 *Partner Details*: Upgrade to *Partner Details Reveal* to view your partner’s name, age, gender, and location!\n"
+                    "Unlock with /premium.\n\n"
+                    "Use /help for more options."
+                )
                 safe_bot_send_message(context.bot, user1, user1_message)
                 safe_bot_send_message(context.bot, user2, user2_message)
                 logger.info(f"Matched users {user1} and {user2}.")
@@ -1228,9 +1256,12 @@ def instant(update: Update, context: CallbackContext) -> None:
         return
     user = get_user(user_id)
     logger.debug(f"User {user_id} before instant: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
+    if not is_premium(user_id) and not has_premium_feature(user_id, "instant_rematch"):
+        safe_reply(update, "🔄 *Instant Rematch* is a premium feature. Buy it with /premium!")
+        return
     features = user.get("premium_features", {})
     rematch_count = features.get("instant_rematch_count", 0)
-    if rematch_count <= 0:
+    if not is_premium(user_id) and rematch_count <= 0:
         safe_reply(update, "🔄 You need an *Instant Rematch*! Buy one with /premium!")
         return
     partners = user.get("profile", {}).get("past_partners", [])
@@ -1238,27 +1269,77 @@ def instant(update: Update, context: CallbackContext) -> None:
         safe_reply(update, "❌ No past partners to rematch with.")
         return
     partner_id = partners[-1]
+    partner_data = get_user(partner_id)
+    if not partner_data:
+        safe_reply(update, "❌ Your previous partner is no longer available.")
+        return
+
+    # Check if user is already in a chat
+    if user_id in user_pairs:
+        safe_reply(update, "❓ You're already in a chat. Use /stop to end it first.")
+        return
+
+    # Check if partner is in a chat
     if partner_id in user_pairs:
         safe_reply(update, "❌ Your previous partner is currently in another chat.")
         return
+
+    # If partner is in waiting_users, connect immediately
     if partner_id in waiting_users:
         waiting_users.remove(partner_id)
-    user_pairs[user_id] = partner_id
-    user_pairs[partner_id] = user_id
-    features["instant_rematch_count"] = rematch_count - 1
-    if not update_user(user_id, {
-        "premium_features": features,
-        "premium_expiry": user.get("premium_expiry"),
-        "profile": user.get("profile", {}),
-        "consent": user.get("consent", False),
-        "verified": user.get("verified", False),
-        "created_at": user.get("created_at", int(time.time()))
-    }):
-        safe_reply(update, "❌ Error processing instant rematch. Please try again.")
+        user_pairs[user_id] = partner_id
+        user_pairs[partner_id] = user_id
+        # Deduct rematch count only if not premium
+        if not is_premium(user_id):
+            features["instant_rematch_count"] = rematch_count - 1
+            update_user(user_id, {
+                "premium_features": features,
+                "premium_expiry": user.get("premium_expiry"),
+                "profile": user.get("profile", {}),
+                "consent": user.get("consent", False),
+                "verified": user.get("verified", False),
+                "created_at": user.get("created_at", int(time.time()))
+            })
+        safe_reply(update, "🔄 *Instantly reconnected!* Start chatting! 🗣️")
+        safe_bot_send_message(context.bot, partner_id, "🔄 *Instantly reconnected!* Start chatting! 🗣️")
+        logger.info(f"User {user_id} used Instant Rematch with {partner_id} (partner was waiting)")
+        if is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats"):
+            chat_histories[user_id] = chat_histories.get(user_id, [])
+        if is_premium(partner_id) or has_premium_feature(partner_id, "vaulted_chats"):
+            chat_histories[partner_id] = chat_histories.get(partner_id, [])
+        updated_user = get_user(user_id)
+        logger.debug(f"User {user_id} after instant: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
         return
-    safe_reply(update, "🔄 *Instantly reconnected!* Start chatting! 🗣️")
-    safe_bot_send_message(context.bot, partner_id, "🔄 *Instantly reconnected!* Start chatting! 🗣️")
-    logger.info(f"User {user_id} used Instant Rematch with {partner_id}")
+
+    # Send a rematch request to the partner
+    keyboard = [
+        [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{user_id}"),
+         InlineKeyboardButton("❌ Decline", callback_data="rematch_decline")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    user_profile = user.get("profile", {})
+    request_message = (
+        f"🔄 *Rematch Request* 🔄\n\n"
+        f"A user wants to reconnect with you!\n"
+        f"🧑 *Name*: {user_profile.get('name', 'Anonymous')}\n"
+        f"🎂 *Age*: {user_profile.get('age', 'Not set')}\n"
+        f"👤 *Gender*: {user_profile.get('gender', 'Not set')}\n"
+        f"📍 *Location*: {user_profile.get('location', 'Not set')}\n\n"
+        f"Would you like to chat again?"
+    )
+    try:
+        safe_bot_send_message(context.bot, partner_id, request_message, reply_markup=reply_markup)
+        safe_reply(update, "📩 Rematch request sent to your previous partner. Waiting for their response...")
+        # Store the request temporarily
+        context.bot_data["rematch_requests"] = context.bot_data.get("rematch_requests", {})
+        context.bot_data["rematch_requests"][partner_id] = {
+            "requester_id": user_id,
+            "timestamp": int(time.time())
+        }
+        logger.info(f"User {user_id} sent rematch request to {partner_id}")
+    except telegram.error.TelegramError as e:
+        safe_reply(update, "❌ Unable to reach your previous partner. They may be offline.")
+        logger.warning(f"Failed to send rematch request to {partner_id}: {e}")
     updated_user = get_user(user_id)
     logger.debug(f"User {user_id} after instant: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
 
@@ -1600,13 +1681,136 @@ def button(update: Update, context: CallbackContext) -> int:
             safe_reply(update, "📍 *Set Your Location* 📍\n\nPlease enter your location (e.g., New York):")
             return LOCATION
         elif data == "set_bio":
-            context.user_data["awaiting"] = "bio"
-            safe_reply(update, "📝 *Set Your Bio* 📝\n\nEnter a short bio (max 500 characters):")
-            return BIO
+            
+def button(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    if not query:
+        logger.error("No callback query found in update.")
+        safe_reply(update, "❌ No action received. Please try again.")
+        return ConversationHandler.END
+
+    user_id = query.from_user.id
+    data = query.data
+    logger.info(f"Button pressed by user {user_id}: {data}")
+
+    try:
+        query.answer()
+
+        # Check if user is banned
+        if is_banned(user_id):
+            user = get_user(user_id)
+            ban_msg = (
+                "🚫 You are permanently banned. Contact support to appeal."
+                if user["ban_type"] == "permanent"
+                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
+            )
+            safe_reply(update, ban_msg)
+            return ConversationHandler.END
+
+        # Retrieve user data once to reduce database calls
+        user = get_user(user_id)
+        profile = user.get("profile", {})
+
+        # Handle rematch requests
+        if data.startswith("rematch_accept_"):
+            requester_id = int(data.split("_")[2])
+            if user_id in user_pairs:
+                safe_reply(update, "❓ You're already in a chat. Use /stop to end it first.")
+                return ConversationHandler.END
+            if requester_id in user_pairs:
+                safe_reply(update, "❌ The requester is no longer available.")
+                return ConversationHandler.END
+
+            # Validate rematch request
+            rematch_requests = context.bot_data.get("rematch_requests", {})
+            if rematch_requests.get(user_id, {}).get("requester_id") != requester_id:
+                safe_reply(update, "❌ This rematch request is no longer valid.")
+                return ConversationHandler.END
+
+            # Connect the users
+            user_pairs[user_id] = requester_id
+            user_pairs[requester_id] = user_id
+
+            # Deduct rematch count for non-premium requester
+            requester_data = get_user(requester_id)
+            if not is_premium(requester_id):
+                features = requester_data.get("premium_features", {})
+                rematch_count = features.get("instant_rematch_count", 0)
+                if rematch_count > 0:
+                    features["instant_rematch_count"] = rematch_count - 1
+                    update_user(requester_id, {
+                        "premium_features": features,
+                        "premium_expiry": requester_data.get("premium_expiry"),
+                        "profile": requester_data.get("profile", {}),
+                        "consent": requester_data.get("consent", False),
+                        "verified": requester_data.get("verified", False),
+                        "created_at": requester_data.get("created_at", int(time.time()))
+                    })
+
+            # Send connection messages
+            user_message = (
+                "✅ *Reconnected!* Start chatting now! 🗣️\n\n"
+                f"👤 *Partner Details*:\n"
+                f"🧑 *Name*: {requester_data.get('profile', {}).get('name', 'Not set')}\n"
+                f"🎂 *Age*: {requester_data.get('profile', {}).get('age', 'Not set')}\n"
+                f"👤 *Gender*: {requester_data.get('profile', {}).get('gender', 'Not set')}\n"
+                f"📍 *Location*: {requester_data.get('profile', {}).get('location', 'Not set')}\n\n"
+                "Use /help for more options."
+            ) if has_premium_feature(user_id, "partner_details") else (
+                "✅ *Reconnected!* Start chatting now! 🗣️\n\n"
+                "🔒 *Partner Details*: Upgrade to *Partner Details Reveal* to view your partner’s name, age, gender, and location!\n"
+                "Unlock with /premium.\n\n"
+                "Use /help for more options."
+            )
+            requester_message = (
+                "✅ *Reconnected!* Start chatting now! 🗣️\n\n"
+                f"👤 *Partner Details*:\n"
+                f"🧑 *Name*: {profile.get('name', 'Not set')}\n"
+                f"🎂 *Age*: {profile.get('age', 'Not set')}\n"
+                f"👤 *Gender*: {profile.get('gender', 'Not set')}\n"
+                f"📍 *Location*: {profile.get('location', 'Not set')}\n\n"
+                "Use /help for more options."
+            ) if has_premium_feature(requester_id, "partner_details") else (
+                "✅ *Reconnected!* Start chatting now! 🗣️\n\n"
+                "🔒 *Partner Details*: Upgrade to *Partner Details Reveal* to view your partner’s name, age, gender, and location!\n"
+                "Unlock with /premium.\n\n"
+                "Use /help for more options."
+            )
+
+            safe_reply(update, user_message)
+            safe_bot_send_message(context.bot, requester_id, requester_message)
+            logger.info(f"User {user_id} accepted rematch with {requester_id}")
+
+            # Clear the request
+            del rematch_requests[user_id]
+            context.bot_data["rematch_requests"] = rematch_requests
+
+            # Initialize chat history for premium users
+            if is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats"):
+                chat_histories[user_id] = chat_histories.get(user_id, [])
+            if is_premium(requester_id) or has_premium_feature(requester_id, "vaulted_chats"):
+                chat_histories[requester_id] = chat_histories.get(requester_id, [])
+
+            return ConversationHandler.END
+
+        elif data == "rematch_decline":
+            rematch_requests = context.bot_data.get("rematch_requests", {})
+            requester_id = rematch_requests.get(user_id, {}).get("requester_id")
+            if requester_id:
+                safe_bot_send_message(context.bot, requester_id, "❌ Your rematch request was declined.")
+                logger.info(f"User {user_id} declined rematch with {requester_id}")
+                del rematch_requests[user_id]
+                context.bot_data["rematch_requests"] = rematch_requests
+            safe_reply(update, "❌ You declined the rematch request.")
+            return ConversationHandler.END
+
+        # Handle tag setting
         elif data == "set_tags":
             context.user_data["awaiting"] = "tags"
             safe_reply(update, f"🏷️ *Set Your Tags* 🏷️\n\nEnter interests (e.g., music, gaming). Choose from: {', '.join(ALLOWED_TAGS)}.\nSeparate with commas, max 5 tags.")
             return TAGS
+
+        # Handle gender preference setting
         elif data == "set_gender_pref":
             keyboard = [
                 [
@@ -1621,44 +1825,90 @@ def button(update: Update, context: CallbackContext) -> int:
             reply_markup = InlineKeyboardMarkup(keyboard)
             safe_reply(update, "❤️ *Set Gender Preference* ❤️\n\nWho would you like to chat with?", reply_markup=reply_markup)
             return GENDER
-        elif data.startswith("gender_"):
-            return set_gender(update, context)
-        elif data == "gender_skip":
-            safe_reply(update, "👤 Gender setting skipped.")
-            return settings(update, context)
+
+        # Handle gender preference selection
         elif data.startswith("pref_"):
-            user = get_user(user_id)
-            profile = user.get("profile", {})
             pref = data.split("_")[1]
-            profile["gender_preference"] = {"male": "Male", "female": "Female", "any": None}.get(pref)
+            gender_map = {"male": "Male", "female": "Female", "any": None}
+            if pref not in gender_map:
+                safe_reply(update, "❌ Invalid gender preference.")
+                return ConversationHandler.END
+
+            profile["gender_preference"] = gender_map[pref]
             update_user(user_id, {
                 "profile": profile,
                 "consent": user.get("consent", False),
                 "verified": user.get("verified", False),
+                "premium_expiry": user.get("premium_expiry"),
+                "premium_features": user.get("premium_features", {}),
                 "created_at": user.get("created_at", int(time.time()))
             })
             safe_reply(update, f"❤️ Gender preference set to: *{pref.capitalize()}*!")
             return settings(update, context)
+
+        # Handle gender setting
+        elif data.startswith("gender_"):
+            return set_gender(update, context)
+
+        # Handle skipping gender setting
+        elif data == "gender_skip":
+            safe_reply(update, "👤 Gender setting skipped.")
+            return settings(update, context)
+
+        # Handle back to settings
         elif data == "back_to_settings":
             return settings(update, context)
+
+        # Handle back to chat
         elif data == "back_to_chat":
             safe_reply(update, "🔙 Returned to chat. Use /help for more options.")
             return ConversationHandler.END
+
+        # Handle consent
         elif data.startswith("consent_"):
             return consent_handler(update, context)
+
+        # Handle mood setting
         elif data.startswith("mood_"):
             set_mood(update, context)
             return ConversationHandler.END
+
+        # Handle admin actions
         elif data.startswith("admin_"):
             admin_button(update, context)
             return ConversationHandler.END
+
+        # Handle unknown actions
         else:
             safe_reply(update, "❓ Unknown action.")
             return ConversationHandler.END
+
+    except telegram.error.TelegramError as e:
+        logger.error(f"Telegram error in button handler for user {user_id}: {e}")
+        safe_reply(update, "❌ Failed to process your request. Please try again later.")
+        return ConversationHandler.END
     except Exception as e:
         logger.error(f"Error in button handler for user {user_id}: {e}")
         safe_reply(update, "❌ An error occurred. Please try again.")
         return ConversationHandler.END
+
+def cleanup_rematch_requests(context: CallbackContext) -> None:
+    current_time = int(time.time())
+    rematch_requests = context.bot_data.get("rematch_requests", {})
+    expired = []
+    for partner_id, request in rematch_requests.items():
+        if current_time - request["timestamp"] > 300:  # 5 minutes
+            expired.append(partner_id)
+            try:
+                safe_bot_send_message(context.bot, request["requester_id"],
+                                     "⏳ Your rematch request timed out.")
+                logger.info(f"Rematch request from {request['requester_id']} to {partner_id} timed out")
+            except telegram.error.TelegramError:
+                logger.warning(f"Failed to notify {request['requester_id']} of timeout")
+    for partner_id in expired:
+        del rematch_requests[partner_id]
+    context.bot_data["rematch_requests"] = rematch_requests
+    logger.debug("Cleaned up expired rematch requests")
 
 def set_bio(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
@@ -2395,6 +2645,7 @@ def main() -> None:
 
     # Periodic cleanup
     updater.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
+    updater.job_queue.run_repeating(cleanup_rematch_requests, interval=60, first=10)
 
     # Start the bot
     updater.start_polling(allowed_updates=Update.ALL_TYPES)
