@@ -282,20 +282,25 @@ def escape_markdown_v2(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
-def safe_reply(update: Update, text: str, parse_mode: str = None, **kwargs):
-    """Safely send a reply, escaping MarkdownV2 if needed and falling back if parsing fails."""
+def safe_reply(update: Update, text: str, **kwargs) -> None:
     try:
-        if parse_mode == "MarkdownV2":
-            text = escape_markdown_v2(text)
+        if update.message:  # Handle Message updates (e.g., commands)
             update.message.reply_text(text, parse_mode="MarkdownV2", **kwargs)
+        elif update.callback_query:  # Handle CallbackQuery updates (e.g., buttons)
+            query = update.callback_query
+            query.answer()  # Acknowledge the callback query
+            query.message.reply_text(text, parse_mode="MarkdownV2", **kwargs)
         else:
-            update.message.reply_text(text, parse_mode=parse_mode, **kwargs)
-    except telegram.error.BadRequest as e:
-        logger.warning(f"MarkdownV2 parsing failed: {e}. Sending without parsing: {text}")
-        update.message.reply_text(text, **kwargs)
+            logger.error("No message or callback query found in update.")
     except Exception as e:
         logger.error(f"Failed to send message: {e}")
-        update.message.reply_text("❌ An error occurred. Please try again.", parse_mode=None)
+        try:
+            if update.callback_query:
+                update.callback_query.message.reply_text("❌ An error occurred. Please try again.", parse_mode=None)
+            elif update.message:
+                update.message.reply_text("❌ An error occurred. Please try again.", parse_mode=None)
+        except Exception as fallback_e:
+            logger.error(f"Failed to send fallback message: {fallback_e}")
 
 def safe_bot_send_message(bot, chat_id: int, text: str, parse_mode: str = None):
     """Safely send a message via bot, escaping MarkdownV2 if needed and falling back if parsing fails."""
@@ -480,23 +485,26 @@ def stop(update: Update, context: CallbackContext) -> None:
 
 def next_chat(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
+
     if is_banned(user_id):
-        safe_reply(update, "🚫 You are currently banned.", parse_mode="MarkdownV2")
+        safe_reply(update, "🚫 You are banned from using this bot.", parse_mode="MarkdownV2")
         return
+
     if not check_rate_limit(user_id):
         safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.", parse_mode="MarkdownV2")
         return
-    stop(update, context)
-    if get_user(user_id).get("consent"):
-        if user_id not in waiting_users:
-            if is_premium(user_id) or has_premium_feature(user_id, "shine_profile"):
-                waiting_users.insert(0, user_id)
-            else:
-                waiting_users.append(user_id)
-            safe_reply(update, "🔍 Looking for a new chat partner... Please wait!", parse_mode="MarkdownV2")
-        match_users(context)
-    else:
-        safe_reply(update, "⚠️ Please agree to the rules first by using /start.", parse_mode="MarkdownV2")
+
+    if user_id in user_pairs:
+        partner_id = user_pairs[user_id]
+        del user_pairs[user_id]
+        del user_pairs[partner_id]
+        safe_bot_send_message(context.bot, partner_id, "🔌 Your chat partner disconnected.", parse_mode="MarkdownV2")
+
+    waiting_users.add(user_id)
+    safe_reply(update, "🔍 Looking for a new chat partner...", parse_mode="MarkdownV2")
+    match_users(context.bot)
+    logger.info(f"User {user_id} requested next chat.")
+
 
 def help_command(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
@@ -922,152 +930,237 @@ def settings(update: Update, context: CallbackContext) -> int:
 
 def button(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
-    query.answer()
+    if not query:
+        logger.error("No callback query found in update.")
+        return ConversationHandler.END
+
     user_id = query.from_user.id
     data = query.data
 
-    # Main menu buttons
-    if data == "start_chat":
-        start(update, context)
-        return ConversationHandler.END
-    elif data == "next_chat":
-        next_chat(update, context)
-        return ConversationHandler.END
-    elif data == "stop_chat":
-        stop(update, context)
-        return ConversationHandler.END
-    elif data == "settings_menu":
-        return settings(update, context)
-    elif data == "premium_menu":
-        premium(update, context)
-        return ConversationHandler.END
-    elif data == "history_menu":
-        history(update, context)
-        return ConversationHandler.END
-    elif data == "report_user":
-        report(update, context)
-        return ConversationHandler.END
-    elif data == "rematch_partner":
-        rematch(update, context)
-        return ConversationHandler.END
-    elif data == "delete_profile":
-        delete_profile(update, context)
-        return ConversationHandler.END
+    try:
+        query.answer()  # Acknowledge the callback query
 
-    # Settings menu buttons
-    elif data == "set_gender":
-        keyboard = [
-            [
-                InlineKeyboardButton("👨 Male", callback_data="gender_male"),
-                InlineKeyboardButton("👩 Female", callback_data="gender_female"),
-                InlineKeyboardButton("🌈 Other", callback_data="gender_other")
-            ],
-            [InlineKeyboardButton("➖ Skip", callback_data="gender_skip"),
-             InlineKeyboardButton("🔙 Back", callback_data="back_to_settings")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        try:
-            query.message.edit_text(escape_markdown_v2("👤 *Set Your Gender* 👤\n\nChoose your gender below:"), parse_mode="MarkdownV2", reply_markup=reply_markup)
-        except telegram.error.BadRequest:
-            query.message.reply_text("👤 Set Your Gender 👤\n\nChoose your gender below:", reply_markup=reply_markup)
-        return GENDER
-    elif data == "set_age":
-        try:
-            query.message.edit_text(escape_markdown_v2("🎂 *Set Your Age* 🎂\n\nPlease enter your age (e.g., 25):"), parse_mode="MarkdownV2")
-        except telegram.error.BadRequest:
-            query.message.reply_text("🎂 Set Your Age 🎂\n\nPlease enter your age (e.g., 25):")
-        return AGE
-    elif data == "set_tags":
-        try:
-            query.message.edit_text(escape_markdown_v2(
-                "🏷️ *Set Your Tags* 🏷️\n\n"
-                f"Enter tags to match with others (comma-separated, e.g., music, gaming).\n"
-                f"Available tags: {', '.join(ALLOWED_TAGS)}"
-            ), parse_mode="MarkdownV2")
-        except telegram.error.BadRequest:
-            query.message.reply_text(
-                f"🏷️ Set Your Tags 🏷️\n\n"
-                f"Enter tags to match with others (comma-separated, e.g., music, gaming).\n"
-                f"Available tags: {', '.join(ALLOWED_TAGS)}"
-            )
-        return TAGS
-    elif data == "set_location":
-        try:
-            query.message.edit_text(escape_markdown_v2("📍 *Set Your Location* 📍\n\nEnter your location (e.g., New York):"), parse_mode="MarkdownV2")
-        except telegram.error.BadRequest:
-            query.message.reply_text("📍 Set Your Location 📍\n\nEnter your location (e.g., New York):")
-        return LOCATION
-    elif data == "set_bio":
-        try:
-            query.message.edit_text(escape_markdown_v2(
-                "📝 *Set Your Bio* 📝\n\n"
-                f"Enter a short bio (max {MAX_PROFILE_LENGTH} characters):"
-            ), parse_mode="MarkdownV2")
-        except telegram.error.BadRequest:
-            query.message.reply_text(
-                f"📝 Set Your Bio 📝\n\n"
-                f"Enter a short bio (max {MAX_PROFILE_LENGTH} characters):"
-            )
-        return BIO
-    elif data == "set_gender_pref":
-        keyboard = [
-            [
-                InlineKeyboardButton("👨 Male", callback_data="pref_male"),
-                InlineKeyboardButton("👩 Female", callback_data="pref_female"),
-                InlineKeyboardButton("🌈 Any", callback_data="pref_any")
-            ],
-            [InlineKeyboardButton("🔙 Back", callback_data="back_to_settings")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        try:
-            query.message.edit_text(escape_markdown_v2("❤️ *Set Gender Preference* ❤️\n\nSelect preferred gender to match with:"), parse_mode="MarkdownV2", reply_markup=reply_markup)
-        except telegram.error.BadRequest:
-            query.message.reply_text("❤️ Set Gender Preference ❤️\n\nSelect preferred gender to match with:", reply_markup=reply_markup)
-        return GENDER
-    elif data == "back_to_settings":
-        return settings(update, context)
-    elif data == "back_to_chat":
-        try:
-            query.message.edit_text(escape_markdown_v2("👋 Returning to chat! Use /settings to edit your profile again."), parse_mode="MarkdownV2")
-        except telegram.error.BadRequest:
-            query.message.reply_text("👋 Returning to chat! Use /settings to edit your profile again.")
-        return ConversationHandler.END
-
-    # Gender and preference selections
-    elif data.startswith("gender_") or data.startswith("pref_"):
-        user = get_user(user_id)
-        profile = user.get("profile", {})
-        if data.startswith("gender_"):
-            if data == "gender_skip":
-                try:
-                    query.message.edit_text(escape_markdown_v2("👤 Gender skipped."), parse_mode="MarkdownV2")
-                except telegram.error.BadRequest:
-                    query.message.reply_text("👤 Gender skipped.")
-            else:
-                gender = data.split("_")[1].capitalize()
-                profile["gender"] = gender
-                try:
-                    query.message.edit_text(escape_markdown_v2(f"👤 Gender set to: *{gender}*! 🎉"), parse_mode="MarkdownV2")
-                except telegram.error.BadRequest:
-                    query.message.reply_text(f"👤 Gender set to: {gender}! 🎉")
-        elif data.startswith("pref_"):
-            pref = data.split("_")[1].capitalize()
-            if pref == "Any":
-                profile.pop("gender_preference", None)
-            else:
-                profile["gender_preference"] = pref
+        # Check for bans
+        if is_banned(user_id):
             try:
-                query.message.edit_text(escape_markdown_v2(f"❤️ Gender preference set to: *{pref}*! 🎉"), parse_mode="MarkdownV2")
+                query.message.reply_text(escape_markdown_v2("🚫 You are banned from using this bot."), parse_mode="MarkdownV2")
             except telegram.error.BadRequest:
-                query.message.reply_text(f"❤️ Gender preference set to: {pref}! 🎉")
-        update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
-        return settings(update, context)
+                logger.warning(f"Failed to send ban message to user {user_id}.")
+            return ConversationHandler.END
 
-    else:
+        # Main menu buttons
+        if data == "start_chat":
+            start(update, context)
+            return ConversationHandler.END
+        elif data == "next_chat":
+            next_chat(update, context)
+            return ConversationHandler.END
+        elif data == "stop_chat":
+            stop(update, context)
+            return ConversationHandler.END
+        elif data == "settings_menu":
+            return settings(update, context)
+        elif data == "premium_menu":
+            premium(update, context)
+            return ConversationHandler.END
+        elif data == "history_menu":
+            history(update, context)
+            return ConversationHandler.END
+        elif data == "report_user":
+            report(update, context)
+            return ConversationHandler.END
+        elif data == "rematch_partner":
+            rematch(update, context)
+            return ConversationHandler.END
+        elif data == "delete_profile":
+            delete_profile(update, context)
+            return ConversationHandler.END
+
+        # Settings menu buttons
+        elif data == "set_gender":
+            keyboard = [
+                [
+                    InlineKeyboardButton("👨 Male", callback_data="gender_male"),
+                    InlineKeyboardButton("👩 Female", callback_data="gender_female"),
+                    InlineKeyboardButton("🌈 Other", callback_data="gender_other")
+                ],
+                [
+                    InlineKeyboardButton("➖ Skip", callback_data="gender_skip"),
+                    InlineKeyboardButton("🔙 Back", callback_data="back_to_settings")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            try:
+                query.message.edit_text(
+                    escape_markdown_v2("👤 *Set Your Gender* 👤\n\nChoose your gender below:"),
+                    parse_mode="MarkdownV2",
+                    reply_markup=reply_markup
+                )
+            except telegram.error.BadRequest:
+                query.message.reply_text(
+                    "👤 Set Your Gender 👤\n\nChoose your gender below:",
+                    parse_mode="MarkdownV2",
+                    reply_markup=reply_markup
+                )
+            return GENDER
+        elif data == "set_age":
+            try:
+                query.message.edit_text(
+                    escape_markdown_v2("🎂 *Set Your Age* 🎂\n\nPlease enter your age (e.g., 25):"),
+                    parse_mode="MarkdownV2"
+                )
+            except telegram.error.BadRequest:
+                query.message.reply_text(
+                    "🎂 Set Your Age 🎂\n\nPlease enter your age (e.g., 25):",
+                    parse_mode="MarkdownV2"
+                )
+            return AGE
+        elif data == "set_tags":
+            try:
+                query.message.edit_text(
+                    escape_markdown_v2(
+                        "🏷️ *Set Your Tags* 🏷️\n\n"
+                        f"Enter tags to match with others (comma-separated, e.g., music, gaming).\n"
+                        f"Available tags: {', '.join(ALLOWED_TAGS)}"
+                    ),
+                    parse_mode="MarkdownV2"
+                )
+            except telegram.error.BadRequest:
+                query.message.reply_text(
+                    escape_markdown_v2(
+                        "🏷️ *Set Your Tags* 🏷️\n\n"
+                        f"Enter tags to match with others (comma-separated, e.g., music, gaming).\n"
+                        f"Available tags: {', '.join(ALLOWED_TAGS)}"
+                    ),
+                    parse_mode="MarkdownV2"
+                )
+            return TAGS
+        elif data == "set_location":
+            try:
+                query.message.edit_text(
+                    escape_markdown_v2("📍 *Set Your Location* 📍\n\nEnter your location (e.g., New York):"),
+                    parse_mode="MarkdownV2"
+                )
+            except telegram.error.BadRequest:
+                query.message.reply_text(
+                    "📍 Set Your Location 📍\n\nEnter your location (e.g., New York):",
+                    parse_mode="MarkdownV2"
+                )
+            return LOCATION
+        elif data == "set_bio":
+            try:
+                query.message.edit_text(
+                    escape_markdown_v2(
+                        "📝 *Set Your Bio* 📝\n\n"
+                        f"Enter a short bio (max {MAX_PROFILE_LENGTH} characters):"
+                    ),
+                    parse_mode="MarkdownV2"
+                )
+            except telegram.error.BadRequest:
+                query.message.reply_text(
+                    escape_markdown_v2(
+                        "📝 *Set Your Bio* 📝\n\n"
+                        f"Enter a short bio (max {MAX_PROFILE_LENGTH} characters):"
+                    ),
+                    parse_mode="MarkdownV2"
+                )
+            return BIO
+        elif data == "set_gender_pref":
+            keyboard = [
+                [
+                    InlineKeyboardButton("👨 Male", callback_data="pref_male"),
+                    InlineKeyboardButton("👩 Female", callback_data="pref_female"),
+                    InlineKeyboardButton("🌈 Any", callback_data="pref_any")
+                ],
+                [InlineKeyboardButton("🔙 Back", callback_data="back_to_settings")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            try:
+                query.message.edit_text(
+                    escape_markdown_v2("❤️ *Set Gender Preference* ❤️\n\nSelect preferred gender to match with:"),
+                    parse_mode="MarkdownV2",
+                    reply_markup=reply_markup
+                )
+            except telegram.error.BadRequest:
+                query.message.reply_text(
+                    "❤️ Set Gender Preference ❤️\n\nSelect preferred gender to match with:",
+                    parse_mode="MarkdownV2",
+                    reply_markup=reply_markup
+                )
+            return GENDER
+        elif data == "back_to_settings":
+            return settings(update, context)
+        elif data == "back_to_chat":
+            try:
+                query.message.edit_text(
+                    escape_markdown_v2("👋 Returning to chat! Use /settings to edit your profile again."),
+                    parse_mode="MarkdownV2"
+                )
+            except telegram.error.BadRequest:
+                query.message.reply_text(
+                    "👋 Returning to chat! Use /settings to edit your profile again.",
+                    parse_mode="MarkdownV2"
+                )
+            return ConversationHandler.END
+
+        # Gender and preference selections
+        elif data.startswith("gender_") or data.startswith("pref_"):
+            user = get_user(user_id)
+            profile = user.get("profile", {})
+            if data.startswith("gender_"):
+                if data == "gender_skip":
+                    try:
+                        query.message.edit_text(
+                            escape_markdown_v2("👤 Gender skipped."),
+                            parse_mode="MarkdownV2"
+                        )
+                    except telegram.error.BadRequest:
+                        query.message.reply_text("👤 Gender skipped.", parse_mode="MarkdownV2")
+                else:
+                    gender = data.split("_")[1].capitalize()
+                    profile["gender"] = gender
+                    try:
+                        query.message.edit_text(
+                            escape_markdown_v2(f"👤 Gender set to: *{gender}*! 🎉"),
+                            parse_mode="MarkdownV2"
+                        )
+                    except telegram.error.BadRequest:
+                        query.message.reply_text(f"👤 Gender set to: {gender}! 🎉", parse_mode="MarkdownV2")
+            elif data.startswith("pref_"):
+                pref = data.split("_")[1].capitalize()
+                if pref == "Any":
+                    profile.pop("gender_preference", None)
+                else:
+                    profile["gender_preference"] = pref
+                try:
+                    query.message.edit_text(
+                        escape_markdown_v2(f"❤️ Gender preference set to: *{pref}*! 🎉"),
+                        parse_mode="MarkdownV2"
+                    )
+                except telegram.error.BadRequest:
+                    query.message.reply_text(f"❤️ Gender preference set to: {pref}! 🎉", parse_mode="MarkdownV2")
+            update_user(user_id, {"profile": profile, "consent": user.get("consent", False), "verified": user.get("verified", False)})
+            return settings(update, context)
+
+        else:
+            try:
+                query.message.reply_text(
+                    escape_markdown_v2("❌ Unknown action. Please try again."),
+                    parse_mode="MarkdownV2"
+                )
+            except telegram.error.BadRequest:
+                logger.warning(f"Failed to send unknown action message to user {user_id}.")
+            return ConversationHandler.END
+
+    except Exception as e:
+        logger.error(f"Error in button handler for data '{data}' by user {user_id}: {e}", exc_info=True)
         try:
-            query.message.edit_text(escape_markdown_v2("❌ Unknown action. Please try again."), parse_mode="MarkdownV2")
+            query.message.reply_text(
+                escape_markdown_v2("❌ An error occurred. Please try again."),
+                parse_mode="MarkdownV2"
+            )
         except telegram.error.BadRequest:
-            query.message.reply_text("❌ Unknown action. Please try again.")
+            logger.warning(f"Failed to send error message to user {user_id}.")
         return ConversationHandler.END
 
 def set_age(update: Update, context: CallbackContext) -> int:
