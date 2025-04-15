@@ -1578,7 +1578,7 @@ def admin_info(update: Update, context: CallbackContext) -> None:
         release_db_connection(conn)
 
     def admin_reports(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
+        user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, "🚫 Unauthorized.")
         return
@@ -1614,7 +1614,7 @@ def admin_info(update: Update, context: CallbackContext) -> None:
         release_db_connection(conn)
 
     def admin_clear_reports(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
+        user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, "🚫 Unauthorized.")
         return
@@ -1636,7 +1636,7 @@ def admin_info(update: Update, context: CallbackContext) -> None:
         safe_reply(update, "⚠️ Usage: /admin_clear_reports <user_id>")
 
     def admin_broadcast(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
+        user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, "🚫 Unauthorized.")
         return
@@ -1670,7 +1670,7 @@ def admin_info(update: Update, context: CallbackContext) -> None:
 
     def error_handler(update: Update, context: CallbackContext) -> None:
     """Handle bot errors, notify user, and alert admins."""
-    user_id = update.effective_user.id if update and update.effective_user else "Unknown"
+        user_id = update.effective_user.id if update and update.effective_user else "Unknown"
     message_text = update.message.text if update and update.message else "N/A"
     logger.error(f"Error for user {user_id}: {context.error}. Update: {update}. Message: {message_text}", exc_info=True)
     
