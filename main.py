@@ -81,29 +81,16 @@ db = None
 operation_queue = Queue()
 
 def init_mongodb():
-    """Initialize MongoDB connection with URL-encoded credentials"""
+    """Initialize MongoDB connection"""
     uri = os.getenv("MONGODB_URI")
     if not uri:
         logger.error("MONGODB_URI not set")
         raise EnvironmentError("MONGODB_URI not set")
     
     try:
-        # Parse and re-encode username and password
-        if "mongodb+srv://" in uri:
-            parts = uri.split("://")[1].split("@")
-            credentials = parts[0].split(":")
-            if len(credentials) != 2:
-                raise ValueError("Invalid MONGODB_URI format: username:password expected")
-            username, password = credentials
-            host_and_params = parts[1]
-            username = urllib.parse.quote_plus(username)
-            password = urllib.parse.quote_plus(password)
-            uri = f"mongodb+srv://{username}:{password}@{host_and_params}"
-        else:
-            logger.warning("Non-SRV URI detected; ensure credentials are encoded")
-        
+        logger.info(f"Connecting to MongoDB with URI: {uri[:30]}...[redacted]")
         client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-        client.admin.command("ping")
+        client.talk2anyone.command("ping")  # Ping the target database
         db = client.get_database("talk2anyone")
         logger.info("MongoDB connected successfully")
         return db
@@ -113,19 +100,9 @@ def init_mongodb():
     except OperationFailure as e:
         logger.error(f"MongoDB authentication failed: {e}")
         raise
-    except ValueError as e:
-        logger.error(f"MongoDB URI parsing error: {e}")
-        raise
     except Exception as e:
         logger.error(f"Unexpected error initializing MongoDB: {e}")
         raise
-
-# Initialize MongoDB
-try:
-    db = init_mongodb()
-except Exception as e:
-    logger.error(f"Failed to initialize MongoDB: {e}")
-    raise
 
 def get_db_collection(collection_name):
     """Get a MongoDB collection"""
