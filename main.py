@@ -25,6 +25,7 @@ from collections import defaultdict
 import warnings
 import telegram.error
 import random
+import threading
 
 # Suppress ConversationHandler warning
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram.ext.conversationhandler")
@@ -63,11 +64,13 @@ MAX_PROFILE_LENGTH = 500
 ALLOWED_TAGS = {"music", "gaming", "movies", "tech", "sports", "art", "travel", "food", "books", "fashion"}
 
 # In-memory storage
+waiting_users_lock = threading.Lock()
 waiting_users = []
 user_pairs = {}
+user_activities = {}
 command_timestamps = {}
 message_timestamps = defaultdict(list)
-chat_histories = {}  # Premium feature: in-memory
+chat_histories = {}
 
 # Conversation states
 NAME, AGE, GENDER, LOCATION, CONSENT, VERIFICATION, TAGS = range(7)
