@@ -2453,7 +2453,7 @@ def main() -> None:
     dp.add_handler(conv_handler)
     dp.add_handler(CommandHandler("stop", stop))
     dp.add_handler(CommandHandler("next", next_chat))
-    dp.add833    dp.add_handler(CommandHandler("help", help_command))
+    dp.add_handler(CommandHandler("help", help_command))
     dp.add_handler(CommandHandler("premium", premium))
     dp.add_handler(CommandHandler("shine", shine))
     dp.add_handler(CommandHandler("instant", instant))
