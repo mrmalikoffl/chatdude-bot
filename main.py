@@ -1525,6 +1525,24 @@ def rematch(update: Update, context: CallbackContext) -> None:
     updated_user = get_user(user_id)
     logger.debug(f"User {user_id} after rematch: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
 
+def flare(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if is_banned(user_id):
+        user = get_user(user_id)
+        ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
+                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
+        safe_reply(update, ban_msg)
+        return
+    user = get_user(user_id)
+    logger.debug(f"User {user_id} before flare: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
+    if not has_premium_feature(user_id, "flare_messages"):
+        safe_reply(update, "✨ *Flare Messages* is a premium feature. Buy it with /premium!")
+        return
+    safe_reply(update, "✨ Your messages are sparkling with *Flare*! Keep chatting to show it off! 🗣️")
+    logger.info(f"User {user_id} activated Flare Messages.")
+    updated_user = get_user(user_id)
+    logger.debug(f"User {user_id} after flare: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
+
 def button(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     query.answer()
@@ -2471,6 +2489,7 @@ def main() -> None:
     dp.add_handler(CommandHandler("premium", premium))
     dp.add_handler(CommandHandler("shine", shine))
     dp.add_handler(CommandHandler("instant", instant))
+    dp.add_handler(CommandHandler("flare", flare))  # Add this line
     dp.add_handler(CommandHandler("mood", mood))
     dp.add_handler(CommandHandler("vault", vault))
     dp.add_handler(CommandHandler("history", history))
