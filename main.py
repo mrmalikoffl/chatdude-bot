@@ -2348,7 +2348,7 @@ def main() -> None:
                     MessageHandler(Filters.text & ~Filters.command, set_tags),
                     CallbackQueryHandler(button),
                 ],
-            ],
+            },
             fallbacks=[
                 CommandHandler("cancel", cancel),
                 CallbackQueryHandler(button),
