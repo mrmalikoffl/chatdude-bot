@@ -451,15 +451,11 @@ def safe_reply(update: Update, text: str, parse_mode: str = "MarkdownV2", **kwar
             query.message.reply_text(text, parse_mode=parse_mode, **kwargs)
     except telegram.error.BadRequest as bre:
         logger.warning(f"MarkdownV2 parsing failed: {bre}. Text: {text[:200]}")
-        try:
-            clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', '', text)
-            logger.debug(f"Attempting fallback with clean text: {clean_text[:200]}")
-            if update.callback_query:
-                update.callback_query.message.reply_text(clean_text, parse_mode=None, **kwargs)
-            elif update.message:
-                update.message.reply_text(clean_text, parse_mode=None, **kwargs)
-        except Exception as e:
-            logger.error(f"Failed to send fallback message: {e}")
+        clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', '', text)
+        if update.callback_query:
+            update.callback_query.message.reply_text(clean_text, parse_mode=None, **kwargs)
+        elif update.message:
+            update.message.reply_text(clean_text, parse_mode=None, **kwargs)
     except Exception as e:
         logger.error(f"Failed to send message: {e}")
 
