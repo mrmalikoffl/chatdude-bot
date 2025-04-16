@@ -1711,15 +1711,15 @@ def message_handler(update: Update, context: CallbackContext) -> None:
         safe_reply(update, "❓ You're not in a chat. Use /start to find a partner.")
         return
     partner_id = user_pairs[user_id]
-    formatted_message = f"*Stranger*: {text}"
+    formatted_message = text  # Just the plain message text
     if has_premium_feature(user_id, "flare_messages"):
-        formatted_message = f"✨ *Stranger*: {text} ✨"
+        formatted_message = f"✨ {text} ✨"  # Add flare effects without "Stranger"
     try:
         safe_bot_send_message(context.bot, partner_id, formatted_message)
         if has_premium_feature(user_id, "vaulted_chats"):
             chat_histories[user_id].append(f"You: {text}")
         if has_premium_feature(partner_id, "vaulted_chats"):
-            chat_histories[partner_id].append(f"Stranger: {text}")
+            chat_histories[partner_id].append(f"Partner: {text}")  # Changed "Stranger" to "Partner" in vault
         logger.info(f"Message from {user_id} to {partner_id}: {text[:50]}...")
     except telegram.error.TelegramError as e:
         safe_reply(update, "❌ Failed to send message. Your partner may have disconnected.")
