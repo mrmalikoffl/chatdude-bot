@@ -179,8 +179,6 @@ def cleanup_premium_features(user_id: int) -> bool:
     })
 
 def get_user(user_id: int) -> dict:
-    import logging
-    logger = logging.getLogger(__name__)
     logger.info(f"Fetching user {user_id}")
     
     users = get_db_collection("users")
@@ -192,11 +190,15 @@ def get_user(user_id: int) -> dict:
             "profile": {},
             "consent": False,
             "verified": False,
-            "created_at": int(time.time())
+            "created_at": int(time.time()),
+            "premium_expiry": None,
+            "premium_features": {},
+            "ban_type": None,
+            "ban_expiry": None
         }
         users.insert_one(user)
         user = users.find_one({"user_id": user_id})  # Fetch again instead of recursion
-    logger.info(f"Returning user {user_id}")
+    logger.debug(f"Returning user {user_id}: {user}")
     return user
 
 def update_user(user_id: int, data: dict) -> bool:
