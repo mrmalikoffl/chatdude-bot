@@ -578,8 +578,9 @@ def safe_reply(update: Update, text: str, parse_mode: str = "MarkdownV2", **kwar
             query.message.reply_text(text, parse_mode=parse_mode, **kwargs)
     except telegram.error.BadRequest as bre:
         logger.warning(f"MarkdownV2 parsing failed: {bre}. Text: {text[:200]}")
-        clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', '', text)
         try:
+            clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', '', text)
+            logger.debug(f"Attempting fallback with clean text: {clean_text[:200]}")
             if update.callback_query:
                 update.callback_query.message.reply_text(clean_text, parse_mode=None, **kwargs)
             elif update.message:
@@ -2061,6 +2062,7 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
         with conn.cursor() as c:
             c.execute("SELECT user_id, created_at, premium_expiry, ban_type, verified, profile, premium_features FROM users ORDER BY user_id")
             users = c.fetchall()
+            logger.debug(f"Raw database users: {users}")
             if not users:
                 safe_reply(update, "❌ No users found 😓.")
                 logger.info(f"Admin {user_id} requested users list: no users found.")
@@ -2071,7 +2073,12 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
                 user_id, created_at, premium_expiry, ban_type, verified, profile_json, premium_features_json = user
                 profile = profile_json or {}
                 premium_features = premium_features_json or {}
-                created_date = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d") if created_at else "Unknown"
+                logger.debug(f"Processing user {user_id}: profile={profile}, premium_features={premium_features}")
+                created_date = (
+                    datetime.fromtimestamp(created_at).strftime("%Y-%m-%d")
+                    if created_at and isinstance(created_at, (int, float))
+                    else "Unknown"
+                )
                 has_active_features = any(
                     v is True or (isinstance(v, int) and v > time.time())
                     for k, v in premium_features.items()
@@ -2082,11 +2089,16 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
                 )
                 ban_status = ban_type.capitalize() if ban_type else "None"
                 verified_status = "Yes ✔️" if verified else "No"
-                # Escape special characters for MarkdownV2
+                # Escape all dynamic fields for MarkdownV2
                 name = escape_markdown_v2(profile.get("name", "Not set"))
-                logger.debug(f"User {user_id}: name={name}, premium={premium_status}, ban={ban_status}")
+                user_id_str = escape_markdown_v2(str(user_id))
+                created_date = escape_markdown_v2(created_date)
+                premium_status = escape_markdown_v2(premium_status)
+                ban_status = escape_markdown_v2(ban_status)
+                verified_status = escape_markdown_v2(verified_status)
+                logger.debug(f"User {user_id}: name={name}, premium={premium_status}, ban={ban_status}, verified={verified_status}")
                 message += (
-                    f"👤 *User ID*: {user_id}\n"
+                    f"👤 *User ID*: {user_id_str}\n"
                     f"✍️ *Name*: {name}\n"
                     f"📅 *Created*: {created_date}\n"
                     f"🌟 *Premium*: {premium_status}\n"
@@ -2096,17 +2108,19 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
                 )
                 user_count += 1
                 # Check message length and send if approaching Telegram limit
-                if len(message.encode('utf-8')) > 3500:  # Lower threshold for safety
+                if len(message.encode('utf-8')) > 3500:
+                    logger.debug(f"Sending partial message: {message[:200]}...")
                     safe_reply(update, message, parse_mode="MarkdownV2")
                     message = ""
                     logger.debug(f"Sent partial users list for admin {user_id}, users so far: {user_count}")
-            if message.strip():  # Send remaining message
+            if message.strip():
                 message += f"🔢 *Total Users*: {user_count}\n"
+                logger.debug(f"Sending final message: {message[:200]}...")
                 safe_reply(update, message, parse_mode="MarkdownV2")
             logger.info(f"Admin {user_id} requested users list with {user_count} users 📋")
             logger.debug(f"Users list sent with {user_count} users.")
     except Exception as e:
-        logger.error(f"Error fetching users list for admin {user_id}: {e}")
+        logger.error(f"Error fetching users list for admin {user_id}: {e}", exc_info=True)
         safe_reply(update, "❌ Error retrieving users list 😓.")
     finally:
         release_db_connection(conn)
