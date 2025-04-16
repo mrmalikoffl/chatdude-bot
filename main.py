@@ -2244,6 +2244,33 @@ def message_handler(update: Update, context: CallbackContext) -> None:
         partner_name = get_user(user_id).get("profile", {}).get("name", "Anonymous")
         chat_histories[partner_id] = chat_histories.get(partner_id, []) + [f"{partner_name}: {message_text}"]
 
+def cleanup_rematch_requests(context: CallbackContext) -> None:
+    """Clean up expired rematch requests"""
+    current_time = int(time.time())
+    rematch_requests = context.bot_data.get("rematch_requests", {})
+    expired_requests = [
+        user_id for user_id, data in rematch_requests.items()
+        if current_time - data.get("timestamp", 0) > 3600  # 1 hour expiry
+    ]
+    for user_id in expired_requests:
+        try:
+            request_data = rematch_requests.pop(user_id)
+            requester_id = request_data.get("requester_id")
+            message_id = request_data.get("message_id")
+            if message_id:
+                context.bot.delete_message(chat_id=user_id, message_id=message_id)
+                logger.debug(f"Deleted expired rematch request message for user {user_id}")
+            if requester_id:
+                safe_bot_send_message(
+                    context.bot, requester_id,
+                    "⏳ Your rematch request expired as the user did not respond 😔."
+                )
+            logger.info(f"Cleaned up expired rematch request for user {user_id} from requester {requester_id}")
+        except telegram.error.TelegramError as e:
+            logger.warning(f"Failed to clean up rematch request for user {user_id}: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error cleaning up rematch request for user {user_id}: {e}")
+
 def error_handler(update: Update, context: CallbackContext) -> None:
     """Handle bot errors"""
     logger.error(f"Update {update} caused error: {context.error}")
