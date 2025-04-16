@@ -719,6 +719,8 @@ def set_location(update: Update, context: CallbackContext) -> int:
     user = get_user(user_id)
     profile = user.get("profile", {})
     location = update.message.text.strip()
+
+    # Validate location
     if not 1 <= len(location) <= 100:
         safe_reply(update, "⚠️ Location must be 1-100 characters.")
         return LOCATION
@@ -726,6 +728,8 @@ def set_location(update: Update, context: CallbackContext) -> int:
     if not is_safe:
         safe_reply(update, "⚠️ Location contains inappropriate content.")
         return LOCATION
+
+    # Update user's profile with location
     profile["location"] = location
     update_user(user_id, {
         "profile": profile,
@@ -735,13 +739,26 @@ def set_location(update: Update, context: CallbackContext) -> int:
         "premium_features": user.get("premium_features", {}),
         "created_at": user.get("created_at", int(time.time()))
     })
-    safe_reply(update, f"📍 Location set to: *{location}*!")
-    if user_id not in waiting_users:
-        if has_premium_feature(user_id, "shine_profile"):
-            waiting_users.insert(0, user_id)
+    logger.info(f"User {user_id} set location to: {location}")
+
+    # Send congratulatory message
+    safe_reply(update, "🎉 Congratulations! Profile setup complete!")
+
+    # Add user to waiting list with thread safety
+    with waiting_users_lock:  # Ensure waiting_users_lock is defined globally as Lock()
+        if user_id in waiting_users:
+            logger.info(f"User {user_id} already in waiting list, skipping addition")
         else:
-            waiting_users.append(user_id)
-        safe_reply(update, "🎉 Profile setup complete! Looking for a chat partner...")
+            if has_premium_feature(user_id, "shine_profile"):
+                waiting_users.insert(0, user_id)
+            else:
+                waiting_users.append(user_id)
+            logger.info(f"User {user_id} added to waiting list. Current waiting list: {waiting_users}")
+
+    # Notify user they are now looking for a chat partner
+    safe_reply(update, "🔍 Looking for a chat partner... Please wait!")
+
+    # Send notification to channel
     notification_message = (
         "🆕 *New User Registered* 🆕\n\n"
         f"👤 *User ID*: {user_id}\n"
@@ -752,7 +769,11 @@ def set_location(update: Update, context: CallbackContext) -> int:
         f"📅 *Joined*: {datetime.fromtimestamp(user.get('created_at', int(time.time()))).strftime('%Y-%m-%d %H:%M:%S')}"
     )
     send_channel_notification(context.bot, notification_message)
+
+    # Attempt to match users
     match_users(context)
+    logger.info(f"After match_users for user {user_id}. Waiting list: {waiting_users}, Paired users: {list(user_pairs.keys())}")
+
     return ConversationHandler.END
 
 def match_users(context: CallbackContext) -> None:
@@ -2243,13 +2264,12 @@ def message_handler(update: Update, context: CallbackContext) -> None:
         safe_reply(update, ban_msg)
         return
 
-    # Check if user is waiting for a match
-    if user_id in waiting_users:
-        safe_reply(update, "🔍 You're currently waiting for a chat partner... Please wait!")
-        return
-
-    # Check if user is in a chat
-    if user_id not in user_pairs:
+    # Check if user is waiting for a match or already in a chat
+    if user_id in waiting_users or user_id in user_pairs:
+        if user_id in waiting_users:
+            safe_reply(update, "🔍 You're currently waiting for a chat partner... Please wait!")
+            return
+    else:
         safe_reply(update, "❓ You're not in a chat 😔. Use /start to begin.")
         return
 
