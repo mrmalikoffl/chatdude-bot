@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # Admin configuration
 ADMIN_IDS = {5975525252}  # Replace with your Telegram user ID
 
-# Near the top of main.py, after imports and other constants
+# Notification channel
 NOTIFICATION_CHANNEL_ID = "-1002519617667"  # Your channel ID
 
 # Security configurations
@@ -198,7 +198,7 @@ def cleanup_in_memory(context: CallbackContext):
         if not message_timestamps[user_id]:
             del message_timestamps[user_id]
     for user_id in list(chat_histories.keys()):
-        if not is_premium(user_id) and not has_premium_feature(user_id, "vaulted_chats"):
+        if not has_premium_feature(user_id, "vaulted_chats"):
             del chat_histories[user_id]
     # Reset old keyword violations
     conn = get_db_connection()
@@ -497,23 +497,12 @@ def is_banned(user_id: int) -> bool:
             update_user(user_id, {"ban_type": None, "ban_expiry": None})
     return False
 
-def is_premium(user_id: int) -> bool:
-    user = get_user(user_id)
-    current_time = int(time.time())
-    premium_expiry = user.get("premium_expiry")
-    features = user.get("premium_features", {})
-    # Premium if either premium_expiry is active or any premium feature is active
-    has_active_features = any(
-        v is True or (isinstance(v, int) and v > current_time)
-        for k, v in features.items()
-        if k != "instant_rematch_count"
-    )
-    return (premium_expiry and premium_expiry > current_time) or has_active_features
-
 def has_premium_feature(user_id: int, feature: str) -> bool:
     user = get_user(user_id)
     features = user.get("premium_features", {})
-    return feature in features and (features[feature] is True or (isinstance(features[feature], int) and features[feature] > time.time()))
+    result = feature in features and (features[feature] is True or (isinstance(features[feature], int) and features[feature] > time.time()))
+    logger.debug(f"Checking premium feature '{feature}' for user {user_id}: {result}")
+    return result
 
 def is_verified(user_id: int) -> bool:
     return get_user(user_id).get("verified", False)
@@ -528,7 +517,7 @@ def check_rate_limit(user_id: int, cooldown: int = COMMAND_COOLDOWN) -> bool:
 def check_message_rate_limit(user_id: int) -> bool:
     current_time = time.time()
     message_timestamps[user_id] = [t for t in message_timestamps[user_id] if current_time - t < 60]
-    max_messages = MAX_MESSAGES_PER_MINUTE + 10 if is_premium(user_id) or any(has_premium_feature(user_id, f) for f in ["shine_profile", "flare_messages"]) else MAX_MESSAGES_PER_MINUTE
+    max_messages = MAX_MESSAGES_PER_MINUTE + 10 if has_premium_feature(user_id, "flare_messages") else MAX_MESSAGES_PER_MINUTE
     if len(message_timestamps[user_id]) >= max_messages:
         return False
     message_timestamps[user_id].append(current_time)
@@ -550,7 +539,6 @@ def is_safe_message(text: str) -> tuple[bool, str]:
         return False, "url"
     return True, ""
 
-# Near other utility functions like safe_reply
 def send_channel_notification(bot, message: str) -> None:
     """Send a notification to the private channel."""
     if not NOTIFICATION_CHANNEL_ID:
@@ -685,7 +673,7 @@ def start(update: Update, context: CallbackContext) -> int:
         safe_reply(update, "✨ Let’s set up your profile to start chatting! Please enter your name:")
         return NAME
     if user_id not in waiting_users:
-        if is_premium(user_id) or has_premium_feature(user_id, "shine_profile"):
+        if has_premium_feature(user_id, "shine_profile"):
             waiting_users.insert(0, user_id)
         else:
             waiting_users.append(user_id)
@@ -868,7 +856,7 @@ def set_location(update: Update, context: CallbackContext) -> int:
     })
     safe_reply(update, f"📍 Location set to: *{location}*! 🌍")
     if user_id not in waiting_users:
-        if is_premium(user_id) or has_premium_feature(user_id, "shine_profile"):
+        if has_premium_feature(user_id, "shine_profile"):
             waiting_users.insert(0, user_id)
         else:
             waiting_users.append(user_id)
@@ -965,9 +953,9 @@ def match_users(context: CallbackContext) -> None:
                 safe_bot_send_message(context.bot, user1, user1_message)
                 safe_bot_send_message(context.bot, user2, user2_message)
                 logger.info(f"Matched users {user1} and {user2}.")
-                if is_premium(user1) or has_premium_feature(user1, "vaulted_chats"):
+                if has_premium_feature(user1, "vaulted_chats"):
                     chat_histories[user1] = []
-                if is_premium(user2) or has_premium_feature(user2, "vaulted_chats"):
+                if has_premium_feature(user2, "vaulted_chats"):
                     chat_histories[user2] = []
                 return
             j += 1
@@ -984,7 +972,7 @@ def can_match(user1: int, user2: int) -> bool:
         return False
     age1 = profile1.get("age")
     age2 = profile2.get("age")
-    if age1 and age2 and abs(age1 - age2) > (15 if is_premium(user1) or is_premium(user2) or has_premium_feature(user1, "mood_match") or has_premium_feature(user2, "mood_match") else 10):
+    if age1 and age2 and abs(age1 - age2) > (15 if has_premium_feature(user1, "mood_match") or has_premium_feature(user2, "mood_match") else 10):
         return False
     gender_pref1 = profile1.get("gender_preference")
     gender_pref2 = profile2.get("gender_preference")
@@ -1222,11 +1210,11 @@ def successful_payment(update: Update, context: CallbackContext) -> None:
             if feature == "premium_pass":
                 new_expiry = max(premium_expiry or current_time, current_time + 30 * 24 * 3600)
                 features.update({
-                    "shine_profile": max(features.get("shine_profile", 0), current_time + 30 * 24 * 3600),
-                    "mood_match": max(features.get("mood_match", 0), current_time + 30 * 24 * 3600),
-                    "partner_details": max(features.get("partner_details", 0), current_time + 30 * 24 * 3600),
+                    "shine_profile": current_time + 30 * 24 * 3600,
+                    "mood_match": current_time + 30 * 24 * 3600,
+                    "partner_details": current_time + 30 * 24 * 3600,
                     "vaulted_chats": True,
-                    "flare_messages": max(features.get("flare_messages", 0), current_time + 30 * 24 * 3600),
+                    "flare_messages": current_time + 30 * 24 * 3600,
                     "instant_rematch_count": features.get("instant_rematch_count", 0) + 5
                 })
                 premium_expiry = new_expiry
@@ -1236,7 +1224,7 @@ def successful_payment(update: Update, context: CallbackContext) -> None:
                 elif feature == "vaulted_chats":
                     features["vaulted_chats"] = True
                 else:
-                    features[feature] = max(features.get(feature, 0), current_time + duration)
+                    features[feature] = current_time + duration
                 if duration and (not premium_expiry or premium_expiry < current_time + duration):
                     premium_expiry = current_time + duration
             if not update_user(user_id, {
@@ -1311,12 +1299,12 @@ def instant(update: Update, context: CallbackContext) -> None:
         return
     user = get_user(user_id)
     logger.debug(f"User {user_id} before instant: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
-    if not is_premium(user_id) and not has_premium_feature(user_id, "instant_rematch"):
+    if not has_premium_feature(user_id, "instant_rematch"):
         safe_reply(update, "🔄 *Instant Rematch* is a premium feature. Buy it with /premium!")
         return
     features = user.get("premium_features", {})
     rematch_count = features.get("instant_rematch_count", 0)
-    if not is_premium(user_id) and rematch_count <= 0:
+    if rematch_count <= 0:
         safe_reply(update, "🔄 You need an *Instant Rematch*! Buy one with /premium!")
         return
     partners = user.get("profile", {}).get("past_partners", [])
@@ -1344,23 +1332,22 @@ def instant(update: Update, context: CallbackContext) -> None:
         waiting_users.remove(partner_id)
         user_pairs[user_id] = partner_id
         user_pairs[partner_id] = user_id
-        # Deduct rematch count only if not premium
-        if not is_premium(user_id):
-            features["instant_rematch_count"] = rematch_count - 1
-            update_user(user_id, {
-                "premium_features": features,
-                "premium_expiry": user.get("premium_expiry"),
-                "profile": user.get("profile", {}),
-                "consent": user.get("consent", False),
-                "verified": user.get("verified", False),
-                "created_at": user.get("created_at", int(time.time()))
-            })
+        # Deduct rematch count
+        features["instant_rematch_count"] = rematch_count - 1
+        update_user(user_id, {
+            "premium_features": features,
+            "premium_expiry": user.get("premium_expiry"),
+            "profile": user.get("profile", {}),
+            "consent": user.get("consent", False),
+            "verified": user.get("verified", False),
+            "created_at": user.get("created_at", int(time.time()))
+        })
         safe_reply(update, "🔄 *Instantly reconnected!* Start chatting! 🗣️")
         safe_bot_send_message(context.bot, partner_id, "🔄 *Instantly reconnected!* Start chatting! 🗣️")
         logger.info(f"User {user_id} used Instant Rematch with {partner_id} (partner was waiting)")
-        if is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats"):
+        if has_premium_feature(user_id, "vaulted_chats"):
             chat_histories[user_id] = chat_histories.get(user_id, [])
-        if is_premium(partner_id) or has_premium_feature(partner_id, "vaulted_chats"):
+        if has_premium_feature(partner_id, "vaulted_chats"):
             chat_histories[partner_id] = chat_histories.get(partner_id, [])
         updated_user = get_user(user_id)
         logger.debug(f"User {user_id} after instant: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
@@ -1383,13 +1370,19 @@ def instant(update: Update, context: CallbackContext) -> None:
         f"Would you like to chat again?"
     )
     try:
-        safe_bot_send_message(context.bot, partner_id, request_message, reply_markup=reply_markup)
+        message = context.bot.send_message(
+            chat_id=partner_id,
+            text=escape_markdown_v2(request_message),
+            parse_mode="MarkdownV2",
+            reply_markup=reply_markup
+        )
         safe_reply(update, "📩 Rematch request sent to your previous partner. Waiting for their response...")
-        # Store the request temporarily
+        # Store the request with message ID for cleanup
         context.bot_data["rematch_requests"] = context.bot_data.get("rematch_requests", {})
         context.bot_data["rematch_requests"][partner_id] = {
             "requester_id": user_id,
-            "timestamp": int(time.time())
+            "timestamp": int(time.time()),
+            "message_id": message.message_id
         }
         logger.info(f"User {user_id} sent rematch request to {partner_id}")
     except telegram.error.TelegramError as e:
@@ -1466,45 +1459,14 @@ def vault(update: Update, context: CallbackContext) -> None:
     if not has_premium_feature(user_id, "vaulted_chats"):
         safe_reply(update, "📜 *Vaulted Chats* is a premium feature. Buy it with /premium!")
         return
-    if user_id not in chat_histories or not chat_histories[user_id]:
-        safe_reply(update, "❌ No chats saved in your vault.")
+    if user_id not in user_pairs:
+        safe_reply(update, "❓ You're not in a chat. Use /start to begin.")
         return
-    history_text = "📜 *Your Vaulted Chats* 📜\n\n"
-    for msg in chat_histories[user_id][-10:]:
-        history_text += f"[{msg['time']}]: {msg['text']}\n"
-    safe_reply(update, history_text)
+    if user_id not in chat_histories:
+        chat_histories[user_id] = []
+    safe_reply(update, "📜 Your current chat is being saved to the vault!")
     updated_user = get_user(user_id)
     logger.debug(f"User {user_id} after vault: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
-
-def flare(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
-    if is_banned(user_id):
-        user = get_user(user_id)
-        ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
-                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
-        safe_reply(update, ban_msg)
-        return
-    user = get_user(user_id)
-    logger.debug(f"User {user_id} before flare: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
-    if not has_premium_feature(user_id, "flare_messages"):
-        safe_reply(update, "✨ *Flare Messages* is a premium feature. Buy it with /premium!")
-        return
-    features = user.get("premium_features", {})
-    flare_active = features.get("flare_active", False)
-    features["flare_active"] = not flare_active
-    if not update_user(user_id, {
-        "premium_features": features,
-        "premium_expiry": user.get("premium_expiry"),
-        "profile": user.get("profile", {}),
-        "consent": user.get("consent", False),
-        "verified": user.get("verified", False),
-        "created_at": user.get("created_at", int(time.time()))
-    }):
-        safe_reply(update, "❌ Error toggling flare messages. Please try again.")
-        return
-    safe_reply(update, f"✨ *Flare Messages* *{'enabled' if not flare_active else 'disabled'}*!")
-    updated_user = get_user(user_id)
-    logger.debug(f"User {user_id} after flare: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
 
 def history(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
@@ -1516,481 +1478,18 @@ def history(update: Update, context: CallbackContext) -> None:
         return
     user = get_user(user_id)
     logger.debug(f"User {user_id} before history: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
-    if not (is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats")):
-        safe_reply(update, "📜 *Chat History* is a premium feature. Use /premium to unlock!")
+    if not has_premium_feature(user_id, "vaulted_chats"):
+        safe_reply(update, "📜 *Chat History* is a premium feature. Buy it with /premium!")
         return
     if user_id not in chat_histories or not chat_histories[user_id]:
-        safe_reply(update, "❌ No chat history available.")
+        safe_reply(update, "📜 Your chat vault is empty.")
         return
     history_text = "📜 *Your Chat History* 📜\n\n"
-    for msg in chat_histories[user_id][-10:]:
-        history_text += f"[{msg['time']}]: {msg['text']}\n"
+    for idx, msg in enumerate(chat_histories[user_id], 1):
+        history_text += f"{idx}. {msg}\n"
     safe_reply(update, history_text)
     updated_user = get_user(user_id)
     logger.debug(f"User {user_id} after history: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
-
-
-def report(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
-    if is_banned(user_id):
-        user = get_user(user_id)
-        ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
-                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
-        safe_reply(update, ban_msg)
-        return
-    if not check_rate_limit(user_id):
-        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.")
-        return
-    if user_id in user_pairs:
-        partner_id = user_pairs[user_id]
-        conn = get_db_connection()
-        if not conn:
-            safe_reply(update, "❌ Error processing report due to database issue.")
-            return
-        try:
-            with conn.cursor() as c:
-                reason = " ".join(context.args) if context.args else "No reason provided"
-                c.execute("""
-                    INSERT INTO reports (reporter_id, reported_id, timestamp, reason, reporter_profile, reported_profile)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, (
-                    user_id, partner_id, int(time.time()), reason,
-                    json.dumps(get_user(user_id).get("profile", {})),
-                    json.dumps(get_user(partner_id).get("profile", {}))
-                ))
-                conn.commit()
-                c.execute("SELECT COUNT(*) FROM reports WHERE reported_id = %s", (partner_id,))
-                report_count = c.fetchone()[0]
-                if report_count >= REPORT_THRESHOLD:
-                    update_user(partner_id, {
-                        "ban_type": "temporary",
-                        "ban_expiry": int(time.time()) + TEMP_BAN_DURATION,
-                        "profile": get_user(partner_id).get("profile", {}),
-                        "consent": get_user(partner_id).get("consent", False),
-                        "verified": get_user(partner_id).get("verified", False),
-                        "created_at": get_user(partner_id).get("created_at", int(time.time()))
-                    })
-                    safe_bot_send_message(context.bot, partner_id, "⚠️ You’ve been temporarily banned due to multiple reports.")
-                    stop(update, context)
-                safe_reply(update, "✅ Thank you for reporting. We’ll review it. Use /next to find a new partner.")
-                logger.info(f"User {user_id} reported user {partner_id}. Reason: {reason}. Total reports: {report_count}.")
-        except Exception as e:
-            logger.error(f"Failed to log report: {e}")
-            safe_reply(update, "❌ Error processing report.")
-        finally:
-            release_db_connection(conn)
-    else:
-        safe_reply(update, "❓ You're not in a chat. Use /start to begin.")
-
-def handle_message(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
-    if is_banned(user_id):
-        user = get_user(user_id)
-        ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
-                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
-        safe_reply(update, ban_msg)
-        return
-    if not check_message_rate_limit(user_id):
-        safe_reply(update, "⏳ You're sending messages too fast. Please slow down.")
-        logger.info(f"User {user_id} hit message rate limit.")
-        return
-    if user_id in user_pairs:
-        partner_id = user_pairs[user_id]
-        message_text = update.message.text
-        is_safe, keyword = is_safe_message(message_text)
-        if not is_safe:
-            if keyword not in ["banned_word", "url"]:
-                issue_keyword_violation(user_id, keyword, update, context)
-                return
-            safe_reply(update, "⚠️ Inappropriate content detected. Please keep the chat respectful.")
-            logger.info(f"User {user_id} sent unsafe message: {message_text}")
-            return
-        flare = has_premium_feature(user_id, "flare_messages") and get_user(user_id).get("premium_features", {}).get("flare_active", False)
-        final_text = f"✨ {message_text} ✨" if flare else message_text
-        safe_bot_send_message(context.bot, partner_id, final_text)
-        logger.info(f"Message from {user_id} to {partner_id}: {message_text}")
-        if is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats"):
-            if user_id in chat_histories:
-                chat_histories[user_id].append({
-                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "text": f"You: {message_text}"
-                })
-        if is_premium(partner_id) or has_premium_feature(partner_id, "vaulted_chats"):
-            if partner_id in chat_histories:
-                chat_histories[partner_id].append({
-                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "text": f"Partner: {message_text}"
-                })
-
-def settings(update: Update, context: CallbackContext) -> int:
-    user_id = update.effective_user.id
-    if is_banned(user_id):
-        user = get_user(user_id)
-        ban_msg = (
-            "🚫 You are permanently banned. Contact support to appeal."
-            if user["ban_type"] == "permanent"
-            else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
-        )
-        safe_reply(update, ban_msg)
-        return ConversationHandler.END
-
-    if not check_rate_limit(user_id):
-        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.")
-        return ConversationHandler.END
-
-    user = get_user(user_id)
-    profile = user.get("profile", {})
-    # Prepare settings menu with current profile data
-    keyboard = [
-        [
-            InlineKeyboardButton(f"🧑 Name: {profile.get('name', 'Not set')}", callback_data="set_name"),
-            InlineKeyboardButton(f"👤 Gender: {profile.get('gender', 'Not set')}", callback_data="set_gender")
-        ],
-        [
-            InlineKeyboardButton(f"🎂 Age: {profile.get('age', 'Not set')}", callback_data="set_age"),
-            InlineKeyboardButton(f"📍 Location: {profile.get('location', 'Not set')}", callback_data="set_location")
-        ],
-        [
-            InlineKeyboardButton(f"📝 Bio: {profile.get('bio', 'Not set')[:20] + '...' if profile.get('bio') else 'Not set'}", callback_data="set_bio"),
-            InlineKeyboardButton(f"🏷️ Tags: {', '.join(profile.get('tags', [])) or 'Not set'}", callback_data="set_tags")
-        ],
-        [
-            InlineKeyboardButton(f"❤️ Gender Pref: {profile.get('gender_preference', 'Any')}", callback_data="set_gender_pref"),
-            InlineKeyboardButton("🔙 Back to Chat", callback_data="back_to_chat")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    settings_text = (
-        "⚙️ *Your Profile Settings* ⚙️\n\n"
-        "Customize your profile by selecting an option below:"
-    )
-    safe_reply(update, settings_text, reply_markup=reply_markup)
-    logger.info(f"User {user_id} opened settings menu.")
-    return NAME
-
-def button(update: Update, context: CallbackContext) -> int:
-    query = update.callback_query
-    if not query:
-        logger.error("No callback query found in update.")
-        safe_reply(update, "❌ No action received. Please try again.")
-        return ConversationHandler.END
-
-    user_id = query.from_user.id
-    data = query.data
-    logger.info(f"Button pressed by user {user_id}: {data}")
-
-    try:
-        query.answer()
-
-        # Check if user is banned
-        if is_banned(user_id):
-            user = get_user(user_id)
-            ban_msg = (
-                "🚫 You are permanently banned. Contact support to appeal."
-                if user["ban_type"] == "permanent"
-                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
-            )
-            safe_reply(update, ban_msg)
-            return ConversationHandler.END
-
-        # Retrieve user data
-        user = get_user(user_id)
-        profile = user.get("profile", {})
-
-        # Handle premium purchase buttons
-        if data in ["buy_flare", "buy_instant", "buy_shine", "buy_mood", "buy_partner_details", "buy_vault", "buy_premium_pass"]:
-            buy_premium(update, context)
-            return ConversationHandler.END
-
-        # Handle emoji verification
-        if data.startswith("emoji_"):
-            return verify_emoji(update, context)
-
-        # Handle consent buttons
-        if data.startswith("consent_"):
-            return consent_handler(update, context)
-
-        # Handle mood setting
-        if data.startswith("mood_"):
-            set_mood(update, context)
-            return ConversationHandler.END
-
-        # Handle rematch requests
-        if data.startswith("rematch_accept_"):
-            requester_id = int(data.split("_")[2])
-            if user_id in user_pairs:
-                safe_reply(update, "❓ You're already in a chat. Use /stop to end it first.")
-                return ConversationHandler.END
-            if requester_id in user_pairs:
-                safe_reply(update, "❌ The requester is no longer available.")
-                return ConversationHandler.END
-
-            rematch_requests = context.bot_data.get("rematch_requests", {})
-            if rematch_requests.get(user_id, {}).get("requester_id") != requester_id:
-                safe_reply(update, "❌ This rematch request is no longer valid.")
-                return ConversationHandler.END
-
-            # Connect users
-            user_pairs[user_id] = requester_id
-            user_pairs[requester_id] = user_id
-
-            # Deduct rematch count for non-premium requester
-            requester_data = get_user(requester_id)
-            if not is_premium(requester_id):
-                features = requester_data.get("premium_features", {})
-                rematch_count = features.get("instant_rematch_count", 0)
-                if rematch_count > 0:
-                    features["instant_rematch_count"] = rematch_count - 1
-                    update_user(requester_id, {
-                        "premium_features": features,
-                        "premium_expiry": requester_data.get("premium_expiry"),
-                        "profile": requester_data.get("profile", {}),
-                        "consent": requester_data.get("consent", False),
-                        "verified": requester_data.get("verified", False),
-                        "created_at": requester_data.get("created_at", int(time.time()))
-                    })
-
-            # Prepare connection messages
-            user_message = (
-                f"✅ *Reconnected!* Start chatting now! 🗣️\n\n"
-                f"👤 *Partner Details*:\n"
-                f"🧑 *Name*: {requester_data.get('profile', {}).get('name', 'Not set')}\n"
-                f"🎂 *Age*: {requester_data.get('profile', {}).get('age', 'Not set')}\n"
-                f"👤 *Gender*: {requester_data.get('profile', {}).get('gender', 'Not set')}\n"
-                f"📍 *Location*: {requester_data.get('profile', {}).get('location', 'Not set')}\n\n"
-                "Use /help for more options."
-            ) if has_premium_feature(user_id, "partner_details") else (
-                "✅ *Reconnected!* Start chatting now! 🗣️\n\n"
-                "🔒 *Partner Details*: Upgrade to *Partner Details Reveal* to view your partner’s name, age, gender, and location!\n"
-                "Unlock with /premium.\n\n"
-                "Use /help for more options."
-            )
-            requester_message = (
-                f"✅ *Reconnected!* Start chatting now! 🗣️\n\n"
-                f"👤 *Partner Details*:\n"
-                f"🧑 *Name*: {profile.get('name', 'Not set')}\n"
-                f"🎂 *Age*: {profile.get('age', 'Not set')}\n"
-                f"👤 *Gender*: {profile.get('gender', 'Not set')}\n"
-                f"📍 *Location*: {profile.get('location', 'Not set')}\n\n"
-                "Use /help for more options."
-            ) if has_premium_feature(requester_id, "partner_details") else (
-                "✅ *Reconnected!* Start chatting now! 🗣️\n\n"
-                "🔒 *Partner Details*: Upgrade to *Partner Details Reveal* to view your partner’s name, age, gender, and location!\n"
-                "Unlock with /premium.\n\n"
-                "Use /help for more options."
-            )
-
-            safe_reply(update, user_message)
-            safe_bot_send_message(context.bot, requester_id, requester_message)
-            logger.info(f"User {user_id} accepted rematch with {requester_id}")
-
-            # Clear the request
-            del rematch_requests[user_id]
-            context.bot_data["rematch_requests"] = rematch_requests
-
-            # Initialize chat history for premium users
-            if is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats"):
-                chat_histories[user_id] = chat_histories.get(user_id, [])
-            if is_premium(requester_id) or has_premium_feature(requester_id, "vaulted_chats"):
-                chat_histories[requester_id] = chat_histories.get(requester_id, [])
-
-            return ConversationHandler.END
-
-        if data == "rematch_decline":
-            rematch_requests = context.bot_data.get("rematch_requests", {})
-            requester_id = rematch_requests.get(user_id, {}).get("requester_id")
-            if requester_id:
-                safe_bot_send_message(context.bot, requester_id, "❌ Your rematch request was declined.")
-                logger.info(f"User {user_id} declined rematch with {requester_id}")
-                del rematch_requests[user_id]
-                context.bot_data["rematch_requests"] = rematch_requests
-            safe_reply(update, "❌ You declined the rematch request.")
-            return ConversationHandler.END
-
-        # Handle main menu buttons
-        if data == "start_chat":
-            return start(update, context)
-        elif data == "next_chat":
-            next_chat(update, context)
-            return ConversationHandler.END
-        elif data == "stop_chat":
-            stop(update, context)
-            return ConversationHandler.END
-        elif data == "settings_menu":
-            return settings(update, context)
-        elif data == "premium_menu":
-            premium(update, context)
-            return ConversationHandler.END
-        elif data == "history_menu":
-            history(update, context)
-            return ConversationHandler.END
-        elif data == "report_user":
-            report(update, context)
-            return ConversationHandler.END
-        elif data == "rematch_partner":
-            instant(update, context)  # Assuming /rematch uses instant rematch logic
-            return ConversationHandler.END
-        elif data == "delete_profile":
-            delete_profile(update, context)
-            return ConversationHandler.END
-
-        # Handle settings buttons
-        if data == "set_name":
-            context.user_data["awaiting"] = "name"
-            safe_reply(update, "🧑 *Set Your Name* 🧑\n\nPlease enter your name:")
-            return NAME
-        elif data == "set_age":
-            context.user_data["awaiting"] = "age"
-            safe_reply(update, "🎂 *Set Your Age* 🎂\n\nPlease enter your age (e.g., 25):")
-            return AGE
-        elif data == "set_gender":
-            keyboard = [
-                [
-                    InlineKeyboardButton("👨 Male", callback_data="gender_male"),
-                    InlineKeyboardButton("👩 Female", callback_data="gender_female"),
-                    InlineKeyboardButton("🌈 Other", callback_data="gender_other")
-                ],
-                [
-                    InlineKeyboardButton("➖ Skip", callback_data="gender_skip"),
-                    InlineKeyboardButton("🔙 Back", callback_data="back_to_settings")
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            safe_reply(update, "👤 *Set Your Gender* 👤\n\nChoose your gender below:", reply_markup=reply_markup)
-            return GENDER
-        elif data == "set_location":
-            context.user_data["awaiting"] = "location"
-            safe_reply(update, "📍 *Set Your Location* 📍\n\nPlease enter your location (e.g., New York):")
-            return LOCATION
-        elif data == "set_bio":
-            context.user_data["awaiting"] = "bio"
-            safe_reply(update, "📝 *Set Your Bio* 📝\n\nEnter a short bio (max 500 characters):")
-            return BIO
-        elif data == "set_tags":
-            context.user_data["awaiting"] = "tags"
-            safe_reply(update, f"🏷️ *Set Your Tags* 🏷️\n\nEnter interests (e.g., music, gaming). Choose from: {', '.join(ALLOWED_TAGS)}.\nSeparate with commas, max 5 tags.")
-            return TAGS
-        elif data == "set_gender_pref":
-            keyboard = [
-                [
-                    InlineKeyboardButton("👨 Male", callback_data="pref_male"),
-                    InlineKeyboardButton("👩 Female", callback_data="pref_female"),
-                    InlineKeyboardButton("🌈 Any", callback_data="pref_any")
-                ],
-                [
-                    InlineKeyboardButton("🔙 Back", callback_data="back_to_settings")
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            safe_reply(update, "❤️ *Set Gender Preference* ❤️\n\nWho would you like to chat with?", reply_markup=reply_markup)
-            return GENDER
-        elif data.startswith("pref_"):
-            pref = data.split("_")[1]
-            gender_map = {"male": "Male", "female": "Female", "any": None}
-            if pref not in gender_map:
-                safe_reply(update, "❌ Invalid gender preference.")
-                return settings(update, context)
-            profile["gender_preference"] = gender_map[pref]
-            update_user(user_id, {
-                "profile": profile,
-                "consent": user.get("consent", False),
-                "verified": user.get("verified", False),
-                "premium_expiry": user.get("premium_expiry"),
-                "premium_features": user.get("premium_features", {}),
-                "created_at": user.get("created_at", int(time.time()))
-            })
-            safe_reply(update, f"❤️ Gender preference set to: *{pref.capitalize()}*!")
-            return settings(update, context)
-        elif data == "gender_skip":
-            safe_reply(update, "👤 Gender setting skipped.")
-            return settings(update, context)
-        elif data == "back_to_settings":
-            return settings(update, context)
-        elif data == "back_to_chat":
-            safe_reply(update, "🔙 Returned to chat. Use /help for more options.")
-            return ConversationHandler.END
-
-        # Handle unknown buttons
-        safe_reply(update, "❓ Unknown action. Please try again.")
-        return ConversationHandler.END
-
-    except telegram.error.TelegramError as e:
-        logger.error(f"Telegram error in button handler for user {user_id}: {e}")
-        safe_reply(update, "❌ Failed to process your request. Please try again later.")
-        return ConversationHandler.END
-    except Exception as e:
-        logger.error(f"Error in button handler for user {user_id}: {e}")
-        safe_reply(update, "❌ An error occurred. Please try again.")
-        return ConversationHandler.END
-
-def cleanup_rematch_requests(context: CallbackContext) -> None:
-    current_time = int(time.time())
-    rematch_requests = context.bot_data.get("rematch_requests", {})
-    expired = []
-    for partner_id, request in rematch_requests.items():
-        if current_time - request["timestamp"] > 300:  # 5 minutes
-            expired.append(partner_id)
-            try:
-                safe_bot_send_message(
-                    context.bot,
-                    request["requester_id"],
-                    "⏳ Your rematch request timed out."
-                )
-                logger.info(f"Rematch request from {request['requester_id']} to {partner_id} timed out")
-            except telegram.error.TelegramError:
-                logger.warning(f"Failed to notify {request['requester_id']} of timeout")
-    for partner_id in expired:
-        del rematch_requests[partner_id]
-    context.bot_data["rematch_requests"] = rematch_requests
-    logger.debug("Cleaned up expired rematch requests")
-
-def set_bio(update: Update, context: CallbackContext) -> int:
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    profile = user.get("profile", {})
-    bio = update.message.text.strip()
-    if len(bio) > MAX_PROFILE_LENGTH:
-        safe_reply(update, f"⚠️ Bio must be under {MAX_PROFILE_LENGTH} characters.")
-        return BIO
-    is_safe, keyword = is_safe_message(bio)
-    if not is_safe:
-        if keyword not in ["banned_word", "url"]:
-            issue_keyword_violation(user_id, keyword, update, context)
-            return BIO
-        safe_reply(update, "⚠️ Bio contains inappropriate content. Please try again.")
-        return BIO
-    profile["bio"] = bio
-    update_user(user_id, {
-        "profile": profile,
-        "consent": user.get("consent", False),
-        "verified": user.get("verified", False),
-        "created_at": user.get("created_at", int(time.time()))
-    })
-    safe_reply(update, f"📝 Bio set to: *{bio}*! 🎉")
-    return settings(update, context)
-
-def set_tags(update: Update, context: CallbackContext) -> int:
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    profile = user.get("profile", {})
-    tags_input = update.message.text.strip().lower().split(",")
-    tags = [tag.strip() for tag in tags_input if tag.strip()]
-    if len(tags) > 5:
-        safe_reply(update, "⚠️ You can only set up to 5 tags.")
-        return TAGS
-    invalid_tags = [tag for tag in tags if tag not in ALLOWED_TAGS]
-    if invalid_tags:
-        safe_reply(update, f"⚠️ Invalid tags: {', '.join(invalid_tags)}. Choose from: {', '.join(ALLOWED_TAGS)}.")
-        return TAGS
-    profile["tags"] = tags
-    update_user(user_id, {
-        "profile": profile,
-        "consent": user.get("consent", False),
-        "verified": user.get("verified", False),
-        "created_at": user.get("created_at", int(time.time()))
-    })
-    safe_reply(update, f"🏷️ Tags set to: *{', '.join(tags)}*! 🎉")
-    return settings(update, context)
 
 def rematch(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
@@ -2005,32 +1504,175 @@ def rematch(update: Update, context: CallbackContext) -> None:
         return
     user = get_user(user_id)
     logger.debug(f"User {user_id} before rematch: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
-    if not (is_premium(user_id) or has_premium_feature(user_id, "instant_rematch")):
-        safe_reply(update, "🔄 *Instant Rematch* is a premium feature. Use /premium to unlock!")
+    if not has_premium_feature(user_id, "instant_rematch"):
+        safe_reply(update, "🔄 *Rematch* is a premium feature. Buy it with /premium!")
         return
     partners = user.get("profile", {}).get("past_partners", [])
     if not partners:
         safe_reply(update, "❌ No past partners to rematch with.")
         return
-    partner_id = partners[-1]
-    if partner_id in user_pairs:
-        safe_reply(update, "❌ Your previous partner is currently in another chat.")
+    keyboard = []
+    for partner_id in partners[-5:]:  # Limit to last 5 partners
+        partner_data = get_user(partner_id)
+        if partner_data:
+            partner_name = partner_data.get("profile", {}).get("name", "Anonymous")
+            keyboard.append([InlineKeyboardButton(f"Reconnect with {partner_name}", callback_data=f"rematch_request_{partner_id}")])
+    if not keyboard:
+        safe_reply(update, "❌ No available past partners to rematch with.")
         return
-    if partner_id in waiting_users:
-        waiting_users.remove(partner_id)
-    user_pairs[user_id] = partner_id
-    user_pairs[partner_id] = user_id
-    safe_reply(update, "🔄 *Reconnected!* Start chatting! 🗣️")
-    safe_bot_send_message(context.bot, partner_id, "🔄 *Reconnected!* Start chatting! 🗣️")
-    logger.info(f"User {user_id} rematched with {partner_id}")
-    if is_premium(user_id) or has_premium_feature(user_id, "vaulted_chats"):
-        chat_histories[user_id] = chat_histories.get(user_id, [])
-    if is_premium(partner_id) or has_premium_feature(partner_id, "vaulted_chats"):
-        chat_histories[partner_id] = chat_histories.get(partner_id, [])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    safe_reply(update, "🔄 *Choose a Past Partner to Rematch* 🔄", reply_markup=reply_markup)
     updated_user = get_user(user_id)
     logger.debug(f"User {user_id} after rematch: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
 
-def delete_profile(update: Update, context: CallbackContext) -> None:
+def button(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    data = query.data
+
+    if data == "start_chat":
+        start(update, context)
+    elif data == "next_chat":
+        next_chat(update, context)
+    elif data == "stop_chat":
+        stop(update, context)
+    elif data == "settings_menu":
+        settings(update, context)
+    elif data == "premium_menu":
+        premium(update, context)
+    elif data == "history_menu":
+        history(update, context)
+    elif data == "report_user":
+        report(update, context)
+    elif data == "rematch_partner":
+        rematch(update, context)
+    elif data == "delete_profile":
+        delete_profile(update, context)
+    elif data.startswith("buy_"):
+        buy_premium(update, context)
+    elif data.startswith("mood_"):
+        set_mood(update, context)
+    elif data.startswith("rematch_request_"):
+        partner_id = int(data.split("_")[-1])
+        if is_banned(user_id):
+            safe_reply(update, "🚫 You are banned and cannot send rematch requests.")
+            return
+        user = get_user(user_id)
+        if user_id in user_pairs:
+            safe_reply(update, "❓ You're already in a chat. Use /stop to end it first.")
+            return
+        partner_data = get_user(partner_id)
+        if not partner_data:
+            safe_reply(update, "❌ This user is no longer available.")
+            return
+        if partner_id in user_pairs:
+            safe_reply(update, "❌ This user is currently in another chat.")
+            return
+        keyboard = [
+            [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{user_id}"),
+             InlineKeyboardButton("❌ Decline", callback_data="rematch_decline")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        user_profile = user.get("profile", {})
+        request_message = (
+            f"🔄 *Rematch Request* 🔄\n\n"
+            f"A user wants to reconnect with you!\n"
+            f"🧑 *Name*: {user_profile.get('name', 'Anonymous')}\n"
+            f"🎂 *Age*: {user_profile.get('age', 'Not set')}\n"
+            f"👤 *Gender*: {user_profile.get('gender', 'Not set')}\n"
+            f"📍 *Location*: {user_profile.get('location', 'Not set')}\n\n"
+            f"Would you like to chat again?"
+        )
+        try:
+            message = context.bot.send_message(
+                chat_id=partner_id,
+                text=escape_markdown_v2(request_message),
+                parse_mode="MarkdownV2",
+                reply_markup=reply_markup
+            )
+            safe_reply(update, "📩 Rematch request sent. Waiting for their response...")
+            context.bot_data["rematch_requests"] = context.bot_data.get("rematch_requests", {})
+            context.bot_data["rematch_requests"][partner_id] = {
+                "requester_id": user_id,
+                "timestamp": int(time.time()),
+                "message_id": message.message_id
+            }
+            logger.info(f"User {user_id} sent rematch request to {partner_id}")
+        except telegram.error.TelegramError as e:
+            safe_reply(update, "❌ Unable to reach this user. They may be offline.")
+            logger.warning(f"Failed to send rematch request to {partner_id}: {e}")
+    elif data.startswith("rematch_accept_"):
+        requester_id = int(data.split("_")[-1])
+        if is_banned(user_id):
+            safe_reply(update, "🚫 You are banned and cannot accept rematch requests.")
+            return
+        if user_id in user_pairs:
+            safe_reply(update, "❓ You're already in a chat. Use /stop to end it first.")
+            return
+        if requester_id in user_pairs:
+            safe_reply(update, "❌ This user is now in another chat.")
+            return
+        if user_id in waiting_users:
+            waiting_users.remove(user_id)
+        user_pairs[user_id] = requester_id
+        user_pairs[requester_id] = user_id
+        safe_reply(update, "✅ *Reconnected!* Start chatting! 🗣️")
+        safe_bot_send_message(context.bot, requester_id, "✅ *Reconnected!* Start chatting! 🗣️")
+        logger.info(f"User {user_id} accepted rematch with {requester_id}")
+        if has_premium_feature(user_id, "vaulted_chats"):
+            chat_histories[user_id] = chat_histories.get(user_id, [])
+        if has_premium_feature(requester_id, "vaulted_chats"):
+            chat_histories[requester_id] = chat_histories.get(requester_id, [])
+        # Delete the rematch request message
+        rematch_data = context.bot_data.get("rematch_requests", {}).get(user_id)
+        if rematch_data and rematch_data.get("message_id"):
+            try:
+                context.bot.delete_message(chat_id=user_id, message_id=rematch_data["message_id"])
+                logger.info(f"Deleted rematch request message for user {user_id}")
+            except telegram.error.TelegramError as e:
+                logger.warning(f"Failed to delete rematch request message for {user_id}: {e}")
+            context.bot_data["rematch_requests"].pop(user_id, None)
+    elif data == "rematch_decline":
+        rematch_data = context.bot_data.get("rematch_requests", {}).get(user_id)
+        if rematch_data:
+            requester_id = rematch_data.get("requester_id")
+            safe_reply(update, "❌ Rematch request declined.")
+            safe_bot_send_message(context.bot, requester_id, "❌ Your rematch request was declined.")
+            logger.info(f"User {user_id} declined rematch with {requester_id}")
+            # Delete the rematch request message
+            if rematch_data.get("message_id"):
+                try:
+                    context.bot.delete_message(chat_id=user_id, message_id=rematch_data["message_id"])
+                    logger.info(f"Deleted rematch request message for user {user_id}")
+                except telegram.error.TelegramError as e:
+                    logger.warning(f"Failed to delete rematch request message for {user_id}: {e}")
+                context.bot_data["rematch_requests"].pop(user_id, None)
+    elif data.startswith("emoji_"):
+        verify_emoji(update, context)
+    elif data.startswith("consent_"):
+        consent_handler(update, context)
+    elif data.startswith("gender_"):
+        set_gender(update, context)
+    elif data.startswith("set_"):
+        handle_settings_buttons(update, context)
+
+def cleanup_rematch_requests(context: CallbackContext) -> None:
+    current_time = int(time.time())
+    rematch_requests = context.bot_data.get("rematch_requests", {})
+    for user_id, data in list(rematch_requests.items()):
+        if current_time - data["timestamp"] > 24 * 3600:  # 24 hours timeout
+            try:
+                context.bot.delete_message(chat_id=user_id, message_id=data["message_id"])
+                logger.info(f"Deleted timed-out rematch request message for user {user_id}")
+            except telegram.error.TelegramError as e:
+                logger.warning(f"Failed to delete timed-out rematch request for {user_id}: {e}")
+            requester_id = data.get("requester_id")
+            safe_bot_send_message(context.bot, requester_id, "⏳ Your rematch request timed out.")
+            rematch_requests.pop(user_id, None)
+    context.bot_data["rematch_requests"] = rematch_requests
+
+def message_handler(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
         user = get_user(user_id)
@@ -2038,18 +1680,172 @@ def delete_profile(update: Update, context: CallbackContext) -> None:
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
         safe_reply(update, ban_msg)
         return
-    user = get_user(user_id)
-    logger.debug(f"User {user_id} before delete_profile: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
-    if user_id in user_pairs:
+    if not check_message_rate_limit(user_id):
+        safe_reply(update, "⏳ You're sending messages too fast. Please wait a moment.")
+        return
+    text = update.message.text.strip()
+    is_safe, reason = is_safe_message(text)
+    if not is_safe:
+        violation_result = issue_keyword_violation(user_id, reason, update, context)
+        logger.warning(f"User {user_id} sent unsafe message: {text[:50]}... Result: {violation_result}")
+        return
+    if user_id not in user_pairs:
+        safe_reply(update, "❓ You're not in a chat. Use /start to find a partner.")
+        return
+    partner_id = user_pairs[user_id]
+    formatted_message = f"*Stranger*: {text}"
+    if has_premium_feature(user_id, "flare_messages"):
+        formatted_message = f"✨ *Stranger*: {text} ✨"
+    try:
+        safe_bot_send_message(context.bot, partner_id, formatted_message)
+        if has_premium_feature(user_id, "vaulted_chats"):
+            chat_histories[user_id].append(f"You: {text}")
+        if has_premium_feature(partner_id, "vaulted_chats"):
+            chat_histories[partner_id].append(f"Stranger: {text}")
+        logger.info(f"Message from {user_id} to {partner_id}: {text[:50]}...")
+    except telegram.error.TelegramError as e:
+        safe_reply(update, "❌ Failed to send message. Your partner may have disconnected.")
+        logger.error(f"Failed to send message from {user_id} to {partner_id}: {e}")
         stop(update, context)
+
+def report(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if is_banned(user_id):
+        user = get_user(user_id)
+        ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
+                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
+        safe_reply(update, ban_msg)
+        return
+    if user_id not in user_pairs:
+        safe_reply(update, "❓ You're not in a chat. Use /start to begin.")
+        return
+    partner_id = user_pairs[user_id]
+    conn = get_db_connection()
+    if not conn:
+        safe_reply(update, "❌ Internal error. Please try again later.")
+        return
+    try:
+        with conn.cursor() as c:
+            c.execute(
+                "INSERT INTO reports (reporter_id, reported_id, timestamp, reason, reporter_profile, reported_profile) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (
+                    user_id,
+                    partner_id,
+                    int(time.time()),
+                    "User reported inappropriate behavior",
+                    json.dumps(get_user(user_id).get("profile", {})),
+                    json.dumps(get_user(partner_id).get("profile", {}))
+                )
+            )
+            c.execute(
+                "SELECT COUNT(*) FROM reports WHERE reported_id = %s AND timestamp > %s",
+                (partner_id, int(time.time()) - 24 * 3600)
+            )
+            report_count = c.fetchone()[0]
+            conn.commit()
+            safe_reply(update, "🚨 Report submitted. Our team will review it.")
+            if report_count >= REPORT_THRESHOLD:
+                ban_expiry = int(time.time()) + TEMP_BAN_DURATION
+                update_user(partner_id, {"ban_type": "temporary", "ban_expiry": ban_expiry})
+                safe_bot_send_message(context.bot, partner_id, f"🚫 You've been temporarily banned for 24 hours due to multiple reports.")
+                logger.info(f"User {partner_id} banned temporarily due to {report_count} reports.")
+                stop(update, context)
+            logger.info(f"User {user_id} reported {partner_id}.")
+    except Exception as e:
+        logger.error(f"Failed to process report from {user_id} against {partner_id}: {e}")
+        safe_reply(update, "❌ Error submitting report. Please try again.")
+    finally:
+        release_db_connection(conn)
+
+def settings(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if is_banned(user_id):
+        user = get_user(user_id)
+        ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
+                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
+        safe_reply(update, ban_msg)
+        return
+    keyboard = [
+        [InlineKeyboardButton("🧑 Update Name", callback_data="set_name"),
+         InlineKeyboardButton("🎂 Update Age", callback_data="set_age")],
+        [InlineKeyboardButton("👤 Update Gender", callback_data="set_gender"),
+         InlineKeyboardButton("📍 Update Location", callback_data="set_location")],
+        [InlineKeyboardButton("🏷️ Set Tags", callback_data="set_tags")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    safe_reply(update, "⚙️ *Settings Menu* ⚙️\n\nUpdate your profile below:", reply_markup=reply_markup)
+
+def handle_settings_buttons(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    data = query.data
+    if data == "set_name":
+        safe_reply(update, "🧑 Please enter your new name:")
+        return NAME
+    elif data == "set_age":
+        safe_reply(update, "🎂 Please enter your new age (e.g., 25):")
+        return AGE
+    elif data == "set_gender":
+        keyboard = [
+            [
+                InlineKeyboardButton("👨 Male", callback_data="gender_male"),
+                InlineKeyboardButton("👩 Female", callback_data="gender_female"),
+                InlineKeyboardButton("🌈 Other", callback_data="gender_other")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        safe_reply(update, "👤 *Set Your Gender* 👤\n\nChoose your gender below:", reply_markup=reply_markup)
+        return GENDER
+    elif data == "set_location":
+        safe_reply(update, "📍 Please enter your new location (e.g., New York):")
+        return LOCATION
+    elif data == "set_tags":
+        safe_reply(update, f"🏷️ Enter your interest tags (e.g., music, gaming). Available tags: {', '.join(ALLOWED_TAGS)}")
+        return TAGS
+    return ConversationHandler.END
+
+def set_tags(update: Update, context: CallbackContext) -> int:
+    user_id = update.effective_user.id
+    user = get_user(user_id)
+    profile = user.get("profile", {})
+    tags_input = update.message.text.strip().lower().split()
+    tags = [tag for tag in tags_input if tag in ALLOWED_TAGS]
+    if not tags:
+        safe_reply(update, f"⚠️ No valid tags provided. Available tags: {', '.join(ALLOWED_TAGS)}")
+        return TAGS
+    profile["tags"] = tags[:5]  # Limit to 5 tags
+    update_user(user_id, {
+        "profile": profile,
+        "consent": user.get("consent", False),
+        "verified": user.get("verified", False),
+        "premium_expiry": user.get("premium_expiry"),
+        "premium_features": user.get("premium_features", {}),
+        "created_at": user.get("created_at", int(time.time()))
+    })
+    safe_reply(update, f"🏷️ Tags set to: *{', '.join(tags)}*!")
+    return ConversationHandler.END
+
+def delete_profile(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id in user_pairs:
+        partner_id = user_pairs[user_id]
+        del user_pairs[user_id]
+        del user_pairs[partner_id]
+        safe_bot_send_message(context.bot, partner_id, "👋 Your partner has deleted their profile.")
+    if user_id in waiting_users:
+        waiting_users.remove(user_id)
     delete_user(user_id)
-    safe_reply(update, "🗑️ Your profile and data have been deleted. Use /start to create a new profile.")
+    if user_id in chat_histories:
+        del chat_histories[user_id]
+    safe_reply(update, "🗑️ Your profile has been deleted. Use /start to create a new one.")
     logger.info(f"User {user_id} deleted their profile.")
 
 def admin_access(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
+        safe_reply(update, "🔐 Unauthorized.")
         logger.info(f"Unauthorized access attempt by user_id={user_id}")
         return
     access_text = (
@@ -2067,11 +1863,12 @@ def admin_access(update: Update, context: CallbackContext) -> None:
         "• /admin_unban <user_id> - Unban a user\n"
         "• /admin_violations - List recent keyword violations\n"
         "━━━━━\n\n"
-        "📊 *Reports & Info*\n"
+        "📊 *Reports & Stats*\n"
         "• /admin_reports - List reported users\n"
         "• /admin_clear_reports <user_id> - Clear reports\n"
+        "• /admin_stats - View bot statistics\n"
         "━━━━━\n\n"
-        "📬 *Broadcast*\n"
+        "📢 *Broadcast*\n"
         "• /admin_broadcast <message> - Send message to all users\n"
     )
     safe_reply(update, access_text)
@@ -2079,7 +1876,7 @@ def admin_access(update: Update, context: CallbackContext) -> None:
 def admin_delete(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
+        safe_reply(update, "🔐 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
@@ -2092,7 +1889,7 @@ def admin_delete(update: Update, context: CallbackContext) -> None:
 def admin_premium(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
+        safe_reply(update, "🔐 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
@@ -2136,7 +1933,7 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
 def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
+        safe_reply(update, "🔐 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
@@ -2152,8 +1949,8 @@ def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
             "ban_expiry": user.get("ban_expiry"),
             "created_at": user.get("created_at", int(time.time()))
         })
-        safe_reply(update, f"🌟 Premium status revoked for user *{target_id}*.")
-        safe_bot_send_message(context.bot, target_id, "❌ Your Premium status has been revoked.")
+        safe_reply(update, f"❌ Premium status revoked for user *{target_id}*.")
+        safe_bot_send_message(context.bot, target_id, "🔌 Your Premium status has been revoked.")
         updated_user = get_user(target_id)
         logger.info(f"Admin {user_id} revoked premium for {target_id}.")
         logger.debug(f"User {target_id} after revoke_premium: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
@@ -2163,7 +1960,7 @@ def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
 def admin_ban(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
+        safe_reply(update, "🔐 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
@@ -2209,7 +2006,7 @@ def admin_ban(update: Update, context: CallbackContext) -> None:
 def admin_unban(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
+        safe_reply(update, "🔐 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
@@ -2236,8 +2033,8 @@ def admin_unban(update: Update, context: CallbackContext) -> None:
                 logger.error(f"Error clearing keyword violations for {target_id}: {e}")
             finally:
                 release_db_connection(conn)
-        safe_reply(update, f"🔓 User *{target_id}* has been unbanned.")
-        safe_bot_send_message(context.bot, target_id, "🔓 You have been unbanned. Use /start to begin.")
+        safe_reply(update, f"✅ User *{target_id}* has been unbanned.")
+        safe_bot_send_message(context.bot, target_id, "✅ You have been unbanned. Use /start to begin.")
         updated_user = get_user(target_id)
         logger.info(f"Admin {user_id} unbanned user {target_id}.")
         logger.debug(f"User {target_id} after admin_unban: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
@@ -2247,7 +2044,7 @@ def admin_unban(update: Update, context: CallbackContext) -> None:
 def admin_violations(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
+        safe_reply(update, "🔐 Unauthorized.")
         return
     conn = get_db_connection()
     if not conn:
@@ -2261,9 +2058,9 @@ def admin_violations(update: Update, context: CallbackContext) -> None:
             )
             violations = c.fetchall()
             if not violations:
-                safe_reply(update, "✅ No recent keyword violations.")
+                safe_reply(update, "📜 No recent keyword violations.")
                 return
-            violation_text = "🔍 *Recent Keyword Violations* 🔍\n\n"
+            violation_text = "🚨 *Recent Keyword Violations* 🚨\n\n"
             for v in violations:
                 user_id, count, keyword, last_violation, ban_type, ban_expiry = v
                 ban_status = (
@@ -2274,10 +2071,10 @@ def admin_violations(update: Update, context: CallbackContext) -> None:
                 violation_text += (
                     f"👤 User ID: *{user_id}*\n"
                     f"⚠️ Violations: *{count}*\n"
-                    f"🔑 Keyword: *{keyword}*\n"
+                    f"🔍 Keyword: *{keyword}*\n"
                     f"📅 Last: *{last_violation.strftime('%Y-%m-%d %H:%M')}*\n"
                     f"🚫 Ban: *{ban_status}*\n"
-                    "━━━━━━━━━━━\n"
+                    "━━━━━\n"
                 )
             safe_reply(update, violation_text)
     except Exception as e:
@@ -2289,7 +2086,7 @@ def admin_violations(update: Update, context: CallbackContext) -> None:
 def admin_userslist(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
+        safe_reply(update, "🔐 Unauthorized.")
         return
     conn = get_db_connection()
     if not conn:
@@ -2300,9 +2097,9 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
             c.execute("SELECT user_id, created_at, premium_expiry, ban_type, verified, profile, premium_features FROM users ORDER BY user_id")
             users = c.fetchall()
             if not users:
-                safe_reply(update, "👤 No users found.")
+                safe_reply(update, "📜 No users found.")
                 return
-            message = "*All Users List* \\(Sorted by ID\\)\n\n"
+            message = "👥 *All Users List* \\(Sorted by ID\\)\n\n"
             user_count = 0
             for user in users:
                 user_id, created_at, premium_expiry, ban_type, verified, profile_json, premium_features_json = user
@@ -2330,14 +2127,14 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
                     f"🌟 *Premium*: {premium_status}\n"
                     f"🚫 *Ban*: {ban_status}\n"
                     f"✅ *Verified*: {verified_status}\n"
-                    f"──────────\n"
+                    f"━━━━━\n"
                 )
                 user_count += 1
                 if len(message.encode('utf-8')) > 4000:  # Telegram's limit is 4096, leave buffer
                     safe_reply(update, message)
                     message = ""
             if message:
-                message += f"👥 *Total Users*: {user_count}\n"
+                message += f"🧑‍🤝‍🧑 *Total Users*: {user_count}\n"
                 safe_reply(update, message)
             logger.info(f"Admin {user_id} requested users list with {user_count} users.")
             logger.debug(f"Users list generated with {user_count} users.")
@@ -2350,7 +2147,7 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
 def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
+        safe_reply(update, "🔐 Unauthorized.")
         return
     conn = get_db_connection()
     if not conn:
@@ -2370,10 +2167,10 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
             users = c.fetchall()
             logger.debug(f"Query returned {len(users)} premium users")
             if not users:
-                safe_reply(update, "🌟 No premium users found.")
+                safe_reply(update, "📜 No premium users found.")
                 logger.debug("No premium users found in database")
                 return
-            message = "*Premium Users List* \\(Sorted by Expiry\\)\n\n"
+            message = "🌟 *Premium Users List* \\(Sorted by Expiry\\)\n\n"
             user_count = 0
             for user in users:
                 user_id, premium_expiry, premium_features_json, profile_json = user
@@ -2398,7 +2195,7 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
                     f"🧑 *Name*: {name}\n"
                     f"📅 *Premium Until*: {expiry_date}\n"
                     f"✨ *Features*: {features_str}\n"
-                    f"──────────\n"
+                    f"━━━━━\n"
                 )
                 user_count += 1
                 if len(message.encode('utf-8')) > 4000:
@@ -2418,13 +2215,13 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
 def admin_info(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
+        safe_reply(update, "🔐 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
         user = get_user(target_id)
         if not user:
-            safe_reply(update, "👤 User not found.")
+            safe_reply(update, "❌ User not found.")
             return
         profile = user.get("profile", {})
         consent = "Yes" if user.get("consent") else "No"
@@ -2463,14 +2260,11 @@ def admin_info(update: Update, context: CallbackContext) -> None:
             f"👤 *User Info: {target_id}*\n\n"
             f"🧑 *Name*: {profile.get('name', 'Not set')}\n"
             f"🎂 *Age*: {profile.get('age', 'Not set')}\n"
-            f"👤 *Gender*: {profile.get('gender', 'Not set')}\n"
+            f"👥 *Gender*: {profile.get('gender', 'Not set')}\n"
             f"📍 *Location*: {profile.get('location', 'Not set')}\n"
-            f"📝 *Bio*: {profile.get('bio', 'Not set')}\n"
-            f"🏷️ *Tags*: {', '.join(profile.get('tags', [])) or 'None'}\n"
-            f"❤️ *Gender Pref*: {profile.get('gender_preference', 'Any')}\n"
-            f"😊 *Mood*: {profile.get('mood', 'Not set')}\n"
-            f"✅ *Consent*: {consent}\n"
-            f"🔒 *Verified*: {verified}\n"
+            f"📝 *Tags*: {', '.join(profile.get('tags', [])) or 'None'}\n"
+            f"🔐 *Consent*: {consent}\n"
+            f"✅ *Verified*: {verified}\n"
             f"🌟 *Premium*: {premium_status}\n"
             f"✨ *Features*: {features}\n"
             f"🚫 *Ban*: {ban_info}\n"
@@ -2484,7 +2278,7 @@ def admin_info(update: Update, context: CallbackContext) -> None:
 def admin_reports(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
+        safe_reply(update, "🔐 Unauthorized.")
         return
     conn = get_db_connection()
     if not conn:
@@ -2495,11 +2289,11 @@ def admin_reports(update: Update, context: CallbackContext) -> None:
             c.execute("SELECT reported_id, COUNT(*) as count FROM reports GROUP BY reported_id ORDER BY count DESC LIMIT 20")
             reports = c.fetchall()
             if not reports:
-                safe_reply(update, "📊 No reports found.")
+                safe_reply(update, "📜 No reports found.")
                 return
-            message = "📊 *Reported Users* (Top 20)\n\n"
+            message = "🚨 *Reported Users* \\(Top 20\\)\n\n"
             for reported_id, count in reports:
-                message += f"👤 {reported_id} | Reports: {count}\n"
+                message += f"👤 {reported_id} | Reports: *{count}*\n"
             safe_reply(update, message)
     except Exception as e:
         logger.error(f"Failed to list reports: {e}")
@@ -2510,7 +2304,7 @@ def admin_reports(update: Update, context: CallbackContext) -> None:
 def admin_clear_reports(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
+        safe_reply(update, "🔐 Unauthorized.")
         return
     try:
         target_id = int(context.args[0])
@@ -2522,7 +2316,7 @@ def admin_clear_reports(update: Update, context: CallbackContext) -> None:
             with conn.cursor() as c:
                 c.execute("DELETE FROM reports WHERE reported_id = %s", (target_id,))
                 conn.commit()
-                safe_reply(update, f"📊 Reports cleared for user *{target_id}*.")
+                safe_reply(update, f"🗑️ Reports cleared for user *{target_id}*.")
                 logger.info(f"Admin {user_id} cleared reports for {target_id}.")
         finally:
             release_db_connection(conn)
@@ -2532,7 +2326,7 @@ def admin_clear_reports(update: Update, context: CallbackContext) -> None:
 def admin_broadcast(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized.")
+        safe_reply(update, "🔐 Unauthorized.")
         return
     if not context.args:
         safe_reply(update, "⚠️ Usage: /admin_broadcast <message>")
@@ -2553,7 +2347,7 @@ def admin_broadcast(update: Update, context: CallbackContext) -> None:
                     sent_count += 1
                 except Exception as e:
                     logger.warning(f"Failed to send broadcast to {uid}: {e}")
-            safe_reply(update, f"📬 Broadcast sent to {sent_count} users.")
+            safe_reply(update, f"📢 Broadcast sent to *{sent_count}* users.")
             logger.info(f"Admin {user_id} sent broadcast to {sent_count} users.")
     except Exception as e:
         logger.error(f"Failed to send broadcast: {e}")
@@ -2561,25 +2355,56 @@ def admin_broadcast(update: Update, context: CallbackContext) -> None:
     finally:
         release_db_connection(conn)
 
-def cancel(update: Update, context: CallbackContext) -> int:
+def admin_stats(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
-    safe_reply(update, "❌ Operation cancelled. Use /start to begin again.")
-    logger.info(f"User {user_id} cancelled operation.")
-    context.user_data.clear()
-    return ConversationHandler.END
-
-def error_handler(update: Update, context: CallbackContext) -> None:
-    logger.error(f"Update {update} caused error: {context.error}")
+    if user_id not in ADMIN_IDS:
+        safe_reply(update, "🔐 Unauthorized.")
+        return
+    conn = get_db_connection()
+    if not conn:
+        safe_reply(update, "❌ Database error.")
+        return
     try:
-        if update and (update.message or update.callback_query):
-            safe_reply(update, "❌ An error occurred. Please try again later.")
+        with conn.cursor() as c:
+            # Total users
+            c.execute("SELECT COUNT(*) FROM users")
+            total_users = c.fetchone()[0]
+            # Premium users
+            current_time = int(time.time())
+            c.execute(
+                "SELECT COUNT(*) FROM users WHERE premium_expiry IS NOT NULL AND premium_expiry > %s",
+                (current_time,)
+            )
+            premium_users = c.fetchone()[0]
+            # Banned users
+            c.execute(
+                "SELECT COUNT(*) FROM users WHERE ban_type IS NOT NULL AND (ban_type = 'permanent' OR (ban_type = 'temporary' AND ban_expiry > %s))",
+                (current_time,)
+            )
+            banned_users = c.fetchone()[0]
+        # Active users (in user_pairs or waiting_users)
+        active_users = len(set(user_pairs.keys()).union(waiting_users))
+        stats_message = (
+            "📊 *Bot Statistics* 📊\n\n"
+            f"🧑‍🤝‍🧑 *Total Users*: *{total_users}*\n"
+            f"🌟 *Premium Users*: *{premium_users}*\n"
+            f"💬 *Active Users*: *{active_users}* \\(in chats or waiting\\)\n"
+            f"🚫 *Banned Users*: *{banned_users}*\n"
+            f"━━━━━━━━━━━\n"
+            f"📅 *Updated*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        safe_reply(update, stats_message)
+        logger.info(f"Admin {user_id} requested bot statistics: total={total_users}, premium={premium_users}, active={active_users}, banned={banned_users}")
     except Exception as e:
-        logger.error(f"Failed to send error message: {e}")
+        logger.error(f"Error fetching bot statistics: {e}")
+        safe_reply(update, "❌ Error retrieving statistics.")
+    finally:
+        release_db_connection(conn)
 
 def main() -> None:
-    token = os.getenv("TOKEN")
+    token = os.getenv("BOT_TOKEN")
     if not token:
-        logger.error("TOKEN not set.")
+        logger.error("BOT_TOKEN not set.")
         exit(1)
 
     updater = Updater(token, use_context=True)
@@ -2607,10 +2432,6 @@ def main() -> None:
                 MessageHandler(Filters.text & ~Filters.command, set_location),
                 CallbackQueryHandler(button)
             ],
-            BIO: [
-                MessageHandler(Filters.text & ~Filters.command, set_bio),
-                CallbackQueryHandler(button)
-            ],
             CONSENT: [
                 CallbackQueryHandler(consent_handler)
             ],
@@ -2632,20 +2453,19 @@ def main() -> None:
     dp.add_handler(conv_handler)
     dp.add_handler(CommandHandler("stop", stop))
     dp.add_handler(CommandHandler("next", next_chat))
-    dp.add_handler(CommandHandler("help", help_command))
+    dp.add833    dp.add_handler(CommandHandler("help", help_command))
     dp.add_handler(CommandHandler("premium", premium))
     dp.add_handler(CommandHandler("shine", shine))
     dp.add_handler(CommandHandler("instant", instant))
     dp.add_handler(CommandHandler("mood", mood))
     dp.add_handler(CommandHandler("vault", vault))
-    dp.add_handler(CommandHandler("flare", flare))
     dp.add_handler(CommandHandler("history", history))
     dp.add_handler(CommandHandler("report", report))
     dp.add_handler(CommandHandler("deleteprofile", delete_profile))
     dp.add_handler(CallbackQueryHandler(button))
     dp.add_handler(PreCheckoutQueryHandler(pre_checkout))
     dp.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, message_handler))
 
     # Admin commands
     dp.add_handler(CommandHandler("admin", admin_access))
@@ -2673,6 +2493,8 @@ def main() -> None:
     dp.add_handler(CommandHandler("adminbroadcast", admin_broadcast))
     dp.add_handler(CommandHandler("admin_violations", admin_violations))
     dp.add_handler(CommandHandler("adminviolations", admin_violations))
+    dp.add_handler(CommandHandler("admin_stats", admin_stats))
+    dp.add_handler(CommandHandler("adminstats", admin_stats))
 
     # Error handler
     dp.add_error_handler(error_handler)
