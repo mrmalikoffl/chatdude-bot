@@ -442,7 +442,9 @@ def escape_markdown_v2(text: str) -> str:
 def safe_reply(update: Update, text: str, parse_mode: str = "MarkdownV2", **kwargs) -> None:
     try:
         if parse_mode == "MarkdownV2":
-            text = escape_markdown_v2(text)
+            escaped_text = escape_markdown_v2(text)
+            logger.debug(f"Escaped text for MarkdownV2: {escaped_text[:200]}")
+            text = escaped_text
         if update.message:
             update.message.reply_text(text, parse_mode=parse_mode, **kwargs)
         elif update.callback_query:
@@ -462,7 +464,9 @@ def safe_reply(update: Update, text: str, parse_mode: str = "MarkdownV2", **kwar
 def safe_bot_send_message(bot, chat_id: int, text: str, parse_mode: str = "MarkdownV2", **kwargs):
     try:
         if parse_mode == "MarkdownV2":
-            text = escape_markdown_v2(text)
+            escaped_text = escape_markdown_v2(text)
+            logger.debug(f"Escaped text for MarkdownV2: {escaped_text[:200]}")
+            text = escaped_text
         bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, **kwargs)
     except telegram.error.BadRequest as e:
         logger.warning(f"MarkdownV2 parsing failed for chat {chat_id}: {e}. Text: {text[:200]}")
@@ -470,7 +474,7 @@ def safe_bot_send_message(bot, chat_id: int, text: str, parse_mode: str = "Markd
         bot.send_message(chat_id=chat_id, text=clean_text, parse_mode=None, **kwargs)
     except Exception as e:
         logger.error(f"Failed to send message to {chat_id}: {e}")
-
+        
 def start(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     logger.info(f"Received /start command from user {user_id}")
@@ -1956,13 +1960,14 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
             premium_status = (
                 "Premium 💎" if (user.get("premium_expiry") and user["premium_expiry"] > time.time()) or has_active_features else "Not Premium 🌑"
             )
-            ban_status = user.get("ban_type", "None").capitalize()
+            ban_status = user.get("ban_type", "None")  # Default to "None" if not set
             verified_status = "Yes ✅" if user.get("verified", False) else "No ❌"
+            # Escape all dynamic content
             name = escape_markdown_v2(profile.get("name", "Not set"))
             user_id_str = escape_markdown_v2(str(user_id))
             created_date = escape_markdown_v2(created_date)
             premium_status = escape_markdown_v2(premium_status)
-            ban_status = escape_markdown_v2(ban_status)
+            ban_status = escape_markdown_v2(ban_status)  # Escape ban_status
             verified_status = escape_markdown_v2(verified_status)
             logger.debug(f"User {user_id}: name={name}, premium={premium_status}, ban={ban_status}, verified={verified_status}")
             message += (
@@ -1970,7 +1975,7 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
                 f" 🧑 *Name*: {name}\n"
                 f" 📅 *Created*: {created_date}\n"
                 f" 💎 *Premium*: {premium_status}\n"
-                f" 🚫 *Ban*: {ban_status}\n"
+                f" 🚫 *Ban*: {ban_status}\n"  # No .capitalize() needed due to default
                 f" ✅ *Verified*: {verified_status}\n"
                 "━━━━━━━━━━━━━━\n"
             )
@@ -2019,16 +2024,17 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
                 else "No expiry set"
             )
             logger.debug(f"User {user_id}: premium_expiry={premium_expiry} ({datetime.fromtimestamp(premium_expiry).strftime('%Y-%m-%d %H:%M:%S') if premium_expiry else 'None'}), expiry_date={expiry_date}")
-            name = profile.get("name", "Not set")
+            name = escape_markdown_v2(profile.get("name", "Not set"))  # Escape name
+            expiry_date = escape_markdown_v2(expiry_date)  # Escape expiry date
             active_features = [
                 k for k, v in premium_features.items()
                 if v is True or (isinstance(v, int) and v > current_time)
             ]
             if "instant_rematch_count" in premium_features and premium_features["instant_rematch_count"] > 0:
                 active_features.append(f"instant_rematch_count: {premium_features['instant_rematch_count']}")
-            features_str = ", ".join(active_features) or "None"
+            features_str = escape_markdown_v2(", ".join(active_features) or "None")  # Escape features
             message += (
-                f" 👤 *User ID*: {user_id}\n"
+                f" 👤 *User ID*: {escape_markdown_v2(str(user_id))}\n"  # Escape user_id
                 f" 🧑 *Name*: {name}\n"
                 f" ⏰ *Premium Until*: {expiry_date}\n"
                 f" ✨ *Features*: {features_str}\n"
