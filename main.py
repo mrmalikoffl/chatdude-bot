@@ -129,25 +129,18 @@ except Exception as e:
     logger.error(f"Failed to set up MongoDB: {e}")
     exit(1)
 
-def cleanup_in_memory(context: CallbackContext):
+def cleanup_in_memory():
+    logger.info(f"Cleaning up in-memory data. user_pairs size: {len(user_pairs)}, waiting_users size: {len(waiting_users)}")
     current_time = time.time()
-    command_timestamps.clear()
-    for user_id in list(message_timestamps.keys()):
-        message_timestamps[user_id] = [t for t in message_timestamps[user_id] if current_time - t < 60]
-        if not message_timestamps[user_id]:
-            del message_timestamps[user_id]
-    for user_id in list(chat_histories.keys()):
-        if not has_premium_feature(user_id, "vaulted_chats"):
-            del chat_histories[user_id]
-    try:
-        violations = get_db_collection("keyword_violations")
-        violations.delete_many({
-            "last_violation": {"$lt": int((datetime.now() - timedelta(hours=48)).timestamp())},
-            "count": {"$lt": 3}
-        })
-        logger.debug("In-memory and keyword violations cleaned up.")
-    except Exception as e:
-        logger.error(f"Error cleaning up keyword violations: {e}")
+    for user_id in list(user_pairs.keys()):
+        last_activity = user_activities.get(user_id, {}).get("last_activity", 0)
+        if current_time - last_activity > INACTIVITY_TIMEOUT:
+            partner_id = user_pairs.get(user_id)
+            if partner_id:
+                safe_send_message(user_id, "🛑 Chat ended due to inactivity.")
+                safe_send_message(partner_id, "🛑 Chat ended due to inactivity.")
+                remove_pair(user_id, partner_id)
+    logger.info(f"Cleanup complete. user_pairs size: {len(user_pairs)}, waiting_users size: {len(waiting_users)}")
 
 def cleanup_premium_features(user_id: int) -> bool:
     user = get_user(user_id)
