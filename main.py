@@ -1476,7 +1476,7 @@ def flare(update: Update, context: CallbackContext) -> None:
     updated_user = get_user(user_id)
     logger.debug(f"User {user_id} after flare: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
     
-    def button(update: Update, context: CallbackContext) -> None:
+def button(update: Update, context: CallbackContext) -> None:
     """Handle callback queries from inline buttons"""
     query = update.callback_query
     query.answer()
