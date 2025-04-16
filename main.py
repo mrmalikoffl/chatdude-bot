@@ -18,6 +18,7 @@ from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, OperationFailure  # Corrected import
 from queue import Queue
 from urllib.parse import urlparse
+import urllib.parse
 import json
 import re
 from collections import defaultdict
