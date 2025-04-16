@@ -2380,7 +2380,7 @@ def error_handler(update: Update, context: CallbackContext) -> None:
     except Exception as e:
         logger.error(f"Failed to send error message: {e}")
         
-        def main() -> None:
+def main() -> None:
     """Initialize and start the Telegram bot"""
     token = os.getenv("TOKEN")
     if not token:
