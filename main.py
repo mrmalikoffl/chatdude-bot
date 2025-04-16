@@ -1399,45 +1399,49 @@ def vault(update: Update, context: CallbackContext) -> None:
     safe_reply(update, "📜 Your current chat is being saved to the vault!")
 
 def history(update: Update, context: CallbackContext) -> None:
+    """Display chat history for premium users"""
     user_id = update.effective_user.id
     if is_banned(user_id):
         user = get_user(user_id)
-        ban_msg = " You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
-                  f" You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
+        ban_msg = "🚫 You are permanently banned 🔒. Contact support to appeal 📧." if user["ban_type"] == "permanent" else \
+                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
         safe_reply(update, ban_msg)
         return
     user = get_user(user_id)
     logger.debug(f"User {user_id} before history: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
     if not has_premium_feature(user_id, "vaulted_chats"):
-        safe_reply(update, " *Chat History* is a premium feature. Buy it with /premium!")
+        safe_reply(update, "📜 *Chat History* is a premium feature. Buy it with /premium! 🌟")
         return
     if user_id not in chat_histories or not chat_histories[user_id]:
-        safe_reply(update, " Your chat vault is empty.")
+        safe_reply(update, "📭 Your chat vault is empty 😔.")
         return
-    history_text = " *Your Chat History* \n\n"
+    history_text = "📜 *Your Chat History* 📜\n\n"
     for idx, msg in enumerate(chat_histories[user_id], 1):
         history_text += f"{idx}. {msg}\n"
     safe_reply(update, history_text)
     updated_user = get_user(user_id)
-    logger.debug(f"User {user_id} after history: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")def rematch(update: Update, context: CallbackContext) -> None:
+    logger.debug(f"User {user_id} after history: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
+
+def rematch(update: Update, context: CallbackContext) -> None:
+    """Initiate a rematch with past partners"""
     user_id = update.effective_user.id
     if is_banned(user_id):
         user = get_user(user_id)
-        ban_msg = " You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
-                  f" You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
+        ban_msg = "🚫 You are permanently banned 🔒. Contact support to appeal 📧." if user["ban_type"] == "permanent" else \
+                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
         safe_reply(update, ban_msg)
         return
     if not check_rate_limit(user_id):
-        safe_reply(update, f" Please wait {COMMAND_COOLDOWN} seconds before trying again.")
+        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again ⏰.")
         return
     user = get_user(user_id)
     logger.debug(f"User {user_id} before rematch: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
     if not has_premium_feature(user_id, "instant_rematch"):
-        safe_reply(update, " *Rematch* is a premium feature. Buy it with /premium!")
+        safe_reply(update, "🔄 *Rematch* is a premium feature. Buy it with /premium! 🌟")
         return
     partners = user.get("profile", {}).get("past_partners", [])
     if not partners:
-        safe_reply(update, " No past partners to rematch with.")
+        safe_reply(update, "❌ No past partners to rematch with 😔.")
         return
     keyboard = []
     for partner_id in partners[-5:]:  # Limit to last 5 partners
@@ -1446,158 +1450,164 @@ def history(update: Update, context: CallbackContext) -> None:
             partner_name = partner_data.get("profile", {}).get("name", "Anonymous")
             keyboard.append([InlineKeyboardButton(f"Reconnect with {partner_name}", callback_data=f"rematch_request_{partner_id}")])
     if not keyboard:
-        safe_reply(update, " No available past partners to rematch with.")
+        safe_reply(update, "❌ No available past partners to rematch with 😔.")
         return
     reply_markup = InlineKeyboardMarkup(keyboard)
-    safe_reply(update, " *Choose a Past Partner to Rematch* ", reply_markup=reply_markup)
+    safe_reply(update, "🔄 *Choose a Past Partner to Rematch* 🔄", reply_markup=reply_markup)
     updated_user = get_user(user_id)
-    logger.debug(f"User {user_id} after rematch: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")def flare(update: Update, context: CallbackContext) -> None:
+    logger.debug(f"User {user_id} after rematch: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
+
+def flare(update: Update, context: CallbackContext) -> None:
+    """Activate flare messages for premium users"""
     user_id = update.effective_user.id
     if is_banned(user_id):
         user = get_user(user_id)
-        ban_msg = " You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
-                  f" You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
+        ban_msg = "🚫 You are permanently banned 🔒. Contact support to appeal 📧." if user["ban_type"] == "permanent" else \
+                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
         safe_reply(update, ban_msg)
         return
     user = get_user(user_id)
     logger.debug(f"User {user_id} before flare: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
     if not has_premium_feature(user_id, "flare_messages"):
-        safe_reply(update, " *Flare Messages* is a premium feature. Buy it with /premium!")
+        safe_reply(update, "🌟 *Flare Messages* is a premium feature. Buy it with /premium! 🌟")
         return
-    safe_reply(update, " Your messages are sparkling with *Flare*! Keep chatting to show it off! ")
-    logger.info(f"User {user_id} activated Flare Messages.")
+    safe_reply(update, "✨ Your messages are sparkling with *Flare*! Keep chatting to show it off! 🌟")
+    logger.info(f"User {user_id} activated Flare Messages 🎉")
     updated_user = get_user(user_id)
-    logger.debug(f"User {user_id} after flare: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")def button(update: Update, context: CallbackContext) -> None:
+    logger.debug(f"User {user_id} after flare: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
+    
+    def button(update: Update, context: CallbackContext) -> None:
+    """Handle callback queries from inline buttons"""
     query = update.callback_query
     query.answer()
     user_id = query.from_user.id
     data = query.data
 
-if data == "start_chat":
-    start(update, context)
-elif data == "next_chat":
-    next_chat(update, context)
-elif data == "stop_chat":
-    stop(update, context)
-elif data == "settings_menu":
-    settings(update, context)
-elif data == "premium_menu":
-    premium(update, context)
-elif data == "history_menu":
-    history(update, context)
-elif data == "report_user":
-    report(update, context)
-elif data == "rematch_partner":
-    rematch(update, context)
-elif data == "delete_profile":
-    delete_profile(update, context)
-elif data.startswith("buy_"):
-    buy_premium(update, context)
-elif data.startswith("mood_"):
-    set_mood(update, context)
-elif data.startswith("rematch_request_"):
-    partner_id = int(data.split("_")[-1])
-    if is_banned(user_id):
-        safe_reply(update, "🚫 You are banned and cannot send rematch requests.")
-        return
-    user = get_user(user_id)
-    if user_id in user_pairs:
-        safe_reply(update, "❓ You're already in a chat. Use /stop to end it first.")
-        return
-    partner_data = get_user(partner_id)
-    if not partner_data:
-        safe_reply(update, "❌ This user is no longer available.")
-        return
-    if partner_id in user_pairs:
-        safe_reply(update, "❌ This user is currently in another chat.")
-        return
-    keyboard = [
-        [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{user_id}"),
-         InlineKeyboardButton("❌ Decline", callback_data="rematch_decline")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    user_profile = user.get("profile", {})
-    request_message = (
-        f"🔄 *Rematch Request* 🔄\n\n"
-        f"A user wants to reconnect with you!\n"
-        f"🧑 *Name*: {user_profile.get('name', 'Anonymous')}\n"
-        f"🎂 *Age*: {user_profile.get('age', 'Not set')}\n"
-        f"👤 *Gender*: {user_profile.get('gender', 'Not set')}\n"
-        f"📍 *Location*: {user_profile.get('location', 'Not set')}\n\n"
-        f"Would you like to chat again?"
-    )
-    try:
-        message = context.bot.send_message(
-            chat_id=partner_id,
-            text=escape_markdown_v2(request_message),
-            parse_mode="MarkdownV2",
-            reply_markup=reply_markup
+    if data == "start_chat":
+        start(update, context)
+    elif data == "next_chat":
+        next_chat(update, context)
+    elif data == "stop_chat":
+        stop(update, context)
+    elif data == "settings_menu":
+        settings(update, context)
+    elif data == "premium_menu":
+        premium(update, context)
+    elif data == "history_menu":
+        history(update, context)
+    elif data == "report_user":
+        report(update, context)
+    elif data == "rematch_partner":
+        rematch(update, context)
+    elif data == "delete_profile":
+        delete_profile(update, context)
+    elif data.startswith("buy_"):
+        buy_premium(update, context)
+    elif data.startswith("mood_"):
+        set_mood(update, context)
+    elif data.startswith("rematch_request_"):
+        partner_id = int(data.split("_")[-1])
+        if is_banned(user_id):
+            safe_reply(update, "🚫 You are banned and cannot send rematch requests 🔒.")
+            return
+        user = get_user(user_id)
+        if user_id in user_pairs:
+            safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.")
+            return
+        partner_data = get_user(partner_id)
+        if not partner_data:
+            safe_reply(update, "❌ This user is no longer available 😓.")
+            return
+        if partner_id in user_pairs:
+            safe_reply(update, "❌ This user is currently in another chat 💬.")
+            return
+        keyboard = [
+            [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{user_id}"),
+             InlineKeyboardButton("❌ Decline", callback_data="rematch_decline")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        user_profile = user.get("profile", {})
+        request_message = (
+            f"🔄 *Rematch Request* 🔄\n\n"
+            f"A user wants to reconnect with you!\n"
+            f"🧑 *Name*: {user_profile.get('name', 'Anonymous')}\n"
+            f"🎂 *Age*: {user_profile.get('age', 'Not set')}\n"
+            f"👤 *Gender*: {user_profile.get('gender', 'Not set')}\n"
+            f"📍 *Location*: {user_profile.get('location', 'Not set')}\n\n"
+            f"Would you like to chat again?"
         )
-        safe_reply(update, "📩 Rematch request sent. Waiting for their response...")
-        context.bot_data["rematch_requests"] = context.bot_data.get("rematch_requests", {})
-        context.bot_data["rematch_requests"][partner_id] = {
-            "requester_id": user_id,
-            "timestamp": int(time.time()),
-            "message_id": message.message_id
-        }
-        logger.info(f"User {user_id} sent rematch request to {partner_id}")
-    except telegram.error.TelegramError as e:
-        safe_reply(update, "❌ Unable to reach this user. They may be offline.")
-        logger.warning(f"Failed to send rematch request to {partner_id}: {e}")
-elif data.startswith("rematch_accept_"):
-    requester_id = int(data.split("_")[-1])
-    if is_banned(user_id):
-        safe_reply(update, "🚫 You are banned and cannot accept rematch requests.")
-        return
-    if user_id in user_pairs:
-        safe_reply(update, "❓ You're already in a chat. Use /stop to end it first.")
-        return
-    if requester_id in user_pairs:
-        safe_reply(update, "❌ This user is now in another chat.")
-        return
-    if user_id in waiting_users:
-        waiting_users.remove(user_id)
-    user_pairs[user_id] = requester_id
-    user_pairs[requester_id] = user_id
-    safe_reply(update, "✅ *Reconnected!* Start chatting! 🗣️")
-    safe_bot_send_message(context.bot, requester_id, "✅ *Reconnected!* Start chatting! 🗣️")
-    logger.info(f"User {user_id} accepted rematch with {requester_id}")
-    if has_premium_feature(user_id, "vaulted_chats"):
-        chat_histories[user_id] = chat_histories.get(user_id, [])
-    if has_premium_feature(requester_id, "vaulted_chats"):
-        chat_histories[requester_id] = chat_histories.get(requester_id, [])
-    # Delete the rematch request message
-    rematch_data = context.bot_data.get("rematch_requests", {}).get(user_id)
-    if rematch_data and rematch_data.get("message_id"):
         try:
-            context.bot.delete_message(chat_id=user_id, message_id=rematch_data["message_id"])
-            logger.info(f"Deleted rematch request message for user {user_id}")
+            message = context.bot.send_message(
+                chat_id=partner_id,
+                text=escape_markdown_v2(request_message),
+                parse_mode="MarkdownV2",
+                reply_markup=reply_markup
+            )
+            safe_reply(update, "📩 Rematch request sent 📬. Waiting for their response...")
+            context.bot_data["rematch_requests"] = context.bot_data.get("rematch_requests", {})
+            context.bot_data["rematch_requests"][partner_id] = {
+                "requester_id": user_id,
+                "timestamp": int(time.time()),
+                "message_id": message.message_id
+            }
+            logger.info(f"User {user_id} sent rematch request to {partner_id} 📨")
         except telegram.error.TelegramError as e:
-            logger.warning(f"Failed to delete rematch request message for {user_id}: {e}")
-        context.bot_data["rematch_requests"].pop(user_id, None)
-elif data == "rematch_decline":
-    rematch_data = context.bot_data.get("rematch_requests", {}).get(user_id)
-    if rematch_data:
-        requester_id = rematch_data.get("requester_id")
-        safe_reply(update, "❌ Rematch request declined.")
-        safe_bot_send_message(context.bot, requester_id, "❌ Your rematch request was declined.")
-        logger.info(f"User {user_id} declined rematch with {requester_id}")
+            safe_reply(update, "❌ Unable to reach this user 😔. They may be offline.")
+            logger.warning(f"Failed to send rematch request to {partner_id}: {e}")
+    elif data.startswith("rematch_accept_"):
+        requester_id = int(data.split("_")[-1])
+        if is_banned(user_id):
+            safe_reply(update, "🚫 You are banned and cannot accept rematch requests 🔒.")
+            return
+        if user_id in user_pairs:
+            safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.")
+            return
+        if requester_id in user_pairs:
+            safe_reply(update, "❌ This user is now in another chat 💬.")
+            return
+        if user_id in waiting_users:
+            waiting_users.remove(user_id)
+        user_pairs[user_id] = requester_id
+        user_pairs[requester_id] = user_id
+        safe_reply(update, "✅ *Reconnected!* Start chatting! 🗣️")
+        safe_bot_send_message(context.bot, requester_id, "✅ *Reconnected!* Start chatting! 🗣️")
+        logger.info(f"User {user_id} accepted rematch with {requester_id} 🎉")
+        if has_premium_feature(user_id, "vaulted_chats"):
+            chat_histories[user_id] = chat_histories.get(user_id, [])
+        if has_premium_feature(requester_id, "vaulted_chats"):
+            chat_histories[requester_id] = chat_histories.get(requester_id, [])
         # Delete the rematch request message
-        if rematch_data.get("message_id"):
+        rematch_data = context.bot_data.get("rematch_requests", {}).get(user_id)
+        if rematch_data and rematch_data.get("message_id"):
             try:
                 context.bot.delete_message(chat_id=user_id, message_id=rematch_data["message_id"])
-                logger.info(f"Deleted rematch request message for user {user_id}")
+                logger.info(f"Deleted rematch request message for user {user_id} 🗑️")
             except telegram.error.TelegramError as e:
                 logger.warning(f"Failed to delete rematch request message for {user_id}: {e}")
             context.bot_data["rematch_requests"].pop(user_id, None)
-elif data.startswith("emoji_"):
-    verify_emoji(update, context)
-elif data.startswith("consent_"):
-    consent_handler(update, context)
-elif data.startswith("gender_"):
-    set_gender(update, context)
-elif data.startswith("set_"):
-    handle_settings_buttons(update, context)
+    elif data == "rematch_decline":
+        rematch_data = context.bot_data.get("rematch_requests", {}).get(user_id)
+        if rematch_data:
+            requester_id = rematch_data.get("requester_id")
+            safe_reply(update, "❌ Rematch request declined 😔.")
+            safe_bot_send_message(context.bot, requester_id, "❌ Your rematch request was declined 😔.")
+            logger.info(f"User {user_id} declined rematch with {requester_id} 🚫")
+            # Delete the rematch request message
+            if rematch_data.get("message_id"):
+                try:
+                    context.bot.delete_message(chat_id=user_id, message_id=rematch_data["message_id"])
+                    logger.info(f"Deleted rematch request message for user {user_id} 🗑️")
+                except telegram.error.TelegramError as e:
+                    logger.warning(f"Failed to delete rematch request message for {user_id}: {e}")
+                context.bot_data["rematch_requests"].pop(user_id, None)
+    elif data.startswith("emoji_"):
+        verify_emoji(update, context)
+    elif data.startswith("consent_"):
+        consent_handler(update, context)
+    elif data.startswith("gender_"):
+        set_gender(update, context)
+    elif data.startswith("set_"):
+        handle_settings_buttons(update, context)
 
 def cleanup_rematch_requests(context: CallbackContext) -> None:
     """Clean up timed-out rematch requests"""
