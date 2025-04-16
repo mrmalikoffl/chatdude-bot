@@ -15,7 +15,7 @@ import os
 import time
 from datetime import datetime, timedelta
 from pymongo import MongoClient
-from pymongo.errors import ConnectionError, OperationFailure
+from pymongo.errors import ConnectionFailure, OperationFailure  # Corrected import
 from queue import Queue
 from urllib.parse import urlparse
 import json
