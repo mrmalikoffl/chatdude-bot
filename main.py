@@ -2183,6 +2183,67 @@ def cancel(update: Update, context: CallbackContext) -> int:
     logger.info(f"User {user_id} cancelled the operation.")
     return ConversationHandler.END
 
+def message_handler(update: Update, context: CallbackContext) -> None:
+    """Handle text messages between paired users"""
+    user_id = update.effective_user.id
+    message_text = update.message.text.strip()
+
+    # Check if user is banned
+    if is_banned(user_id):
+        user = get_user(user_id)
+        ban_msg = (
+            "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
+            if user["ban_type"] == "permanent"
+            else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
+        )
+        safe_reply(update, ban_msg)
+        return
+
+    # Check if user is in a chat
+    if user_id not in user_pairs:
+        safe_reply(update, "❓ You're not in a chat 😔. Use /start to begin.")
+        return
+
+    # Check message rate limit
+    if not check_message_rate_limit(user_id):
+        safe_reply(update, "⏳ You're sending messages too fast! Please slow down ⏰.")
+        return
+
+    # Check if message is safe
+    is_safe, reason = is_safe_message(message_text)
+    if not is_safe:
+        violation_result = issue_keyword_violation(user_id, reason, update, context)
+        logger.warning(f"User {user_id} sent unsafe message: {message_text} (reason: {reason})")
+        return
+
+    # Get partner
+    partner_id = user_pairs[user_id]
+    if not partner_id or partner_id not in user_pairs:
+        safe_reply(update, "❌ Your partner is no longer available 😔. Use /next to find a new one.")
+        del user_pairs[user_id]
+        return
+
+    # Format message with flare if applicable
+    display_text = message_text
+    if has_premium_feature(user_id, "flare_messages"):
+        display_text = f"✨ {message_text} ✨"
+
+    # Send message to partner
+    try:
+        safe_bot_send_message(context.bot, partner_id, display_text)
+        logger.debug(f"Message relayed from {user_id} to {partner_id}: {message_text}")
+    except telegram.error.TelegramError as e:
+        safe_reply(update, "❌ Failed to send message 😔. Your partner may be offline.")
+        logger.error(f"Failed to send message from {user_id} to {partner_id}: {e}")
+        return
+
+    # Save to chat history if vaulted
+    if has_premium_feature(user_id, "vaulted_chats"):
+        chat_histories[user_id] = chat_histories.get(user_id, []) + [f"You: {message_text}"]
+    if has_premium_feature(partner_id, "vaulted_chats"):
+        partner_name = get_user(user_id).get("profile", {}).get("name", "Anonymous")
+        chat_histories[partner_id] = chat_histories.get(partner_id, []) + [f"{partner_name}: {message_text}"]
+
 def error_handler(update: Update, context: CallbackContext) -> None:
     """Handle bot errors"""
     logger.error(f"Update {update} caused error: {context.error}")
