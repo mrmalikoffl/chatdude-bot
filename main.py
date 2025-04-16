@@ -124,7 +124,7 @@ def process_queued_operations(context: CallbackContext):
             operation_queue.put((op_type, args))  # Re-queue on failure
 
 try:
-    init_db()
+    db = init_mongodb()
 except Exception as e:
     logger.error(f"Failed to set up MongoDB: {e}")
     exit(1)
