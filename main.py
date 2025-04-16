@@ -480,20 +480,31 @@ def safe_bot_send_message(bot, chat_id: int, text: str, parse_mode: str = "Markd
 
 def start(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
+    logger.info(f"Received /start command from user {user_id}")
+    
     if is_banned(user_id):
         user = get_user(user_id)
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
+        logger.info(f"User {user_id} is banned: {ban_msg}")
         safe_reply(update, ban_msg)
         return ConversationHandler.END
+    
     if not check_rate_limit(user_id):
+        logger.info(f"User {user_id} hit rate limit")
         safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.")
         return ConversationHandler.END
+    
     if user_id in user_pairs:
+        logger.info(f"User {user_id} already in a chat")
         safe_reply(update, "💬 You're already in a chat. Use /next to switch or /stop to end.")
         return ConversationHandler.END
+    
     user = get_user(user_id)
+    logger.debug(f"User {user_id} data: {user}")
+    
     if not user.get("consent"):
+        logger.info(f"User {user_id} needs to consent")
         keyboard = [
             [InlineKeyboardButton("✅ I Agree", callback_data="consent_agree")],
             [InlineKeyboardButton("❌ I Disagree", callback_data="consent_disagree")]
@@ -520,7 +531,9 @@ def start(update: Update, context: CallbackContext) -> int:
         )
         send_channel_notification(context.bot, notification_message)
         return CONSENT
+    
     if not user.get("verified"):
+        logger.info(f"User {user_id} needs verification")
         correct_emoji = random.choice(VERIFICATION_EMOJIS)
         context.user_data["correct_emoji"] = correct_emoji
         other_emojis = random.sample([e for e in VERIFICATION_EMOJIS if e != correct_emoji], 3)
@@ -530,18 +543,23 @@ def start(update: Update, context: CallbackContext) -> int:
         reply_markup = InlineKeyboardMarkup(keyboard)
         safe_reply(update, f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{correct_emoji}*", reply_markup=reply_markup)
         return VERIFICATION
+    
     profile = user.get("profile", {})
     required_fields = ["name", "age", "gender", "location"]
     missing_fields = [field for field in required_fields if not profile.get(field)]
     if missing_fields:
+        logger.info(f"User {user_id} missing profile fields: {missing_fields}")
         safe_reply(update, "✨ Let’s set up your profile! Please enter your name:")
         return NAME
+    
     if user_id not in waiting_users:
         if has_premium_feature(user_id, "shine_profile"):
             waiting_users.insert(0, user_id)
         else:
             waiting_users.append(user_id)
+        logger.info(f"User {user_id} added to waiting list")
         safe_reply(update, "🔍 Looking for a chat partner... Please wait!")
+    
     match_users(context)
     return ConversationHandler.END
 
