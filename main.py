@@ -84,13 +84,15 @@ def init_db_pool():
             logger.error("DATABASE_URL environment variable not set.")
             raise ValueError("DATABASE_URL not set")
         url = urlparse(database_url)
-        db_pool = psycopg2.pool.SimpleConnectionPool(
-            1, 10,
+        db_pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=1,
+            maxconn=15,  # Adjusted for Heroku Hobby tier
             database=url.path[1:],
             user=url.username,
             password=url.password,
             host=url.hostname,
-            port=url.port
+            port=url.port,
+            connect_timeout=5  # Timeout after 5 seconds
         )
         logger.info("Database connection pool initialized successfully.")
     except Exception as e:
@@ -98,16 +100,26 @@ def init_db_pool():
         raise
 
 def get_db_connection():
-    try:
-        return db_pool.getconn()
-    except Exception as e:
-        logger.error(f"Failed to get database connection: {e}")
-        return None
+    retries = 3
+    for attempt in range(retries):
+        try:
+            conn = db_pool.getconn()
+            active_connections = len(db_pool._used)
+            max_connections = db_pool.maxconn
+            logger.debug(f"Acquired connection. Active: {active_connections}/{max_connections}")
+            return conn
+        except Exception as e:
+            logger.error(f"Attempt {attempt + 1}/{retries} failed to get database connection: {e}. Active: {len(db_pool._used)}/{db_pool.maxconn}")
+            if attempt < retries - 1:
+                time.sleep(1)  # Wait 1 second before retrying
+    logger.error("Failed to get database connection after retries")
+    return None
 
 def release_db_connection(conn):
     if conn:
         try:
             db_pool.putconn(conn)
+            logger.debug("Database connection released successfully")
         except Exception as e:
             logger.error(f"Failed to release database connection: {e}")
 
@@ -391,16 +403,22 @@ def update_user(user_id: int, data: dict) -> bool:
 def delete_user(user_id: int):
     conn = get_db_connection()
     if not conn:
-        return
+        logger.error(f"Failed to get database connection for deleting user {user_id}")
+        raise Exception("Database connection unavailable")
     try:
         with conn.cursor() as c:
-            c.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
-            c.execute("DELETE FROM reports WHERE reporter_id = %s OR reported_id = %s", (user_id, user_id))
-            c.execute("DELETE FROM keyword_violations WHERE user_id = %s", (user_id,))
-            conn.commit()
+            c.execute("""
+                BEGIN;
+                DELETE FROM reports WHERE reporter_id = %s OR reported_id = %s;
+                DELETE FROM keyword_violations WHERE user_id = %s;
+                DELETE FROM users WHERE user_id = %s;
+                COMMIT;
+            """, (user_id, user_id, user_id, user_id))
             logger.info(f"Deleted user {user_id} from database.")
     except Exception as e:
         logger.error(f"Failed to delete user {user_id}: {e}")
+        conn.rollback()
+        raise
     finally:
         release_db_connection(conn)
 
@@ -1787,17 +1805,21 @@ def set_tags(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 def delete_profile(update: Update, context: CallbackContext) -> None:
-    """Delete user profile"""
     user_id = update.effective_user.id
-    if user_id in user_pairs:
+    if user_id in user_pairs:  # Assuming user_pairs is a global dict
         partner_id = user_pairs[user_id]
         del user_pairs[user_id]
         del user_pairs[partner_id]
         safe_bot_send_message(context.bot, partner_id, "❌ Your partner has deleted their profile 😔.")
-    if user_id in waiting_users:
+    if user_id in waiting_users:  # Assuming waiting_users is a global set/list
         waiting_users.remove(user_id)
-    delete_user(user_id)
-    if user_id in chat_histories:
+    try:
+        delete_user(user_id)
+    except Exception as e:
+        safe_reply(update, "❌ Failed to delete profile due to a server error. Please try again later.")
+        logger.error(f"Failed to delete profile for user {user_id}: {e}")
+        return
+    if user_id in chat_histories:  # Assuming chat_histories is a global dict
         del chat_histories[user_id]
     safe_reply(update, "🗑️ Your profile has been deleted ✅. Use /start to create a new one.")
     logger.info(f"User {user_id} deleted their profile.")
