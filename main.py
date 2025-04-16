@@ -495,9 +495,15 @@ def start(update: Update, context: CallbackContext) -> int:
             safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again ⏰.")
             return ConversationHandler.END
         
+        # Check if user is already in a chat or waiting
         if user_id in user_pairs:
             logger.info(f"User {user_id} already in a chat")
             safe_reply(update, "💬 You're already in a chat 😔. Use /next to switch or /stop to end.")
+            return ConversationHandler.END
+        
+        if user_id in waiting_users:
+            logger.info(f"User {user_id} already in waiting list")
+            safe_reply(update, "🔍 You're already waiting for a chat partner... Please wait!")
             return ConversationHandler.END
         
         user = get_user(user_id)
@@ -548,23 +554,22 @@ def start(update: Update, context: CallbackContext) -> int:
             safe_reply(update, "✨ Let’s set up your profile\\! Please enter your name:")
             return NAME
         
-        if user_id not in waiting_users:
-            if has_premium_feature(user_id, "shine_profile"):
-                waiting_users.insert(0, user_id)
-            else:
-                waiting_users.append(user_id)
-            logger.info(f"User {user_id} added to waiting list")
-            safe_reply(update, "🔍 Looking for a chat partner... Please wait\\!")
+        # Add user to waiting list
+        if has_premium_feature(user_id, "shine_profile"):
+            waiting_users.insert(0, user_id)
+        else:
+            waiting_users.append(user_id)
+        logger.info(f"User {user_id} added to waiting list. Current waiting list: {waiting_users}")
+        safe_reply(update, "🔍 Looking for a chat partner... Please wait\\!")
         
         match_users(context)
+        logger.info(f"After match_users for user {user_id}. Waiting list: {waiting_users}, Paired users: {list(user_pairs.keys())}")
         return ConversationHandler.END
     
     except Exception as e:
         logger.error(f"Error in start for user {user_id}: {str(e)}", exc_info=True)
         safe_reply(update, "😔 An error occurred 🌑. Please try again later.")
         return ConversationHandler.END
-
-
 
 def consent_handler(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
@@ -751,15 +756,20 @@ def set_location(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 def match_users(context: CallbackContext) -> None:
+    logger.info(f"Starting match_users. Current waiting list: {waiting_users}")
+    
     if len(waiting_users) < 2:
+        logger.info("Not enough users to match.")
         return
+    
     premium_users = [u for u in waiting_users if has_premium_feature(u, "shine_profile")]
     regular_users = [u for u in waiting_users if u not in premium_users]
+    
     for user1 in premium_users + regular_users:
         if user1 not in waiting_users:
             continue
         for user2 in waiting_users:
-            if user2 == user1:
+            if user2 == user1 or user2 not in waiting_users:
                 continue
             if can_match(user1, user2):
                 waiting_users.remove(user1)
@@ -824,7 +834,7 @@ def match_users(context: CallbackContext) -> None:
                 )
                 safe_bot_send_message(context.bot, user1, user1_message)
                 safe_bot_send_message(context.bot, user2, user2_message)
-                logger.info(f"Matched users {user1} and {user2}.")
+                logger.info(f"Matched users {user1} and {user2}. Current waiting list: {waiting_users}, Paired users: {list(user_pairs.keys())}")
                 if has_premium_feature(user1, "vaulted_chats"):
                     chat_histories[user1] = []
                 if has_premium_feature(user2, "vaulted_chats"):
@@ -867,6 +877,15 @@ def stop(update: Update, context: CallbackContext) -> None:
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
         safe_reply(update, ban_msg)
         return
+    
+    # Check if user is waiting
+    if user_id in waiting_users:
+        waiting_users.remove(user_id)
+        logger.info(f"User {user_id} removed from waiting list. Current waiting list: {waiting_users}")
+        safe_reply(update, "⏹️ You’ve stopped waiting for a chat partner. Use /start to begin again.")
+        return
+    
+    # Check if user is in a chat
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
         del user_pairs[user_id]
@@ -878,8 +897,8 @@ def stop(update: Update, context: CallbackContext) -> None:
         if user_id in chat_histories and not has_premium_feature(user_id, "vaulted_chats"):
             del chat_histories[user_id]
     else:
-        safe_reply(update, "❓ You're not in a chat. Use /start to find a partner.")
-
+        safe_reply(update, "❓ You're not in a chat or waiting. Use /start to find a partner.")
+        
 def next_chat(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
@@ -2224,6 +2243,11 @@ def message_handler(update: Update, context: CallbackContext) -> None:
         safe_reply(update, ban_msg)
         return
 
+    # Check if user is waiting for a match
+    if user_id in waiting_users:
+        safe_reply(update, "🔍 You're currently waiting for a chat partner... Please wait!")
+        return
+
     # Check if user is in a chat
     if user_id not in user_pairs:
         safe_reply(update, "❓ You're not in a chat 😔. Use /start to begin.")
@@ -2268,6 +2292,7 @@ def message_handler(update: Update, context: CallbackContext) -> None:
     if has_premium_feature(partner_id, "vaulted_chats"):
         partner_name = get_user(user_id).get("profile", {}).get("name", "Anonymous")
         chat_histories[partner_id] = chat_histories.get(partner_id, []) + [f"{partner_name}: {message_text}"]
+
 
 def cleanup_rematch_requests(context: CallbackContext) -> None:
     """Clean up expired rematch requests"""
