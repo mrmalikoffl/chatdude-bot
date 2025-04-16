@@ -523,7 +523,7 @@ def start(update: Update, context: CallbackContext) -> int:
             send_channel_notification(context.bot, (
                 "🆕 *New User Accessed* 🆕\n\n"
                 f"👤 *User ID*: {user_id}\n"
-                f"📅 *Time*: {datetime.now().strftime('%Y\\-%m\\-%d %H\\:%M\\:%S')}\n"
+                f"📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
                 "ℹ️ Awaiting consent"
             ))
             return CONSENT
