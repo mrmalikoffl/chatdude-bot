@@ -37,6 +37,9 @@ logger = logging.getLogger(__name__)
 # Admin configuration
 ADMIN_IDS = {5975525252}  # Replace with your Telegram user ID
 
+# Near the top of main.py, after imports and other constants
+NOTIFICATION_CHANNEL_ID = "-1002519617667"  # Your channel ID
+
 # Security configurations
 BANNED_WORDS = {
     "spam", "hate", "abuse", "nsfw", "inappropriate", "offensive",
@@ -547,6 +550,18 @@ def is_safe_message(text: str) -> tuple[bool, str]:
         return False, "url"
     return True, ""
 
+# Near other utility functions like safe_reply
+def send_channel_notification(bot, message: str) -> None:
+    """Send a notification to the private channel."""
+    if not NOTIFICATION_CHANNEL_ID:
+        logger.error("NOTIFICATION_CHANNEL_ID not set.")
+        return
+    try:
+        safe_bot_send_message(bot, NOTIFICATION_CHANNEL_ID, message)
+        logger.info(f"Sent notification to channel {NOTIFICATION_CHANNEL_ID}: {message[:100]}...")
+    except telegram.error.TelegramError as e:
+        logger.error(f"Failed to send notification to channel {NOTIFICATION_CHANNEL_ID}: {e}")
+
 def escape_markdown_v2(text: str) -> str:
     """Escape special characters for MarkdownV2, preserving formatting."""
     special_chars = r'_[]()~`>#+-=|{}.!'
@@ -693,6 +708,15 @@ def consent_handler(update: Update, context: CallbackContext) -> int:
             "premium_features": user.get("premium_features", {}),
             "created_at": user.get("created_at", int(time.time()))
         })
+        # Send notification to channel
+        notification_message = (
+            "🆕 *New User Consented* 🆕\n\n"
+            f"👤 *User ID*: {user_id}\n"
+            f"📅 *Joined*: {datetime.fromtimestamp(user.get('created_at', int(time.time()))).strftime('%Y-%m-%d %H:%M:%S')}\n"
+            "ℹ️ Profile not yet completed"
+        )
+        send_channel_notification(context.bot, notification_message)
+        
         safe_reply(update, "✅ Thank you for agreeing! Let’s verify your profile next.")
         correct_emoji = random.choice(VERIFICATION_EMOJIS)
         context.user_data["correct_emoji"] = correct_emoji
@@ -849,6 +873,19 @@ def set_location(update: Update, context: CallbackContext) -> int:
         else:
             waiting_users.append(user_id)
         safe_reply(update, "🎉 Profile setup complete! 🔍 Looking for a chat partner... Please wait!")
+    
+    # Send notification to channel
+    notification_message = (
+        "🆕 *New User Registered* 🆕\n\n"
+        f"👤 *User ID*: {user_id}\n"
+        f"🧑 *Name*: {profile.get('name', 'Not set')}\n"
+        f"🎂 *Age*: {profile.get('age', 'Not set')}\n"
+        f"👤 *Gender*: {profile.get('gender', 'Not set')}\n"
+        f"📍 *Location*: {location}\n"
+        f"📅 *Joined*: {datetime.fromtimestamp(user.get('created_at', int(time.time()))).strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    send_channel_notification(context.bot, notification_message)
+    
     match_users(context)
     return ConversationHandler.END
 
@@ -1167,22 +1204,22 @@ def successful_payment(update: Update, context: CallbackContext) -> None:
     payload = payment.invoice_payload
     current_time = int(time.time())
     feature_map = {
-        "flare_messages": (7 * 24 * 3600, "✨ *Flare Messages* activated for 7 days! Your messages will now sparkle!"),
-        "instant_rematch": (None, "🔄 *Instant Rematch* unlocked! Use /instant to reconnect."),
-        "shine_profile": (24 * 3600, "🌟 *Shine Profile* activated for 24 hours! You’re now at the top of the match list!"),
-        "mood_match": (30 * 24 * 3600, "😊 *Mood Match* activated for 30 days! Find users with similar vibes!"),
-        "partner_details": (30 * 24 * 3600, "👤 *Partner Secret Revealed!* View your partner’s name, age, gender, and location for 30 days!"),
-        "vaulted_chats": (None, "📜 *Vaulted Chats* unlocked forever! Save your chats with /vault!"),
-        "premium_pass": (30 * 24 * 3600, "🎉 *Premium Pass* activated! Enjoy all features for 30 days + 5 Instant Rematches!"),
+        "flare_messages": (7 * 24 * 3600, "✨ *Flare Messages* activated for 7 days! Your messages will now sparkle!", "Flare Messages", 100),
+        "instant_rematch": (None, "🔄 *Instant Rematch* unlocked! Use /instant to reconnect.", "Instant Rematch", 100),
+        "shine_profile": (24 * 3600, "🌟 *Shine Profile* activated for 24 hours! You’re now at the top of the match list!", "Shine Profile", 250),
+        "mood_match": (30 * 24 * 3600, "😊 *Mood Match* activated for 30 days! Find users with similar vibes!", "Mood Match", 250),
+        "partner_details": (30 * 24 * 3600, "👤 *Partner Secret Revealed!* View your partner’s name, age, gender, and location for 30 days!", "Partner Details", 500),
+        "vaulted_chats": (None, "📜 *Vaulted Chats* unlocked forever! Save your chats with /vault!", "Vaulted Chats", 500),
+        "premium_pass": (30 * 24 * 3600, "🎉 *Premium Pass* activated! Enjoy all features for 30 days + 5 Instant Rematches!", "Premium Pass", 1000),
     }
     user = get_user(user_id)
     features = user.get("premium_features", {})
     premium_expiry = user.get("premium_expiry")
-    for feature, (duration, message) in feature_map.items():
+    profile = user.get("profile", {})
+    for feature, (duration, message, feature_name, stars) in feature_map.items():
         if payload.startswith(feature):
             logger.debug(f"User {user_id} before purchase: premium_expiry={premium_expiry}, premium_features={features}")
             if feature == "premium_pass":
-                # Extend existing expirations if they exist
                 new_expiry = max(premium_expiry or current_time, current_time + 30 * 24 * 3600)
                 features.update({
                     "shine_profile": max(features.get("shine_profile", 0), current_time + 30 * 24 * 3600),
@@ -1194,20 +1231,18 @@ def successful_payment(update: Update, context: CallbackContext) -> None:
                 })
                 premium_expiry = new_expiry
             else:
-                # Extend feature expiration if already active
                 if feature == "instant_rematch":
                     features["instant_rematch_count"] = features.get("instant_rematch_count", 0) + 1
                 elif feature == "vaulted_chats":
                     features["vaulted_chats"] = True
                 else:
                     features[feature] = max(features.get(feature, 0), current_time + duration)
-                # Update premium_expiry if necessary
                 if duration and (not premium_expiry or premium_expiry < current_time + duration):
                     premium_expiry = current_time + duration
             if not update_user(user_id, {
                 "premium_expiry": premium_expiry,
                 "premium_features": features,
-                "profile": user.get("profile", {}),
+                "profile": profile,
                 "consent": user.get("consent", False),
                 "verified": user.get("verified", False),
                 "created_at": user.get("created_at", int(time.time()))
@@ -1216,6 +1251,26 @@ def successful_payment(update: Update, context: CallbackContext) -> None:
                 safe_reply(update, "❌ Error processing your purchase. Please contact support.")
                 return
             safe_reply(update, message)
+            
+            # Send notification to channel
+            expiry_date = (
+                datetime.fromtimestamp(current_time + duration).strftime("%Y-%m-%d %H:%M:%S")
+                if duration else "No expiry"
+            )
+            notification_message = (
+                "🌟 *New Premium Purchase* 🌟\n\n"
+                f"👤 *User ID*: {user_id}\n"
+                f"🧑 *Name*: {profile.get('name', 'Not set')}\n"
+                f"🎂 *Age*: {profile.get('age', 'Not set')}\n"
+                f"👤 *Gender*: {profile.get('gender', 'Not set')}\n"
+                f"📍 *Location*: {profile.get('location', 'Not set')}\n"
+                f"✨ *Feature*: {feature_name}\n"
+                f"💰 *Cost*: {stars} Stars\n"
+                f"📅 *Expiry*: {expiry_date}\n"
+                f"🕒 *Purchased*: {datetime.fromtimestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            send_channel_notification(context.bot, notification_message)
+            
             logger.info(f"User {user_id} purchased {feature} with Stars")
             updated_user = get_user(user_id)
             logger.debug(f"User {user_id} after purchase: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
