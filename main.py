@@ -435,8 +435,15 @@ def send_channel_notification(bot, message: str) -> bool:
         logger.error(f"Failed to send notification to channel {NOTIFICATION_CHANNEL_ID}: {e}")
         return False
 
+import re
+
 def escape_markdown_v2(text: str) -> str:
+    if not isinstance(text, str):
+        return str(text) if text is not None else ""
     special_chars = r'_[]()~`>#+-=|{}.!'
+    # First, ensure existing backslashes aren't doubled unnecessarily
+    text = re.sub(r'\\(?=[{}])'.format(re.escape(special_chars)), '', text)
+    # Then escape any unescaped special characters
     return re.sub(r'([{}])'.format(re.escape(special_chars)), r'\\\1', text)
 
 def safe_reply(update: Update, text: str, parse_mode: str = "MarkdownV2", **kwargs) -> None:
@@ -1996,45 +2003,38 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
         safe_reply(update, " 😔 Error retrieving users list 🌑 .")
 
 def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
-    """List premium users"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     try:
         current_time = int(time.time())
-        logger.debug(f"Fetching premium users with premium_expiry > {current_time} ({datetime.fromtimestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')})")
         users = get_db_collection("users")
         premium_users = list(users.find({"premium_expiry": {"$gt": current_time}}).sort("premium_expiry", -1))
-        logger.debug(f"Query returned {len(premium_users)} premium users")
         if not premium_users:
             safe_reply(update, " 😕 No premium users found 🌑 .")
-            logger.debug("No premium users found in database")
             return
-        message = " 💎 *Premium Users List* \\(Sorted by Expiry\\) 💎 \n\n"
+        # Escape the static header text
+        header = escape_markdown_v2("💎 *Premium Users List* (Sorted by Expiry) 💎\n\n")
+        message = header
         user_count = 0
         for user in premium_users:
             user_id = user["user_id"]
             premium_expiry = user.get("premium_expiry")
             profile = user.get("profile", {})
-            premium_features = user.get("premium_features", {})
             expiry_date = (
                 datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
                 if premium_expiry and isinstance(premium_expiry, (int, float)) and premium_expiry > current_time
                 else "No expiry set"
             )
-            logger.debug(f"User {user_id}: premium_expiry={premium_expiry} ({datetime.fromtimestamp(premium_expiry).strftime('%Y-%m-%d %H:%M:%S') if premium_expiry else 'None'}), expiry_date={expiry_date}")
-            name = escape_markdown_v2(profile.get("name", "Not set"))  # Escape name
-            expiry_date = escape_markdown_v2(expiry_date)  # Escape expiry date
-            active_features = [
-                k for k, v in premium_features.items()
-                if v is True or (isinstance(v, int) and v > current_time)
-            ]
-            if "instant_rematch_count" in premium_features and premium_features["instant_rematch_count"] > 0:
-                active_features.append(f"instant_rematch_count: {premium_features['instant_rematch_count']}")
-            features_str = escape_markdown_v2(", ".join(active_features) or "None")  # Escape features
+            name = escape_markdown_v2(profile.get("name", "Not set"))
+            expiry_date = escape_markdown_v2(expiry_date)
+            active_features = [k for k, v in user.get("premium_features", {}).items() if v is True or (isinstance(v, int) and v > current_time)]
+            if "instant_rematch_count" in user.get("premium_features", {}) and user["premium_features"]["instant_rematch_count"] > 0:
+                active_features.append(f"instant_rematch_count: {user['premium_features']['instant_rematch_count']}")
+            features_str = escape_markdown_v2(", ".join(active_features) or "None")
             message += (
-                f" 👤 *User ID*: {escape_markdown_v2(str(user_id))}\n"  # Escape user_id
+                f" 👤 *User ID*: {escape_markdown_v2(str(user_id))}\n"
                 f" 🧑 *Name*: {name}\n"
                 f" ⏰ *Premium Until*: {expiry_date}\n"
                 f" ✨ *Features*: {features_str}\n"
@@ -2042,13 +2042,11 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
             )
             user_count += 1
             if len(message.encode('utf-8')) > 4000:
-                safe_reply(update, message)
+                safe_reply(update, message, parse_mode="MarkdownV2")
                 message = ""
         if message:
             message += f" 📊 *Total Premium Users*: {user_count}\n"
-            safe_reply(update, message)
-        logger.info(f"Admin {user_id} requested premium users list with {user_count} users.")
-        logger.debug(f"Premium users list: {[(u['user_id'], u.get('premium_expiry')) for u in premium_users]}")
+            safe_reply(update, message, parse_mode="MarkdownV2")
     except Exception as e:
         logger.error(f"Error fetching premium users list: {e}")
         safe_reply(update, " 😔 Error retrieving premium users list 🌑 .")
