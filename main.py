@@ -129,7 +129,7 @@ except Exception as e:
     logger.error(f"Failed to set up MongoDB: {e}")
     exit(1)
 
-def cleanup_in_memory():
+def cleanup_in_memory(context: CallbackContext) -> None:
     logger.info(f"Cleaning up in-memory data. user_pairs size: {len(user_pairs)}, waiting_users size: {len(waiting_users)}")
     current_time = time.time()
     for user_id in list(user_pairs.keys()):
@@ -141,6 +141,18 @@ def cleanup_in_memory():
                 safe_send_message(partner_id, "🛑 Chat ended due to inactivity.")
                 remove_pair(user_id, partner_id)
     logger.info(f"Cleanup complete. user_pairs size: {len(user_pairs)}, waiting_users size: {len(waiting_users)}")
+
+# Add at the top with other in-memory storage
+user_activities = {}
+INACTIVITY_TIMEOUT = 1800  # 30 minutes in seconds
+
+def remove_pair(user_id: int, partner_id: int) -> None:
+    """Remove a user pair and clean up related data"""
+    if user_id in user_pairs:
+        del user_pairs[user_id]
+    if partner_id in user_pairs:
+        del user_pairs[partner_id]
+    logger.info(f"Removed pair: {user_id} and {partner_id}")
 
 def cleanup_premium_features(user_id: int) -> bool:
     user = get_user(user_id)
@@ -2195,11 +2207,12 @@ def cancel(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 def message_handler(update: Update, context: CallbackContext) -> None:
-    """Handle text messages between paired users"""
     user_id = update.effective_user.id
     message_text = update.message.text.strip()
 
-    # Check if user is banned
+    # Update last activity
+    user_activities[user_id] = {"last_activity": time.time()}
+
     if is_banned(user_id):
         user = get_user(user_id)
         ban_msg = (
@@ -2295,109 +2308,116 @@ def main() -> None:
     """Initialize and start the Telegram bot"""
     token = os.getenv("TOKEN")
     if not token:
-        logger.error(" TOKEN not set ")
+        logger.error("TOKEN not set")
         exit(1)
-    updater = Updater(token, use_context=True)
-    dp = updater.dispatcher
+    
+    try:
+        logger.info("Starting bot initialization")
+        updater = Updater(token, use_context=True)
+        dp = updater.dispatcher
 
-    # Conversation handler
-    conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("start", start),
-            CommandHandler("settings", settings),
-        ],
-        states={
-            NAME: [
-                MessageHandler(Filters.text & ~Filters.command, set_name),
+        # Conversation handler and other handlers (unchanged)
+        conv_handler = ConversationHandler(
+            entry_points=[
+                CommandHandler("start", start),
+                CommandHandler("settings", settings),
+            ],
+            states={
+                NAME: [
+                    MessageHandler(Filters.text & ~Filters.command, set_name),
+                    CallbackQueryHandler(button),
+                ],
+                AGE: [
+                    MessageHandler(Filters.text & ~Filters.command, set_age),
+                    CallbackQueryHandler(button),
+                ],
+                GENDER: [
+                    CallbackQueryHandler(button),
+                ],
+                LOCATION: [
+                    MessageHandler(Filters.text & ~Filters.command, set_location),
+                    CallbackQueryHandler(button),
+                ],
+                CONSENT: [
+                    CallbackQueryHandler(consent_handler),
+                ],
+                VERIFICATION: [
+                    CallbackQueryHandler(verify_emoji),
+                ],
+                TAGS: [
+                    MessageHandler(Filters.text & ~Filters.command, set_tags),
+                    CallbackQueryHandler(button),
+                ],
+            ],
+            fallbacks=[
+                CommandHandler("cancel", cancel),
                 CallbackQueryHandler(button),
             ],
-            AGE: [
-                MessageHandler(Filters.text & ~Filters.command, set_age),
-                CallbackQueryHandler(button),
-            ],
-            GENDER: [
-                CallbackQueryHandler(button),
-            ],
-            LOCATION: [
-                MessageHandler(Filters.text & ~Filters.command, set_location),
-                CallbackQueryHandler(button),
-            ],
-            CONSENT: [
-                CallbackQueryHandler(consent_handler),
-            ],
-            VERIFICATION: [
-                CallbackQueryHandler(verify_emoji),
-            ],
-            TAGS: [
-                MessageHandler(Filters.text & ~Filters.command, set_tags),
-                CallbackQueryHandler(button),
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CallbackQueryHandler(button),
-        ],
-    )
+        )
 
-    # Add handlers
-    dp.add_handler(conv_handler)
-    dp.add_handler(CommandHandler("stop", stop))
-    dp.add_handler(CommandHandler("next", next_chat))
-    dp.add_handler(CommandHandler("help", help_command))
-    dp.add_handler(CommandHandler("premium", premium))
-    dp.add_handler(CommandHandler("shine", shine))
-    dp.add_handler(CommandHandler("instant", instant))
-    dp.add_handler(CommandHandler("flare", flare))
-    dp.add_handler(CommandHandler("mood", mood))
-    dp.add_handler(CommandHandler("vault", vault))
-    dp.add_handler(CommandHandler("history", history))
-    dp.add_handler(CommandHandler("report", report))
-    dp.add_handler(CommandHandler("deleteprofile", delete_profile))
-    dp.add_handler(CallbackQueryHandler(button))
-    dp.add_handler(PreCheckoutQueryHandler(pre_checkout))
-    dp.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, message_handler))
+        dp.add_handler(conv_handler)
+        dp.add_handler(CommandHandler("stop", stop))
+        dp.add_handler(CommandHandler("next", next_chat))
+        dp.add_handler(CommandHandler("help", help_command))
+        dp.add_handler(CommandHandler("premium", premium))
+        dp.add_handler(CommandHandler("shine", shine))
+        dp.add_handler(CommandHandler("instant", instant))
+        dp.add_handler(CommandHandler("flare", flare))
+        dp.add_handler(CommandHandler("mood", mood))
+        dp.add_handler(CommandHandler("vault", vault))
+        dp.add_handler(CommandHandler("history", history))
+        dp.add_handler(CommandHandler("report", report))
+        dp.add_handler(CommandHandler("deleteprofile", delete_profile))
+        dp.add_handler(CallbackQueryHandler(button))
+        dp.add_handler(PreCheckoutQueryHandler(pre_checkout))
+        dp.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
+        dp.add_handler(MessageHandler(Filters.text & ~Filters.command, message_handler))
 
-    # Admin commands
-    dp.add_handler(CommandHandler("admin", admin_access))
-    dp.add_handler(CommandHandler("admin_delete", admin_delete))
-    dp.add_handler(CommandHandler("admindelete", admin_delete))
-    dp.add_handler(CommandHandler("admin_premium", admin_premium))
-    dp.add_handler(CommandHandler("adminpremium", admin_premium))
-    dp.add_handler(CommandHandler("admin_revoke_premium", admin_revoke_premium))
-    dp.add_handler(CommandHandler("adminrevokepremium", admin_revoke_premium))
-    dp.add_handler(CommandHandler("admin_ban", admin_ban))
-    dp.add_handler(CommandHandler("adminban", admin_ban))
-    dp.add_handler(CommandHandler("admin_unban", admin_unban))
-    dp.add_handler(CommandHandler("adminunban", admin_unban))
-    dp.add_handler(CommandHandler("admin_info", admin_info))
-    dp.add_handler(CommandHandler("admininfo", admin_info))
-    dp.add_handler(CommandHandler("admin_userslist", admin_userslist))
-    dp.add_handler(CommandHandler("adminuserslist", admin_userslist))
-    dp.add_handler(CommandHandler("admin_premiumuserslist", admin_premiumuserslist))
-    dp.add_handler(CommandHandler("adminpremiumuserslist", admin_premiumuserslist))
-    dp.add_handler(CommandHandler("admin_reports", admin_reports))
-    dp.add_handler(CommandHandler("adminreports", admin_reports))
-    dp.add_handler(CommandHandler("admin_clear_reports", admin_clear_reports))
-    dp.add_handler(CommandHandler("adminclearreports", admin_clear_reports))
-    dp.add_handler(CommandHandler("admin_broadcast", admin_broadcast))
-    dp.add_handler(CommandHandler("adminbroadcast", admin_broadcast))
-    dp.add_handler(CommandHandler("admin_violations", admin_violations))
-    dp.add_handler(CommandHandler("adminviolations", admin_violations))
-    dp.add_handler(CommandHandler("admin_stats", admin_stats))
-    dp.add_handler(CommandHandler("adminstats", admin_stats))
+        # Admin commands (unchanged)
+        dp.add_handler(CommandHandler("admin", admin_access))
+        dp.add_handler(CommandHandler("admin_delete", admin_delete))
+        dp.add_handler(CommandHandler("admindelete", admin_delete))
+        dp.add_handler(CommandHandler("admin_premium", admin_premium))
+        dp.add_handler(CommandHandler("adminpremium", admin_premium))
+        dp.add_handler(CommandHandler("admin_revoke_premium", admin_revoke_premium))
+        dp.add_handler(CommandHandler("adminrevokepremium", admin_revoke_premium))
+        dp.add_handler(CommandHandler("admin_ban", admin_ban))
+        dp.add_handler(CommandHandler("adminban", admin_ban))
+        dp.add_handler(CommandHandler("admin_unban", admin_unban))
+        dp.add_handler(CommandHandler("adminunban", admin_unban))
+        dp.add_handler(CommandHandler("admin_info", admin_info))
+        dp.add_handler(CommandHandler("admininfo", admin_info))
+        dp.add_handler(CommandHandler("admin_userslist", admin_userslist))
+        dp.add_handler(CommandHandler("adminuserslist", admin_userslist))
+        dp.add_handler(CommandHandler("admin_premiumuserslist", admin_premiumuserslist))
+        dp.add_handler(CommandHandler("adminpremiumuserslist", admin_premiumuserslist))
+        dp.add_handler(CommandHandler("admin_reports", admin_reports))
+        dp.add_handler(CommandHandler("adminreports", admin_reports))
+        dp.add_handler(CommandHandler("admin_clear_reports", admin_clear_reports))
+        dp.add_handler(CommandHandler("adminclearreports", admin_clear_reports))
+        dp.add_handler(CommandHandler("admin_broadcast", admin_broadcast))
+        dp.add_handler(CommandHandler("adminbroadcast", admin_broadcast))
+        dp.add_handler(CommandHandler("admin_violations", admin_violations))
+        dp.add_handler(CommandHandler("adminviolations", admin_violations))
+        dp.add_handler(CommandHandler("admin_stats", admin_stats))
+        dp.add_handler(CommandHandler("adminstats", admin_stats))
 
-    # Error handler
-    dp.add_error_handler(error_handler)
+        dp.add_error_handler(error_handler)
 
-    # Periodic cleanup
-    updater.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
-    updater.job_queue.run_repeating(cleanup_rematch_requests, interval=60, first=10)
+        # Periodic cleanup
+        logger.info("Scheduling cleanup jobs")
+        updater.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
+        updater.job_queue.run_repeating(cleanup_rematch_requests, interval=60, first=10)
+        logger.info("Cleanup jobs scheduled successfully")
 
-    # Start the bot
-    updater.start_polling(allowed_updates=Update.ALL_TYPES)
-    logger.info("🚀 Bot started polling 🎉")
-    updater.idle()
+        # Start the bot
+        logger.info("Starting polling")
+        updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        logger.info("🚀 Bot started polling 🎉")
+        updater.idle()
 
+    except Exception as e:
+        logger.error(f"Failed to start bot: {str(e)}", exc_info=True)
+        raise
 if __name__ == "__main__":
     main()
