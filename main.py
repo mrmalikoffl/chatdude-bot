@@ -754,19 +754,8 @@ def set_location(update: Update, context: CallbackContext) -> int:
     # Send congratulatory message
     safe_reply(update, "🎉 Congratulations! Profile setup complete!")
 
-    # Add user to waiting list with thread safety
-    with waiting_users_lock:
-        if user_id in waiting_users:
-            logger.info(f"User {user_id} already in waiting list, skipping addition")
-        else:
-            if has_premium_feature(user_id, "shine_profile"):
-                waiting_users.insert(0, user_id)
-            else:
-                waiting_users.append(user_id)
-            logger.info(f"User {user_id} added to waiting list. Current waiting list: {waiting_users}")
-
-    # Notify user they are now looking for a chat partner
-    safe_reply(update, "🔍 Looking for a chat partner... Please wait!")
+    # Prompt user to use /next to connect
+    safe_reply(update, "🔍 Your profile is ready! Use `/next` to find a chat partner and start connecting! 🚀")
 
     # Send notification to channel
     notification_message = (
@@ -779,14 +768,6 @@ def set_location(update: Update, context: CallbackContext) -> int:
         f"📅 *Joined*: {datetime.fromtimestamp(user.get('created_at', int(time.time()))).strftime('%Y-%m-%d %H:%M:%S')}"
     )
     send_channel_notification(context.bot, notification_message)
-
-    # Attempt to match users and log the result
-    match_users(context)
-    with waiting_users_lock:
-        logger.info(f"After match_users for user {user_id}. Waiting list: {waiting_users}, Paired users: {list(user_pairs.keys())}")
-        if user_id not in waiting_users and user_id not in user_pairs:
-            logger.warning(f"User {user_id} lost from waiting list after match_users!")
-            waiting_users.append(user_id)  # Re-add if lost
 
     return ConversationHandler.END
 
