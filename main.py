@@ -2265,12 +2265,19 @@ def message_handler(update: Update, context: CallbackContext) -> None:
         return
 
     # Check if user is waiting for a match or already in a chat
-    if user_id in waiting_users or user_id in user_pairs:
-        if user_id in waiting_users:
-            safe_reply(update, "🔍 You're currently waiting for a chat partner... Please wait!")
+    if user_id in user_pairs:
+        # User is in a chat, proceed with message relay
+        partner_id = user_pairs[user_id]
+        if not partner_id or partner_id not in user_pairs:
+            safe_reply(update, "❌ Your partner is no longer available 😔. Use /next to find a new one.")
+            del user_pairs[user_id]
             return
+    elif user_id in waiting_users:
+        safe_reply(update, "🔍 You're currently waiting for a chat partner... Please wait! Use /next to refresh or /stop to cancel.")
+        return
     else:
-        safe_reply(update, "❓ You're not in a chat 😔. Use /start to begin.")
+        # User is neither waiting nor in a chat, prompt to start
+        safe_reply(update, "❓ You're not in a chat or waiting 😔. Use /start to begin.")
         return
 
     # Check message rate limit
@@ -2285,19 +2292,12 @@ def message_handler(update: Update, context: CallbackContext) -> None:
         logger.warning(f"User {user_id} sent unsafe message: {message_text} (reason: {reason})")
         return
 
-    # Get partner
+    # Get partner and relay message
     partner_id = user_pairs[user_id]
-    if not partner_id or partner_id not in user_pairs:
-        safe_reply(update, "❌ Your partner is no longer available 😔. Use /next to find a new one.")
-        del user_pairs[user_id]
-        return
-
-    # Format message with flare if applicable
     display_text = message_text
     if has_premium_feature(user_id, "flare_messages"):
         display_text = f"✨ {message_text} ✨"
 
-    # Send message to partner
     try:
         safe_bot_send_message(context.bot, partner_id, display_text)
         logger.debug(f"Message relayed from {user_id} to {partner_id}: {message_text}")
@@ -2312,7 +2312,6 @@ def message_handler(update: Update, context: CallbackContext) -> None:
     if has_premium_feature(partner_id, "vaulted_chats"):
         partner_name = get_user(user_id).get("profile", {}).get("name", "Anonymous")
         chat_histories[partner_id] = chat_histories.get(partner_id, []) + [f"{partner_name}: {message_text}"]
-
 
 def cleanup_rematch_requests(context: CallbackContext) -> None:
     """Clean up expired rematch requests"""
