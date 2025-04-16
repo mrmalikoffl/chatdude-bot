@@ -2402,9 +2402,9 @@ def admin_stats(update: Update, context: CallbackContext) -> None:
         release_db_connection(conn)
 
 def main() -> None:
-    token = os.getenv("BOT_TOKEN")
+    token = os.getenv("TOKEN")
     if not token:
-        logger.error("BOT_TOKEN not set.")
+        logger.error("TOKEN not set.")
         exit(1)
 
     updater = Updater(token, use_context=True)
