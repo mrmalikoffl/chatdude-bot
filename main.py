@@ -2407,6 +2407,14 @@ def cancel(update: Update, context: CallbackContext) -> int:
     logger.info(f"User {user_id} cancelled the operation.")
     return ConversationHandler.END
 
+def error_handler(update: Update, context: CallbackContext) -> None:
+    logger.error(f"Update {update} caused error: {context.error}")
+    try:
+        if update and (update.message or update.callback_query):
+            safe_reply(update, " An error occurred. Please try again later.")
+    except Exception as e:
+        logger.error(f"Failed to send error message: {e}")
+
 def main() -> None:
     token = os.getenv("TOKEN")
     if not token:
