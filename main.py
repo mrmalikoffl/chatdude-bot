@@ -2048,7 +2048,7 @@ def admin_violations(update: Update, context: CallbackContext) -> None:
         release_db_connection(conn)
 
 def admin_userslist(update: Update, context: CallbackContext) -> None:
-    """List all users"""
+    """List all users for authorized admins"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, "🚫 Unauthorized 😔.")
@@ -2063,6 +2063,7 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
             users = c.fetchall()
             if not users:
                 safe_reply(update, "❌ No users found 😓.")
+                logger.info(f"Admin {user_id} requested users list: no users found.")
                 return
             message = "📋 *All Users List* \\(Sorted by ID\\)\n\n"
             user_count = 0
@@ -2081,7 +2082,9 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
                 )
                 ban_status = ban_type.capitalize() if ban_type else "None"
                 verified_status = "Yes ✔️" if verified else "No"
-                name = profile.get("name", "Not set")
+                # Escape special characters for MarkdownV2
+                name = escape_markdown_v2(profile.get("name", "Not set"))
+                logger.debug(f"User {user_id}: name={name}, premium={premium_status}, ban={ban_status}")
                 message += (
                     f"👤 *User ID*: {user_id}\n"
                     f"✍️ *Name*: {name}\n"
@@ -2092,20 +2095,22 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
                     "━━━━━━━━━━━━━━\n"
                 )
                 user_count += 1
-                if len(message.encode('utf-8')) > 4000:
-                    safe_reply(update, message)
+                # Check message length and send if approaching Telegram limit
+                if len(message.encode('utf-8')) > 3500:  # Lower threshold for safety
+                    safe_reply(update, message, parse_mode="MarkdownV2")
                     message = ""
-            if message:
+                    logger.debug(f"Sent partial users list for admin {user_id}, users so far: {user_count}")
+            if message.strip():  # Send remaining message
                 message += f"🔢 *Total Users*: {user_count}\n"
-                safe_reply(update, message)
-            logger.info(f"Admin {user_id} requested users list with {user_count} users.")
-            logger.debug(f"Users list generated with {user_count} users.")
+                safe_reply(update, message, parse_mode="MarkdownV2")
+            logger.info(f"Admin {user_id} requested users list with {user_count} users 📋")
+            logger.debug(f"Users list sent with {user_count} users.")
     except Exception as e:
-        logger.error(f"Error fetching users list: {e}")
+        logger.error(f"Error fetching users list for admin {user_id}: {e}")
         safe_reply(update, "❌ Error retrieving users list 😓.")
     finally:
         release_db_connection(conn)
-
+        
 def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
     """List premium users"""
     user_id = update.effective_user.id
