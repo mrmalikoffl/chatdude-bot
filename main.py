@@ -485,7 +485,8 @@ def start(update: Update, context: CallbackContext) -> int:
             ban_msg = (
                 "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
                 if user["ban_type"] == "permanent"
-                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y\\-%m\\-%d %H\\:%M')} ⏰.")
+                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
+            )
             safe_reply(update, ban_msg)
             return ConversationHandler.END
         
