@@ -2401,6 +2401,12 @@ def admin_stats(update: Update, context: CallbackContext) -> None:
     finally:
         release_db_connection(conn)
 
+def cancel(update: Update, context: CallbackContext) -> int:
+    user_id = update.effective_user.id
+    safe_reply(update, "❌ Operation cancelled. Use /start to begin again.")
+    logger.info(f"User {user_id} cancelled the operation.")
+    return ConversationHandler.END
+
 def main() -> None:
     token = os.getenv("TOKEN")
     if not token:
