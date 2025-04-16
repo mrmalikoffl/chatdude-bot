@@ -564,16 +564,9 @@ def start(update: Update, context: CallbackContext) -> int:
             safe_reply(update, "✨ Let’s set up your profile\\! Please enter your name:")
             return NAME
         
-        # Add user to waiting list
-        if has_premium_feature(user_id, "shine_profile"):
-            waiting_users.insert(0, user_id)
-        else:
-            waiting_users.append(user_id)
-        logger.info(f"User {user_id} added to waiting list. Current waiting list: {waiting_users}")
-        safe_reply(update, "🔍 Looking for a chat partner... Please wait\\!")
-        
-        match_users(context)
-        logger.info(f"After match_users for user {user_id}. Waiting list: {waiting_users}, Paired users: {list(user_pairs.keys())}")
+        # Check if profile was just set up (e.g., from conversation flow)
+        # For simplicity, assume if all fields are present and user just started, prompt for /next
+        safe_reply(update, "🎉 Your profile is ready! Use `/next` to find a chat partner and start connecting! 🚀")
         return ConversationHandler.END
     
     except Exception as e:
