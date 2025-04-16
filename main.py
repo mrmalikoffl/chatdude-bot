@@ -81,7 +81,6 @@ db = None
 operation_queue = Queue()
 
 def init_mongodb():
-    """Initialize MongoDB connection"""
     uri = os.getenv("MONGODB_URI")
     if not uri:
         logger.error("MONGODB_URI not set")
@@ -90,8 +89,9 @@ def init_mongodb():
     try:
         logger.info(f"Connecting to MongoDB with URI: {uri[:30]}...[redacted]")
         client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-        client.talk2anyone.command("ping")  # Ping the target database
+        client.talk2anyone.command("ping")
         db = client.get_database("talk2anyone")
+        db.users.create_index("user_id", unique=True)  # Add index
         logger.info("MongoDB connected successfully")
         return db
     except ConnectionFailure as e:
@@ -179,35 +179,25 @@ def cleanup_premium_features(user_id: int) -> bool:
     })
 
 def get_user(user_id: int) -> dict:
-    try:
-        users = get_db_collection("users")
-        user = users.find_one({"user_id": user_id})
-        if user:
-            violations = get_db_collection("keyword_violations")
-            violation = violations.find_one({"user_id": user_id})
-            if violation and violation.get("ban_type"):
-                user["ban_type"] = violation["ban_type"]
-                user["ban_expiry"] = violation.get("ban_expiry")
-            cleanup_premium_features(user_id)
-            return user
-        new_user = {
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Fetching user {user_id}")
+    
+    users = get_db_collection("users")
+    user = users.find_one({"user_id": user_id})
+    if not user:
+        logger.info(f"Creating new user {user_id}")
+        user = {
             "user_id": user_id,
             "profile": {},
             "consent": False,
-            "consent_time": None,
-            "premium_expiry": None,
-            "ban_type": None,
-            "ban_expiry": None,
             "verified": False,
-            "premium_features": {},
             "created_at": int(time.time())
         }
-        users.insert_one(new_user)
-        logger.info(f"Created new user with user_id={user_id}")
-        return new_user
-    except (ConnectionError, OperationFailure) as e:
-        logger.error(f"Failed to get or create user {user_id}: {e}")
-        return {}
+        users.insert_one(user)
+        user = users.find_one({"user_id": user_id})  # Fetch again instead of recursion
+    logger.info(f"Returning user {user_id}")
+    return user
 
 def update_user(user_id: int, data: dict) -> bool:
     retries = 3
@@ -487,86 +477,92 @@ def start(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     logger.info(f"Received /start command from user {user_id}")
     
-    if is_banned(user_id):
+    try:
+        if is_banned(user_id):
+            user = get_user(user_id)
+            ban_msg = (
+                "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
+                if user["ban_type"] == "permanent"
+                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y\\-%m\\-%d %H\\:%M')} ⏰."
+            )
+            safe_reply(update, ban_msg)
+            return ConversationHandler.END
+        
+        if not check_rate_limit(user_id):
+            logger.info(f"User {user_id} hit rate limit")
+            safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again ⏰.")
+            return ConversationHandler.END
+        
+        if user_id in user_pairs:
+            logger.info(f"User {user_id} already in a chat")
+            safe_reply(update, "💬 You're already in a chat 😔. Use /next to switch or /stop to end.")
+            return ConversationHandler.END
+        
         user = get_user(user_id)
-        ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
-                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
-        logger.info(f"User {user_id} is banned: {ban_msg}")
-        safe_reply(update, ban_msg)
+        if not user.get("consent"):
+            logger.info(f"User {user_id} needs to consent")
+            keyboard = [
+                [InlineKeyboardButton("✅ I Agree", callback_data="consent_agree")],
+                [InlineKeyboardButton("❌ I Disagree", callback_data="consent_disagree")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            welcome_text = (
+                "🌟 *Welcome to Talk2Anyone\\!* 🌟\n\n"
+                "Chat anonymously with people worldwide\\! 🌍\n"
+                "Rules:\n"
+                "• No harassment, spam, or inappropriate content\n"
+                "• Respect everyone\n"
+                "• Report issues with /report\n"
+                "• Violations may lead to bans\n\n"
+                "🔒 *Privacy*: We store only your user ID, profile, and consent securely\\. Use /deleteprofile to remove data\\.\n\n"
+                "Do you agree to the rules\\?"
+            )
+            safe_reply(update, welcome_text, reply_markup=reply_markup)
+            send_channel_notification(context.bot, (
+                "🆕 *New User Accessed* 🆕\n\n"
+                f"👤 *User ID*: {user_id}\n"
+                f"📅 *Time*: {datetime.now().strftime('%Y\\-%m\\-%d %H\\:%M\\:%S')}\n"
+                "ℹ️ Awaiting consent"
+            ))
+            return CONSENT
+        
+        if not user.get("verified"):
+            logger.info(f"User {user_id} needs verification")
+            correct_emoji = random.choice(VERIFICATION_EMOJIS)
+            context.user_data["correct_emoji"] = correct_emoji
+            other_emojis = random.sample([e for e in VERIFICATION_EMOJIS if e != correct_emoji], 3)
+            all_emojis = [correct_emoji] + other_emojis
+            random.shuffle(all_emojis)
+            keyboard = [[InlineKeyboardButton(emoji, callback_data=f"emoji_{emoji}") for emoji in all_emojis]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            safe_reply(update, f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{correct_emoji}*", reply_markup=reply_markup)
+            return VERIFICATION
+        
+        profile = user.get("profile", {})
+        required_fields = ["name", "age", "gender", "location"]
+        missing_fields = [field for field in required_fields if not profile.get(field)]
+        if missing_fields:
+            logger.info(f"User {user_id} missing profile fields: {missing_fields}")
+            safe_reply(update, "✨ Let’s set up your profile\\! Please enter your name:")
+            return NAME
+        
+        if user_id not in waiting_users:
+            if has_premium_feature(user_id, "shine_profile"):
+                waiting_users.insert(0, user_id)
+            else:
+                waiting_users.append(user_id)
+            logger.info(f"User {user_id} added to waiting list")
+            safe_reply(update, "🔍 Looking for a chat partner... Please wait\\!")
+        
+        match_users(context)
         return ConversationHandler.END
     
-    if not check_rate_limit(user_id):
-        logger.info(f"User {user_id} hit rate limit")
-        safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.")
+    except Exception as e:
+        logger.error(f"Error in start for user {user_id}: {str(e)}", exc_info=True)
+        safe_reply(update, "😔 An error occurred 🌑. Please try again later.")
         return ConversationHandler.END
-    
-    if user_id in user_pairs:
-        logger.info(f"User {user_id} already in a chat")
-        safe_reply(update, "💬 You're already in a chat. Use /next to switch or /stop to end.")
-        return ConversationHandler.END
-    
-    user = get_user(user_id)
-    logger.debug(f"User {user_id} data: {user}")
-    
-    if not user.get("consent"):
-        logger.info(f"User {user_id} needs to consent")
-        keyboard = [
-            [InlineKeyboardButton("✅ I Agree", callback_data="consent_agree")],
-            [InlineKeyboardButton("❌ I Disagree", callback_data="consent_disagree")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        welcome_text = (
-            "🌟 *Welcome to Talk2Anyone!* 🌟\n\n"
-            "Chat anonymously with people worldwide! 🌍\n"
-            "Rules:\n"
-            "• No harassment, spam, or inappropriate content\n"
-            "• Respect everyone\n"
-            "• Report issues with /report\n"
-            "• Violations may lead to bans\n\n"
-            "🔒 *Privacy*: We store only your user ID, profile, and consent securely. Use /deleteprofile to remove data.\n\n"
-            "Do you agree to the rules?"
-        )
-        safe_reply(update, welcome_text, reply_markup=reply_markup)
-        # Send initial notification
-        notification_message = (
-            "🆕 *New User Accessed* 🆕\n\n"
-            f"👤 *User ID*: {user_id}\n"
-            f"📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            "ℹ️ Awaiting consent"
-        )
-        send_channel_notification(context.bot, notification_message)
-        return CONSENT
-    
-    if not user.get("verified"):
-        logger.info(f"User {user_id} needs verification")
-        correct_emoji = random.choice(VERIFICATION_EMOJIS)
-        context.user_data["correct_emoji"] = correct_emoji
-        other_emojis = random.sample([e for e in VERIFICATION_EMOJIS if e != correct_emoji], 3)
-        all_emojis = [correct_emoji] + other_emojis
-        random.shuffle(all_emojis)
-        keyboard = [[InlineKeyboardButton(emoji, callback_data=f"emoji_{emoji}") for emoji in all_emojis]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        safe_reply(update, f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{correct_emoji}*", reply_markup=reply_markup)
-        return VERIFICATION
-    
-    profile = user.get("profile", {})
-    required_fields = ["name", "age", "gender", "location"]
-    missing_fields = [field for field in required_fields if not profile.get(field)]
-    if missing_fields:
-        logger.info(f"User {user_id} missing profile fields: {missing_fields}")
-        safe_reply(update, "✨ Let’s set up your profile! Please enter your name:")
-        return NAME
-    
-    if user_id not in waiting_users:
-        if has_premium_feature(user_id, "shine_profile"):
-            waiting_users.insert(0, user_id)
-        else:
-            waiting_users.append(user_id)
-        logger.info(f"User {user_id} added to waiting list")
-        safe_reply(update, "🔍 Looking for a chat partner... Please wait!")
-    
-    match_users(context)
-    return ConversationHandler.END
+
+
 
 def consent_handler(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
@@ -2135,32 +2131,35 @@ def admin_broadcast(update: Update, context: CallbackContext) -> None:
         safe_reply(update, " 😔 Error sending broadcast 🌑 .")
 
 def admin_stats(update: Update, context: CallbackContext) -> None:
-    """Display bot statistics"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, " 🔒 Unauthorized 🌑 .")
+        safe_reply(update, "🔒 Unauthorized 🌑.")
         return
     try:
         users = get_db_collection("users")
         total_users = users.count_documents({})
         current_time = int(time.time())
         premium_users = users.count_documents({"premium_expiry": {"$gt": current_time}})
-        banned_users = users.count_documents({"ban_type": {"$in": ["permanent", "temporary"]}, "$or": [{"ban_expiry": {"$gt": current_time}}, {"ban_type": "permanent"}]})
+        banned_users = users.count_documents({
+            "ban_type": {"$in": ["permanent", "temporary"]},
+            "$or": [{"ban_expiry": {"$gt": current_time}}, {"ban_type": "permanent"}]
+        })
         active_users = len(set(user_pairs.keys()).union(waiting_users))
+        timestamp = datetime.now().strftime("%Y\\-%m\\-%d %H\\:%M\\:%S")
         stats_message = (
-            " 📈 *Bot Statistics* 📈 \n\n"
-            f" 👥 *Total Users*: *{total_users}*\n"
-            f" 💎 *Premium Users*: *{premium_users}*\n"
-            f" 💬 *Active Users*: *{active_users}* \\(in chats or waiting\\)\n"
-            f" 🚫 *Banned Users*: *{banned_users}*\n"
+            "📈 *Bot Statistics* 📈\n\n"
+            f"👥 *Total Users*: *{total_users}*\n"
+            f"💎 *Premium Users*: *{premium_users}*\n"
+            f"💬 *Active Users*: *{active_users}* \\(in chats or waiting\\)\n"
+            f"🚫 *Banned Users*: *{banned_users}*\n"
             "━━━━━━━━━━━━━━\n"
-            f" 🕒 *Updated*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"🕒 *Updated*: {timestamp}"
         )
         safe_reply(update, stats_message)
         logger.info(f"Admin {user_id} requested bot statistics: total={total_users}, premium={premium_users}, active={active_users}, banned={banned_users}")
     except Exception as e:
-        logger.error(f"Error fetching bot statistics: {e}")
-        safe_reply(update, " 😔 Error retrieving statistics 🌑 .")
+        logger.error(f"Error fetching bot statistics: {e}", exc_info=True)
+        safe_reply(update, "😔 Error retrieving statistics 🌑.")
 
 def set_tags(update: Update, context: CallbackContext) -> int:
     """Set user tags for matching"""
