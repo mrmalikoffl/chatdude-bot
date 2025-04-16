@@ -79,28 +79,55 @@ mongo_client = None
 db = None
 operation_queue = Queue()
 
-def init_db():
-    global mongo_client, db
+def init_mongodb():
+    """Initialize MongoDB connection with URL-encoded credentials"""
+    uri = os.getenv("MONGODB_URI")
+    if not uri:
+        logger.error("MONGODB_URI not set")
+        raise EnvironmentError("MONGODB_URI not set")
+    
     try:
-        mongo_uri = os.getenv("MONGODB_URI")
-        if not mongo_uri:
-            logger.error("MONGODB_URI environment variable not set.")
-            raise ValueError("MONGODB_URI not set")
-        mongo_client = MongoClient(mongo_uri, maxPoolSize=15, connectTimeoutMS=5000)
-        db = mongo_client.get_database("botdb")  # Adjust if your DB name differs
-        # Create indexes for performance
-        db.users.create_index("user_id", unique=True)
-        db.reports.create_index(["reporter_id", "reported_id"])
-        db.keyword_violations.create_index("user_id", unique=True)
-        logger.info("MongoDB connection initialized successfully.")
+        # Parse and re-encode username and password
+        if "mongodb+srv://" in uri:
+            parts = uri.split("://")[1].split("@")
+            credentials = parts[0].split(":")
+            if len(credentials) != 2:
+                raise ValueError("Invalid MONGODB_URI format: username:password expected")
+            username, password = credentials
+            host_and_params = parts[1]
+            username = urllib.parse.quote_plus(username)
+            password = urllib.parse.quote_plus(password)
+            uri = f"mongodb+srv://{username}:{password}@{host_and_params}"
+        else:
+            logger.warning("Non-SRV URI detected; ensure credentials are encoded")
+        
+        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        client.admin.command("ping")
+        db = client.get_database("talk2anyone")
+        logger.info("MongoDB connected successfully")
+        return db
+    except ConnectionFailure as e:
+        logger.error(f"MongoDB connection failed: {e}")
+        raise
+    except OperationFailure as e:
+        logger.error(f"MongoDB authentication failed: {e}")
+        raise
+    except ValueError as e:
+        logger.error(f"MongoDB URI parsing error: {e}")
+        raise
     except Exception as e:
-        logger.error(f"Failed to initialize MongoDB: {e}")
+        logger.error(f"Unexpected error initializing MongoDB: {e}")
         raise
 
+# Initialize MongoDB
+try:
+    db = init_mongodb()
+except Exception as e:
+    logger.error(f"Failed to initialize MongoDB: {e}")
+    raise
+
 def get_db_collection(collection_name):
-    if not db:
-        logger.error(f"Database not initialized for collection {collection_name}")
-        return None
+    """Get a MongoDB collection"""
     return db[collection_name]
 
 def process_queued_operations(context: CallbackContext):
