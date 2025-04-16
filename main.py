@@ -14,8 +14,9 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
-import psycopg2
-from psycopg2 import pool
+from pymongo import MongoClient
+from pymongo.errors import ConnectionError, OperationFailure
+from queue import Queue
 from urllib.parse import urlparse
 import json
 import re
@@ -73,125 +74,54 @@ NAME, AGE, GENDER, LOCATION, CONSENT, VERIFICATION, TAGS = range(7)
 # Emoji list for verification
 VERIFICATION_EMOJIS = ['😊', '😢', '😡', '😎', '😍', '😉', '😜', '😴']
 
-# Database connection pool
-db_pool = None
-
-def init_db_pool():
-    global db_pool
-    try:
-        database_url = os.getenv("DATABASE_URL")
-        if not database_url:
-            logger.error("DATABASE_URL environment variable not set.")
-            raise ValueError("DATABASE_URL not set")
-        url = urlparse(database_url)
-        db_pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=1,
-            maxconn=15,  # Adjusted for Heroku Hobby tier
-            database=url.path[1:],
-            user=url.username,
-            password=url.password,
-            host=url.hostname,
-            port=url.port,
-            connect_timeout=5  # Timeout after 5 seconds
-        )
-        logger.info("Database connection pool initialized successfully.")
-    except Exception as e:
-        logger.error(f"Failed to initialize database pool: {e}")
-        raise
-
-def get_db_connection():
-    retries = 3
-    for attempt in range(retries):
-        try:
-            conn = db_pool.getconn()
-            active_connections = len(db_pool._used)
-            max_connections = db_pool.maxconn
-            logger.debug(f"Acquired connection. Active: {active_connections}/{max_connections}")
-            return conn
-        except Exception as e:
-            logger.error(f"Attempt {attempt + 1}/{retries} failed to get database connection: {e}. Active: {len(db_pool._used)}/{db_pool.maxconn}")
-            if attempt < retries - 1:
-                time.sleep(1)  # Wait 1 second before retrying
-    logger.error("Failed to get database connection after retries")
-    return None
-
-def release_db_connection(conn):
-    if conn:
-        try:
-            db_pool.putconn(conn)
-            logger.debug("Database connection released successfully")
-        except Exception as e:
-            logger.error(f"Failed to release database connection: {e}")
+# MongoDB client and database
+mongo_client = None
+db = None
+operation_queue = Queue()
 
 def init_db():
-    conn = get_db_connection()
-    if not conn:
-        logger.error("Could not get database connection for initialization.")
-        return
+    global mongo_client, db
     try:
-        with conn.cursor() as c:
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    profile JSONB DEFAULT '{}',
-                    consent BOOLEAN DEFAULT FALSE,
-                    consent_time BIGINT,
-                    premium_expiry BIGINT,
-                    ban_type TEXT,
-                    ban_expiry BIGINT,
-                    verified BOOLEAN DEFAULT FALSE,
-                    premium_features JSONB DEFAULT '{}',
-                    created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
-                )
-            """)
-            c.execute("""
-                ALTER TABLE users 
-                ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
-            """)
-            c.execute("""
-                UPDATE users 
-                SET created_at = consent_time 
-                WHERE created_at IS NULL AND consent_time IS NOT NULL
-            """)
-            c.execute("""
-                UPDATE users 
-                SET created_at = EXTRACT(EPOCH FROM NOW()) 
-                WHERE created_at IS NULL
-            """)
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS reports (
-                    report_id SERIAL PRIMARY KEY,
-                    reporter_id BIGINT,
-                    reported_id BIGINT,
-                    timestamp BIGINT,
-                    reason TEXT,
-                    reporter_profile JSONB,
-                    reported_profile JSONB
-                )
-            """)
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS keyword_violations (
-                    user_id BIGINT PRIMARY KEY,
-                    count INTEGER DEFAULT 1,
-                    last_violation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    keyword TEXT,
-                    ban_type VARCHAR(20),
-                    ban_expiry INTEGER
-                )
-            """)
-            conn.commit()
-            logger.info("Database tables initialized successfully.")
+        mongo_uri = os.getenv("MONGODB_URI")
+        if not mongo_uri:
+            logger.error("MONGODB_URI environment variable not set.")
+            raise ValueError("MONGODB_URI not set")
+        mongo_client = MongoClient(mongo_uri, maxPoolSize=15, connectTimeoutMS=5000)
+        db = mongo_client.get_database("botdb")  # Adjust if your DB name differs
+        # Create indexes for performance
+        db.users.create_index("user_id", unique=True)
+        db.reports.create_index(["reporter_id", "reported_id"])
+        db.keyword_violations.create_index("user_id", unique=True)
+        logger.info("MongoDB connection initialized successfully.")
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}", exc_info=True)
-        conn.rollback()
-    finally:
-        release_db_connection(conn)
+        logger.error(f"Failed to initialize MongoDB: {e}")
+        raise
+
+def get_db_collection(collection_name):
+    if not db:
+        logger.error(f"Database not initialized for collection {collection_name}")
+        return None
+    return db[collection_name]
+
+def process_queued_operations(context: CallbackContext):
+    while not operation_queue.empty():
+        op_type, args = operation_queue.get()
+        try:
+            if op_type == "update_user":
+                update_user(*args)
+            elif op_type == "delete_user":
+                delete_user(*args)
+            elif op_type == "issue_keyword_violation":
+                issue_keyword_violation(*args)
+            logger.info(f"Successfully processed queued operation: {op_type} with args {args}")
+        except Exception as e:
+            logger.error(f"Failed to process queued operation {op_type} with args {args}: {e}")
+            operation_queue.put((op_type, args))  # Re-queue on failure
 
 try:
-    init_db_pool()
     init_db()
 except Exception as e:
-    logger.error(f"Failed to set up database: {e}")
+    logger.error(f"Failed to set up MongoDB: {e}")
     exit(1)
 
 def cleanup_in_memory(context: CallbackContext):
@@ -204,17 +134,15 @@ def cleanup_in_memory(context: CallbackContext):
     for user_id in list(chat_histories.keys()):
         if not has_premium_feature(user_id, "vaulted_chats"):
             del chat_histories[user_id]
-    conn = get_db_connection()
     try:
-        with conn.cursor() as c:
-            c.execute("DELETE FROM keyword_violations WHERE last_violation < %s AND count < 3",
-                      (datetime.now() - timedelta(hours=48),))
-            conn.commit()
+        violations = get_db_collection("keyword_violations")
+        violations.delete_many({
+            "last_violation": {"$lt": int((datetime.now() - timedelta(hours=48)).timestamp())},
+            "count": {"$lt": 3}
+        })
+        logger.debug("In-memory and keyword violations cleaned up.")
     except Exception as e:
         logger.error(f"Error cleaning up keyword violations: {e}")
-    finally:
-        release_db_connection(conn)
-    logger.debug("In-memory data cleaned up.")
 
 def cleanup_premium_features(user_id: int) -> bool:
     user = get_user(user_id)
@@ -241,280 +169,205 @@ def cleanup_premium_features(user_id: int) -> bool:
     })
 
 def get_user(user_id: int) -> dict:
-    conn = get_db_connection()
-    if not conn:
-        logger.error(f"Failed to get database connection for user_id={user_id}")
-        return {}
     try:
-        with conn.cursor() as c:
-            c.execute(
-                "SELECT profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified, premium_features, created_at "
-                "FROM users WHERE user_id = %s",
-                (user_id,)
-            )
-            result = c.fetchone()
-            if result:
-                user_data = {
-                    "user_id": user_id,
-                    "profile": result[0] or {},
-                    "consent": result[1],
-                    "consent_time": result[2],
-                    "premium_expiry": result[3],
-                    "ban_type": result[4],
-                    "ban_expiry": result[5],
-                    "verified": result[6],
-                    "premium_features": result[7] or {},
-                    "created_at": result[8]
-                }
-                c.execute("SELECT ban_type, ban_expiry FROM keyword_violations WHERE user_id = %s", (user_id,))
-                violation = c.fetchone()
-                if violation and violation[0]:
-                    user_data["ban_type"] = violation[0]
-                    user_data["ban_expiry"] = violation[1]
-                cleanup_premium_features(user_id)
-                return user_data
-            new_user = {
-                "user_id": user_id,
-                "profile": {},
-                "consent": False,
-                "consent_time": None,
-                "premium_expiry": None,
-                "ban_type": None,
-                "ban_expiry": None,
-                "verified": False,
-                "premium_features": {},
-                "created_at": int(time.time())
-            }
-            c.execute("""
-                INSERT INTO users (user_id, profile, consent, consent_time, premium_expiry, 
-                                 ban_type, ban_expiry, verified, premium_features, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (user_id) DO NOTHING
-                RETURNING *
-            """, (
-                user_id,
-                json.dumps(new_user["profile"]),
-                new_user["consent"],
-                new_user["consent_time"],
-                new_user["premium_expiry"],
-                new_user["ban_type"],
-                new_user["ban_expiry"],
-                new_user["verified"],
-                json.dumps(new_user["premium_features"]),
-                new_user["created_at"]
-            ))
-            conn.commit()
-            logger.info(f"Created new user with user_id={user_id}")
-            return new_user
-    except Exception as e:
+        users = get_db_collection("users")
+        user = users.find_one({"user_id": user_id})
+        if user:
+            violations = get_db_collection("keyword_violations")
+            violation = violations.find_one({"user_id": user_id})
+            if violation and violation.get("ban_type"):
+                user["ban_type"] = violation["ban_type"]
+                user["ban_expiry"] = violation.get("ban_expiry")
+            cleanup_premium_features(user_id)
+            return user
+        new_user = {
+            "user_id": user_id,
+            "profile": {},
+            "consent": False,
+            "consent_time": None,
+            "premium_expiry": None,
+            "ban_type": None,
+            "ban_expiry": None,
+            "verified": False,
+            "premium_features": {},
+            "created_at": int(time.time())
+        }
+        users.insert_one(new_user)
+        logger.info(f"Created new user with user_id={user_id}")
+        return new_user
+    except (ConnectionError, OperationFailure) as e:
         logger.error(f"Failed to get or create user {user_id}: {e}")
         return {}
-    finally:
-        release_db_connection(conn)
 
 def update_user(user_id: int, data: dict) -> bool:
-    conn = get_db_connection()
-    if not conn:
-        logger.error(f"No database connection for update_user {user_id}")
-        return False
     retries = 3
     for attempt in range(retries):
         try:
-            with conn.cursor() as c:
-                c.execute(
-                    "SELECT profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified, premium_features, created_at "
-                    "FROM users WHERE user_id = %s FOR UPDATE",
-                    (user_id,)
-                )
-                existing = c.fetchone()
-                if existing:
-                    existing_data = {
-                        "profile": existing[0] or {},
-                        "consent": existing[1],
-                        "consent_time": existing[2],
-                        "premium_expiry": existing[3],
-                        "ban_type": existing[4],
-                        "ban_expiry": existing[5],
-                        "verified": existing[6],
-                        "premium_features": existing[7] or {},
-                        "created_at": existing[8]
-                    }
-                else:
-                    existing_data = {
-                        "profile": {},
-                        "consent": False,
-                        "consent_time": None,
-                        "premium_expiry": None,
-                        "ban_type": None,
-                        "ban_expiry": None,
-                        "verified": False,
-                        "premium_features": {},
-                        "created_at": int(time.time())
-                    }
-                updated_data = {
-                    "profile": data.get("profile", existing_data["profile"]),
-                    "consent": data.get("consent", existing_data["consent"]),
-                    "consent_time": data.get("consent_time", existing_data["consent_time"]),
-                    "premium_expiry": data.get("premium_expiry", existing_data["premium_expiry"]),
-                    "ban_type": data.get("ban_type", existing_data["ban_type"]),
-                    "ban_expiry": data.get("ban_expiry", existing_data["ban_expiry"]),
-                    "verified": data.get("verified", existing_data["verified"]),
-                    "premium_features": data.get("premium_features", existing_data["premium_features"]),
-                    "created_at": data.get("created_at", existing_data["created_at"])
+            users = get_db_collection("users")
+            existing = users.find_one({"user_id": user_id})
+            if existing:
+                existing_data = {
+                    "profile": existing.get("profile", {}),
+                    "consent": existing.get("consent", False),
+                    "consent_time": existing.get("consent_time"),
+                    "premium_expiry": existing.get("premium_expiry"),
+                    "ban_type": existing.get("ban_type"),
+                    "ban_expiry": existing.get("ban_expiry"),
+                    "verified": existing.get("verified", False),
+                    "premium_features": existing.get("premium_features", {}),
+                    "created_at": existing.get("created_at", int(time.time()))
                 }
-                c.execute("""
-                    INSERT INTO users (user_id, profile, consent, consent_time, premium_expiry, ban_type, ban_expiry, verified, premium_features, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (user_id) DO UPDATE
-                    SET profile = EXCLUDED.profile,
-                        consent = EXCLUDED.consent,
-                        consent_time = EXCLUDED.consent_time,
-                        premium_expiry = EXCLUDED.premium_expiry,
-                        ban_type = EXCLUDED.ban_type,
-                        ban_expiry = EXCLUDED.ban_expiry,
-                        verified = EXCLUDED.verified,
-                        premium_features = EXCLUDED.premium_features,
-                        created_at = EXCLUDED.created_at
-                """, (
-                    user_id,
-                    json.dumps(updated_data["profile"]),
-                    updated_data["consent"],
-                    updated_data["consent_time"],
-                    updated_data["premium_expiry"],
-                    updated_data["ban_type"],
-                    updated_data["ban_expiry"],
-                    updated_data["verified"],
-                    json.dumps(updated_data["premium_features"]),
-                    updated_data["created_at"]
-                ))
-                conn.commit()
-                logger.debug(f"Updated user {user_id}: {json.dumps(updated_data, default=str)}")
-                return True
-        except Exception as e:
+            else:
+                existing_data = {
+                    "profile": {},
+                    "consent": False,
+                    "consent_time": None,
+                    "premium_expiry": None,
+                    "ban_type": None,
+                    "ban_expiry": None,
+                    "verified": False,
+                    "premium_features": {},
+                    "created_at": int(time.time())
+                }
+            updated_data = {
+                "user_id": user_id,
+                "profile": data.get("profile", existing_data["profile"]),
+                "consent": data.get("consent", existing_data["consent"]),
+                "consent_time": data.get("consent_time", existing_data["consent_time"]),
+                "premium_expiry": data.get("premium_expiry", existing_data["premium_expiry"]),
+                "ban_type": data.get("ban_type", existing_data["ban_type"]),
+                "ban_expiry": data.get("ban_expiry", existing_data["ban_expiry"]),
+                "verified": data.get("verified", existing_data["verified"]),
+                "premium_features": data.get("premium_features", existing_data["premium_features"]),
+                "created_at": data.get("created_at", existing_data["created_at"])
+            }
+            users.update_one(
+                {"user_id": user_id},
+                {"$set": updated_data},
+                upsert=True
+            )
+            logger.debug(f"Updated user {user_id}: {json.dumps(updated_data, default=str)}")
+            return True
+        except (ConnectionError, OperationFailure) as e:
             logger.error(f"Attempt {attempt + 1}/{retries} failed to update user {user_id}: {e}")
-            conn.rollback()
             if attempt < retries - 1:
                 time.sleep(1)
-        finally:
-            release_db_connection(conn)
+        except Exception as e:
+            logger.error(f"Unexpected error updating user {user_id}: {e}")
+            break
     logger.error(f"Failed to update user {user_id} after {retries} attempts")
+    operation_queue.put(("update_user", (user_id, data)))
     return False
 
 def delete_user(user_id: int):
-    conn = get_db_connection()
-    if not conn:
-        logger.error(f"Failed to get database connection for deleting user {user_id}")
-        raise Exception("Database connection unavailable")
     try:
-        with conn.cursor() as c:
-            c.execute("""
-                BEGIN;
-                DELETE FROM reports WHERE reporter_id = %s OR reported_id = %s;
-                DELETE FROM keyword_violations WHERE user_id = %s;
-                DELETE FROM users WHERE user_id = %s;
-                COMMIT;
-            """, (user_id, user_id, user_id, user_id))
+        reports = get_db_collection("reports")
+        violations = get_db_collection("keyword_violations")
+        users = get_db_collection("users")
+        reports.delete_many({"$or": [{"reporter_id": user_id}, {"reported_id": user_id}]})
+        violations.delete_many({"user_id": user_id})
+        result = users.delete_one({"user_id": user_id})
+        if result.deleted_count > 0:
             logger.info(f"Deleted user {user_id} from database.")
-    except Exception as e:
+        else:
+            logger.warning(f"No user found with user_id {user_id}")
+    except (ConnectionError, OperationFailure) as e:
         logger.error(f"Failed to delete user {user_id}: {e}")
-        conn.rollback()
+        operation_queue.put(("delete_user", (user_id,)))
         raise
-    finally:
-        release_db_connection(conn)
+    except Exception as e:
+        logger.error(f"Unexpected error deleting user {user_id}: {e}")
+        raise
 
 def issue_keyword_violation(user_id: int, keyword: str, update: Update, context: CallbackContext) -> str:
-    conn = get_db_connection()
-    if not conn:
-        logger.error("Database error in issue_keyword_violation")
-        safe_reply(update, "❌ Internal error.")
-        return "error"
     try:
-        with conn.cursor() as c:
-            c.execute("SELECT last_violation FROM keyword_violations WHERE user_id = %s", (user_id,))
-            last = c.fetchone()
-            if last and (datetime.now().timestamp() - last[0].timestamp() > 48*3600):
-                c.execute("DELETE FROM keyword_violations WHERE user_id = %s", (user_id,))
-            c.execute(
-                "INSERT INTO keyword_violations (user_id, count, keyword) VALUES (%s, 1, %s) "
-                "ON CONFLICT (user_id) DO UPDATE SET count = keyword_violations.count + 1, "
-                "last_violation = CURRENT_TIMESTAMP, keyword = %s RETURNING count",
-                (user_id, keyword, keyword)
+        violations = get_db_collection("keyword_violations")
+        violation = violations.find_one({"user_id": user_id})
+        current_time = int(time.time())
+        if violation and (current_time - violation.get("last_violation", 0) > 48 * 3600):
+            violations.delete_one({"user_id": user_id})
+            violation = None
+        count = (violation.get("count", 0) + 1) if violation else 1
+        if count == 1:
+            violations.update_one(
+                {"user_id": user_id},
+                {"$set": {"count": 1, "keyword": keyword, "last_violation": current_time}},
+                upsert=True
             )
-            count = c.fetchone()[0]
-            if count == 1:
-                safe_reply(update, 
-                    "🚨 *Warning 1/5* 🚨\n"
-                    "Your message contained inappropriate content. Please follow the rules to avoid further action."
-                )
-                logger.warning(f"User {user_id} warned (1/5) for keyword: {keyword}")
-                return "warned_1"
-            elif count == 2:
-                safe_reply(update, 
-                    "🚨 *Warning 2/5* 🚨\n"
-                    "Another inappropriate message detected. One more violation will result in a 12-hour ban."
-                )
-                logger.warning(f"User {user_id} warned (2/5) for keyword: {keyword}")
-                return "warned_2"
-            elif count == 3:
-                ban_expiry = int(time.time()) + 12*3600
-                c.execute(
-                    "UPDATE keyword_violations SET ban_type = 'temporary', ban_expiry = %s WHERE user_id = %s",
-                    (ban_expiry, user_id)
-                )
-                c.execute(
-                    "UPDATE users SET ban_type = 'temporary', ban_expiry = %s WHERE user_id = %s",
-                    (ban_expiry, user_id)
-                )
-                safe_reply(update, 
-                    "🚫 *Temporary Ban* 🚫\n"
-                    "You’ve been banned for 12 hours due to repeated inappropriate messages. "
-                    "Contact support if you believe this is an error."
-                )
-                logger.info(f"User {user_id} banned for 12 hours (3/5) for keyword: {keyword}")
-                stop(update, context)
-                return "banned_12h"
-            elif count == 4:
-                ban_expiry = int(time.time()) + 24*3600
-                c.execute(
-                    "UPDATE keyword_violations SET ban_type = 'temporary', ban_expiry = %s WHERE user_id = %s",
-                    (ban_expiry, user_id)
-                )
-                c.execute(
-                    "UPDATE users SET ban_type = 'temporary', ban_expiry = %s WHERE user_id = %s",
-                    (ban_expiry, user_id)
-                )
-                safe_reply(update, 
-                    "🚫 *Temporary Ban* 🚫\n"
-                    "You’ve been banned for 24 hours due to continued violations. "
-                    "Further issues will lead to a permanent ban."
-                )
-                logger.info(f"User {user_id} banned for 24 hours (4/5) for keyword: {keyword}")
-                stop(update, context)
-                return "banned_24h"
-            else:
-                c.execute(
-                    "UPDATE keyword_violations SET ban_type = 'permanent', ban_expiry = NULL WHERE user_id = %s",
-                    (user_id,)
-                )
-                c.execute(
-                    "UPDATE users SET ban_type = 'permanent', ban_expiry = NULL WHERE user_id = %s",
-                    (user_id,)
-                )
-                safe_reply(update, 
-                    "🚫 *Permanent Ban* 🚫\n"
-                    "You’ve been permanently banned for repeated violations. "
-                    "Contact support to appeal."
-                )
-                logger.info(f"User {user_id} permanently banned (5/5) for keyword: {keyword}")
-                stop(update, context)
-                return "banned_permanent"
-            conn.commit()
-    except Exception as e:
+            safe_reply(update, 
+                "🚨 *Warning 1/5* 🚨\n"
+                "Your message contained inappropriate content. Please follow the rules to avoid further action."
+            )
+            logger.warning(f"User {user_id} warned (1/5) for keyword: {keyword}")
+            return "warned_1"
+        elif count == 2:
+            violations.update_one(
+                {"user_id": user_id},
+                {"$set": {"count": 2, "keyword": keyword, "last_violation": current_time}},
+                upsert=True
+            )
+            safe_reply(update, 
+                "🚨 *Warning 2/5* 🚨\n"
+                "Another inappropriate message detected. One more violation will result in a 12-hour ban."
+            )
+            logger.warning(f"User {user_id} warned (2/5) for keyword: {keyword}")
+            return "warned_2"
+        elif count == 3:
+            ban_expiry = current_time + 12 * 3600
+            violations.update_one(
+                {"user_id": user_id},
+                {"$set": {"count": 3, "keyword": keyword, "last_violation": current_time, "ban_type": "temporary", "ban_expiry": ban_expiry}},
+                upsert=True
+            )
+            update_user(user_id, {"ban_type": "temporary", "ban_expiry": ban_expiry})
+            safe_reply(update, 
+                "🚫 *Temporary Ban* 🚫\n"
+                "You’ve been banned for 12 hours due to repeated inappropriate messages. "
+                "Contact support if you believe this is an error."
+            )
+            logger.info(f"User {user_id} banned for 12 hours (3/5) for keyword: {keyword}")
+            stop(update, context)
+            return "banned_12h"
+        elif count == 4:
+            ban_expiry = current_time + 24 * 3600
+            violations.update_one(
+                {"user_id": user_id},
+                {"$set": {"count": 4, "keyword": keyword, "last_violation": current_time, "ban_type": "temporary", "ban_expiry": ban_expiry}},
+                upsert=True
+            )
+            update_user(user_id, {"ban_type": "temporary", "ban_expiry": ban_expiry})
+            safe_reply(update, 
+                "🚫 *Temporary Ban* 🚫\n"
+                "You’ve been banned for 24 hours due to continued violations. "
+                "Further issues will lead to a permanent ban."
+            )
+            logger.info(f"User {user_id} banned for 24 hours (4/5) for keyword: {keyword}")
+            stop(update, context)
+            return "banned_24h"
+        else:
+            violations.update_one(
+                {"user_id": user_id},
+                {"$set": {"count": 5, "keyword": keyword, "last_violation": current_time, "ban_type": "permanent", "ban_expiry": None}},
+                upsert=True
+            )
+            update_user(user_id, {"ban_type": "permanent", "ban_expiry": None})
+            safe_reply(update, 
+                "🚫 *Permanent Ban* 🚫\n"
+                "You’ve been permanently banned for repeated violations. "
+                "Contact support to appeal."
+            )
+            logger.info(f"User {user_id} permanently banned (5/5) for keyword: {keyword}")
+            stop(update, context)
+            return "banned_permanent"
+    except (ConnectionError, OperationFailure) as e:
         logger.error(f"Error issuing keyword violation for {user_id}: {e}")
+        operation_queue.put(("issue_keyword_violation", (user_id, keyword, update, context)))
         safe_reply(update, "❌ Error processing your message.")
         return "error"
-    finally:
-        release_db_connection(conn)
+    except Exception as e:
+        logger.error(f"Unexpected error issuing violation for {user_id}: {e}")
+        safe_reply(update, "❌ Error processing your message.")
+        return "error"
 
 def is_banned(user_id: int) -> bool:
     user = get_user(user_id)
@@ -1494,7 +1347,7 @@ def flare(update: Update, context: CallbackContext) -> None:
     logger.info(f"User {user_id} activated Flare Messages 🎉")
     updated_user = get_user(user_id)
     logger.debug(f"User {user_id} after flare: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
-    
+
 def button(update: Update, context: CallbackContext) -> None:
     """Handle callback queries from inline buttons"""
     query = update.callback_query
@@ -1562,178 +1415,56 @@ def button(update: Update, context: CallbackContext) -> None:
                 parse_mode="MarkdownV2",
                 reply_markup=reply_markup
             )
-            safe_reply(update, "📩 Rematch request sent 📬. Waiting for their response...")
+            safe_reply(update, "📩 Rematch request sent. Waiting for their response...")
             context.bot_data["rematch_requests"] = context.bot_data.get("rematch_requests", {})
             context.bot_data["rematch_requests"][partner_id] = {
                 "requester_id": user_id,
                 "timestamp": int(time.time()),
                 "message_id": message.message_id
             }
-            logger.info(f"User {user_id} sent rematch request to {partner_id} 📨")
+            logger.info(f"User {user_id} sent rematch request to {partner_id}")
         except telegram.error.TelegramError as e:
-            safe_reply(update, "❌ Unable to reach this user 😔. They may be offline.")
+            safe_reply(update, "❌ Unable to reach this user. They may be offline.")
             logger.warning(f"Failed to send rematch request to {partner_id}: {e}")
     elif data.startswith("rematch_accept_"):
         requester_id = int(data.split("_")[-1])
-        if is_banned(user_id):
-            safe_reply(update, "🚫 You are banned and cannot accept rematch requests 🔒.")
-            return
         if user_id in user_pairs:
             safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.")
             return
-        if requester_id in user_pairs:
-            safe_reply(update, "❌ This user is now in another chat 💬.")
+        requester_data = get_user(requester_id)
+        if not requester_data:
+            safe_reply(update, "❌ This user is no longer available 😓.")
             return
-        if user_id in waiting_users:
-            waiting_users.remove(user_id)
+        if requester_id in user_pairs:
+            safe_reply(update, "❌ This user is currently in another chat 💬.")
+            return
         user_pairs[user_id] = requester_id
         user_pairs[requester_id] = user_id
-        safe_reply(update, "✅ *Reconnected!* Start chatting! 🗣️")
-        safe_bot_send_message(context.bot, requester_id, "✅ *Reconnected!* Start chatting! 🗣️")
-        logger.info(f"User {user_id} accepted rematch with {requester_id} 🎉")
+        safe_reply(update, "🔄 *Reconnected!* Start chatting! 🗣️")
+        safe_bot_send_message(context.bot, requester_id, "🔄 *Reconnected!* Start chatting! 🗣️")
         if has_premium_feature(user_id, "vaulted_chats"):
             chat_histories[user_id] = chat_histories.get(user_id, [])
         if has_premium_feature(requester_id, "vaulted_chats"):
             chat_histories[requester_id] = chat_histories.get(requester_id, [])
-        # Delete the rematch request message
-        rematch_data = context.bot_data.get("rematch_requests", {}).get(user_id)
-        if rematch_data and rematch_data.get("message_id"):
-            try:
-                context.bot.delete_message(chat_id=user_id, message_id=rematch_data["message_id"])
-                logger.info(f"Deleted rematch request message for user {user_id} 🗑️")
-            except telegram.error.TelegramError as e:
-                logger.warning(f"Failed to delete rematch request message for {user_id}: {e}")
-            context.bot_data["rematch_requests"].pop(user_id, None)
+        context.bot_data.get("rematch_requests", {}).pop(user_id, None)
+        logger.info(f"User {user_id} accepted rematch with {requester_id}")
     elif data == "rematch_decline":
-        rematch_data = context.bot_data.get("rematch_requests", {}).get(user_id)
-        if rematch_data:
-            requester_id = rematch_data.get("requester_id")
-            safe_reply(update, "❌ Rematch request declined 😔.")
+        safe_reply(update, "❌ Rematch request declined.")
+        requester_data = context.bot_data.get("rematch_requests", {}).get(user_id, {})
+        requester_id = requester_data.get("requester_id")
+        if requester_id:
             safe_bot_send_message(context.bot, requester_id, "❌ Your rematch request was declined 😔.")
-            logger.info(f"User {user_id} declined rematch with {requester_id} 🚫")
-            # Delete the rematch request message
-            if rematch_data.get("message_id"):
-                try:
-                    context.bot.delete_message(chat_id=user_id, message_id=rematch_data["message_id"])
-                    logger.info(f"Deleted rematch request message for user {user_id} 🗑️")
-                except telegram.error.TelegramError as e:
-                    logger.warning(f"Failed to delete rematch request message for {user_id}: {e}")
-                context.bot_data["rematch_requests"].pop(user_id, None)
+            logger.info(f"User {user_id} declined rematch with {requester_id}")
+        context.bot_data.get("rematch_requests", {}).pop(user_id, None)
     elif data.startswith("emoji_"):
         verify_emoji(update, context)
     elif data.startswith("consent_"):
         consent_handler(update, context)
     elif data.startswith("gender_"):
         set_gender(update, context)
-    elif data.startswith("set_"):
-        handle_settings_buttons(update, context)
-
-def cleanup_rematch_requests(context: CallbackContext) -> None:
-    """Clean up timed-out rematch requests"""
-    current_time = int(time.time())
-    rematch_requests = context.bot_data.get("rematch_requests", {})
-    for user_id, data in list(rematch_requests.items()):
-        if current_time - data["timestamp"] > 24 * 3600:  # 24 hours timeout
-            try:
-                context.bot.delete_message(chat_id=user_id, message_id=data["message_id"])
-                logger.info(f"Deleted timed-out rematch request message for user {user_id}")
-            except telegram.error.TelegramError as e:
-                logger.warning(f"Failed to delete timed-out rematch request for {user_id}: {e}")
-            requester_id = data.get("requester_id")
-            safe_bot_send_message(context.bot, requester_id, "🔄 Your rematch request timed out 😔.")
-            rematch_requests.pop(user_id, None)
-    context.bot_data["rematch_requests"] = rematch_requests
-
-def message_handler(update: Update, context: CallbackContext) -> None:
-    """Handle user messages and forward them"""
-    user_id = update.effective_user.id
-    if is_banned(user_id):
-        user = get_user(user_id)
-        ban_msg = "🚫 You are permanently banned 🔒. Contact support to appeal 📧." if user["ban_type"] == "permanent" else \
-                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
-        safe_reply(update, ban_msg)
-        return
-    if not check_message_rate_limit(user_id):
-        safe_reply(update, "⏳ You're sending messages too fast 😓. Please wait a moment.")
-        return
-    text = update.message.text.strip()
-    is_safe, reason = is_safe_message(text)
-    if not is_safe:
-        violation_result = issue_keyword_violation(user_id, reason, update, context)
-        logger.warning(f"User {user_id} sent unsafe message: {text[:50]}... Result: {violation_result}")
-        return
-    if user_id not in user_pairs:
-        safe_reply(update, "❌ You're not in a chat 😔. Use /start to find a partner 🌐.")
-        return
-    partner_id = user_pairs[user_id]
-    formatted_message = text
-    if has_premium_feature(user_id, "flare_messages"):
-        formatted_message = f"🌟 {text} 🌟"
-    try:
-        safe_bot_send_message(context.bot, partner_id, formatted_message)
-        if has_premium_feature(user_id, "vaulted_chats"):
-            chat_histories[user_id].append(f"You: {text}")
-        if has_premium_feature(partner_id, "vaulted_chats"):
-            chat_histories[partner_id].append(f"Partner: {text}")
-        logger.info(f"Message from {user_id} to {partner_id}: {text[:50]}...")
-    except telegram.error.TelegramError as e:
-        safe_reply(update, "❌ Failed to send message 😓. Your partner may have disconnected.")
-        logger.error(f"Failed to send message from {user_id} to {partner_id}: {e}")
-        stop(update, context)
-
-def report(update: Update, context: CallbackContext) -> None:
-    """Handle user reports"""
-    user_id = update.effective_user.id
-    if is_banned(user_id):
-        user = get_user(user_id)
-        ban_msg = "🚫 You are permanently banned 🔒. Contact support to appeal 📧." if user["ban_type"] == "permanent" else \
-                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
-        safe_reply(update, ban_msg)
-        return
-    if user_id not in user_pairs:
-        safe_reply(update, "❌ You're not in a chat 😔. Use /start to begin 🌐.")
-        return
-    partner_id = user_pairs[user_id]
-    conn = get_db_connection()
-    if not conn:
-        safe_reply(update, "❌ Internal error 😓. Please try again later.")
-        return
-    try:
-        with conn.cursor() as c:
-            c.execute(
-                "INSERT INTO reports (reporter_id, reported_id, timestamp, reason, reporter_profile, reported_profile) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                (
-                    user_id,
-                    partner_id,
-                    int(time.time()),
-                    "User reported inappropriate behavior",
-                    json.dumps(get_user(user_id).get("profile", {})),
-                    json.dumps(get_user(partner_id).get("profile", {}))
-                )
-            )
-            c.execute(
-                "SELECT COUNT(*) FROM reports WHERE reported_id = %s AND timestamp > %s",
-                (partner_id, int(time.time()) - 24 * 3600)
-            )
-            report_count = c.fetchone()[0]
-            conn.commit()
-            safe_reply(update, "🚩 Report submitted ✅. Our team will review it.")
-            if report_count >= REPORT_THRESHOLD:
-                ban_expiry = int(time.time()) + TEMP_BAN_DURATION
-                update_user(partner_id, {"ban_type": "temporary", "ban_expiry": ban_expiry})
-                safe_bot_send_message(context.bot, partner_id, "🚫 You've been temporarily banned for 24 hours ⏰ due to multiple reports.")
-                logger.info(f"User {partner_id} banned temporarily due to {report_count} reports.")
-                stop(update, context)
-            logger.info(f"User {user_id} reported {partner_id}.")
-    except Exception as e:
-        logger.error(f"Failed to process report from {user_id} against {partner_id}: {e}")
-        safe_reply(update, "❌ Error submitting report 😓. Please try again.")
-    finally:
-        release_db_connection(conn)
 
 def settings(update: Update, context: CallbackContext) -> None:
-    """Display settings menu"""
+    """Display settings menu for profile customization"""
     user_id = update.effective_user.id
     if is_banned(user_id):
         user = get_user(user_id)
@@ -1741,118 +1472,165 @@ def settings(update: Update, context: CallbackContext) -> None:
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
         safe_reply(update, ban_msg)
         return
-    keyboard = [
-        [InlineKeyboardButton("Update Name", callback_data="set_name"),
-         InlineKeyboardButton("Update Age", callback_data="set_age")],
-        [InlineKeyboardButton("Update Gender", callback_data="set_gender"),
-         InlineKeyboardButton("Update Location", callback_data="set_location")],
-        [InlineKeyboardButton("Set Tags", callback_data="set_tags")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    safe_reply(update, "⚙️ *Settings Menu* ⚙️\n\nUpdate your profile below:", reply_markup=reply_markup)
-
-def handle_settings_buttons(update: Update, context: CallbackContext) -> int:
-    """Handle settings menu button presses"""
-    query = update.callback_query
-    query.answer()
-    user_id = query.from_user.id
-    data = query.data
-    if data == "set_name":
-        safe_reply(update, "✍️ Please enter your new name:")
-        return NAME
-    elif data == "set_age":
-        safe_reply(update, "🎂 Please enter your new age (e.g., 25):")
-        return AGE
-    elif data == "set_gender":
-        keyboard = [
-            [
-                InlineKeyboardButton("Male", callback_data="gender_male"),
-                InlineKeyboardButton("Female", callback_data="gender_female"),
-                InlineKeyboardButton("Other", callback_data="gender_other")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        safe_reply(update, "⚧️ *Set Your Gender* ⚧️\n\nChoose your gender below:", reply_markup=reply_markup)
-        return GENDER
-    elif data == "set_location":
-        safe_reply(update, "🌍 Please enter your new location (e.g., New York):")
-        return LOCATION
-    elif data == "set_tags":
-        safe_reply(update, f"🏷️ Enter your interest tags (e.g., music, gaming). Available tags: {', '.join(ALLOWED_TAGS)}")
-        return TAGS
-    return ConversationHandler.END
-
-def set_tags(update: Update, context: CallbackContext) -> int:
-    """Set user interest tags"""
-    user_id = update.effective_user.id
     user = get_user(user_id)
     profile = user.get("profile", {})
-    tags_input = update.message.text.strip().lower().split()
-    tags = [tag for tag in tags_input if tag in ALLOWED_TAGS]
-    if not tags:
-        safe_reply(update, f"❌ No valid tags provided 😓. Available tags: {', '.join(ALLOWED_TAGS)}")
-        return TAGS
-    profile["tags"] = tags[:5]  # Limit to 5 tags
-    update_user(user_id, {
-        "profile": profile,
-        "consent": user.get("consent", False),
-        "verified": user.get("verified", False),
-        "premium_expiry": user.get("premium_expiry"),
-        "premium_features": user.get("premium_features", {}),
-        "created_at": user.get("created_at", int(time.time()))
-    })
-    safe_reply(update, f"🏷️ Tags set to: *{', '.join(tags)}* 🎉!")
-    return ConversationHandler.END
+    keyboard = [
+        [InlineKeyboardButton("🧑 Change Name", callback_data="set_name"),
+         InlineKeyboardButton("🎂 Change Age", callback_data="set_age")],
+        [InlineKeyboardButton("👤 Change Gender", callback_data="set_gender"),
+         InlineKeyboardButton("📍 Change Location", callback_data="set_location")],
+        [InlineKeyboardButton("🏷️ Set Tags", callback_data="set_tags"),
+         InlineKeyboardButton("🔙 Back to Help", callback_data="help_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    settings_text = (
+        "⚙️ *Settings Menu* ⚙️\n\n"
+        "Customize your profile to enhance your chat experience:\n\n"
+        f"🧑 *Name*: {profile.get('name', 'Not set')}\n"
+        f"🎂 *Age*: {profile.get('age', 'Not set')}\n"
+        f"👤 *Gender*: {profile.get('gender', 'Not set')}\n"
+        f"📍 *Location*: {profile.get('location', 'Not set')}\n"
+        f"🏷️ *Tags*: {', '.join(profile.get('tags', []) or ['None'])}\n\n"
+        "Use the buttons below to update your profile! 👇"
+    )
+    safe_reply(update, settings_text, reply_markup=reply_markup)
+
+def report(update: Update, context: CallbackContext) -> None:
+    """Report a user for inappropriate behavior"""
+    user_id = update.effective_user.id
+    if is_banned(user_id):
+        user = get_user(user_id)
+        ban_msg = "🚫 You are permanently banned 🔒. Contact support to appeal 📧." if user["ban_type"] == "permanent" else \
+                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
+        safe_reply(update, ban_msg)
+        return
+    if user_id not in user_pairs:
+        safe_reply(update, "❓ You're not in a chat 😔. Use /start to begin.")
+        return
+    partner_id = user_pairs[user_id]
+    try:
+        reports = get_db_collection("reports")
+        existing = reports.find_one({"reporter_id": user_id, "reported_id": partner_id})
+        if existing:
+            safe_reply(update, "⚠️ You've already reported this user 😔.")
+            return
+        reports.insert_one({
+            "reporter_id": user_id,
+            "reported_id": partner_id,
+            "timestamp": int(time.time())
+        })
+        report_count = reports.count_documents({"reported_id": partner_id})
+        if report_count >= REPORT_THRESHOLD:
+            ban_expiry = int(time.time()) + TEMP_BAN_DURATION
+            update_user(partner_id, {
+                "ban_type": "temporary",
+                "ban_expiry": ban_expiry,
+                "profile": get_user(partner_id).get("profile", {}),
+                "consent": get_user(partner_id).get("consent", False),
+                "verified": get_user(partner_id).get("verified", False),
+                "premium_expiry": get_user(partner_id).get("premium_expiry"),
+                "premium_features": get_user(partner_id).get("premium_features", {}),
+                "created_at": get_user(partner_id).get("created_at", int(time.time()))
+            })
+            violations = get_db_collection("keyword_violations")
+            violations.update_one(
+                {"user_id": partner_id},
+                {"$set": {
+                    "ban_type": "temporary",
+                    "ban_expiry": ban_expiry,
+                    "last_violation": int(time.time()),
+                    "count": 3,
+                    "keyword": "reported"
+                }},
+                upsert=True
+            )
+            safe_bot_send_message(context.bot, partner_id,
+                "🚫 *Temporary Ban* 🚫\n"
+                f"You've been banned for 24 hours due to multiple reports 📢. "
+                "Contact support if you believe this is an error."
+            )
+            notification_message = (
+                "🚨 *User Banned* 🚨\n\n"
+                f"👤 *User ID*: {partner_id}\n"
+                f"📅 *Ban Duration*: 24 hours\n"
+                f"🕒 *Ban Expiry*: {datetime.fromtimestamp(ban_expiry).strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"📢 *Reason*: Multiple reports ({report_count})\n"
+                f"🕒 *Reported At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            send_channel_notification(context.bot, notification_message)
+            logger.info(f"User {partner_id} banned for 24 hours due to {report_count} reports")
+            stop(update, context)
+        else:
+            safe_reply(update, "🚨 Report submitted. Thank you for keeping the community safe! 🌟")
+            notification_message = (
+                "🚨 *New Report Filed* 🚨\n\n"
+                f"👤 *Reporter ID*: {user_id}\n"
+                f"👤 *Reported ID*: {partner_id}\n"
+                f"📢 *Total Reports*: {report_count}\n"
+                f"🕒 *Reported At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            send_channel_notification(context.bot, notification_message)
+            logger.info(f"User {user_id} reported user {partner_id}. Total reports: {report_count}")
+    except Exception as e:
+        logger.error(f"Error processing report from {user_id} against {partner_id}: {e}")
+        safe_reply(update, "❌ Error submitting report 😔. Please try again.")
 
 def delete_profile(update: Update, context: CallbackContext) -> None:
+    """Delete user profile and all associated data"""
     user_id = update.effective_user.id
-    if user_id in user_pairs:  # Assuming user_pairs is a global dict
+    if user_id in user_pairs:
         partner_id = user_pairs[user_id]
         del user_pairs[user_id]
-        del user_pairs[partner_id]
-        safe_bot_send_message(context.bot, partner_id, "❌ Your partner has deleted their profile 😔.")
-    if user_id in waiting_users:  # Assuming waiting_users is a global set/list
+        if partner_id in user_pairs:
+            del user_pairs[partner_id]
+        safe_bot_send_message(context.bot, partner_id, "👋 Your partner has left the chat. Use /start to find a new one.")
+    if user_id in waiting_users:
         waiting_users.remove(user_id)
     try:
         delete_user(user_id)
+        safe_reply(update, "🗑️ Your profile and data have been deleted successfully 🌟.")
+        notification_message = (
+            "🗑️ *User Deleted Profile* 🗑️\n\n"
+            f"👤 *User ID*: {user_id}\n"
+            f"🕒 *Deleted At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        send_channel_notification(context.bot, notification_message)
+        logger.info(f"User {user_id} deleted their profile")
+        if user_id in chat_histories:
+            del chat_histories[user_id]
     except Exception as e:
-        safe_reply(update, "❌ Failed to delete profile due to a server error. Please try again later.")
-        logger.error(f"Failed to delete profile for user {user_id}: {e}")
-        return
-    if user_id in chat_histories:  # Assuming chat_histories is a global dict
-        del chat_histories[user_id]
-    safe_reply(update, "🗑️ Your profile has been deleted ✅. Use /start to create a new one.")
-    logger.info(f"User {user_id} deleted their profile.")
+        logger.error(f"Error deleting profile for user {user_id}: {e}")
+        safe_reply(update, "❌ Error deleting your profile 😔. Please try again.")
 
 def admin_access(update: Update, context: CallbackContext) -> None:
     """Grant admin access and display commands"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         logger.info(f"Unauthorized access attempt by user_id={user_id}")
         return
     access_text = (
-        "🔧 *Admin Commands* 🔧\n\n"
-        "👥 *User Management*\n"
-        "• /admin_userslist - List all users 📋\n"
-        "• /admin_premiumuserslist - List premium users 🌟\n"
-        "• /admin_info <user_id> - View user details 🔍\n"
-        "• /admin_delete <user_id> - Delete a user’s data 🗑️\n"
-        "• /admin_premium <user_id> <days> - Grant premium status 🎁\n"
-        "• /admin_revoke_premium <user_id> - Revoke premium status ❌\n"
+        " 🌟 *Admin Commands* 🌟 \n\n"
+        " 🚀 *User Management*\n"
+        "• /admin_userslist - List all users 📋 \n"
+        "• /admin_premiumuserslist - List premium users 💎 \n"
+        "• /admin_info <user_id> - View user details 🕵️ \n"
+        "• /admin_delete <user_id> - Delete a user’s data 🗑️ \n"
+        "• /admin_premium <user_id> <days> - Grant premium status 🎁 \n"
+        "• /admin_revoke_premium <user_id> - Revoke premium status ❌ \n"
         "━━━━━━━━━━━━━━\n\n"
-        "🚨 *Ban Management*\n"
-        "• /admin_ban <user_id> <days/permanent> - Ban a user 🔨\n"
-        "• /admin_unban <user_id> - Unban a user ✅\n"
-        "• /admin_violations - List recent keyword violations ⚠️\n"
+        " 🛡️ *Ban Management*\n"
+        "• /admin_ban <user_id> <days/permanent> - Ban a user 🚫 \n"
+        "• /admin_unban <user_id> - Unban a user 🔓 \n"
+        "• /admin_violations - List recent keyword violations ⚠️ \n"
         "━━━━━━━━━━━━━━\n\n"
-        "📊 *Reports & Stats*\n"
-        "• /admin_reports - List reported users 🚩\n"
-        "• /admin_clear_reports <user_id> - Clear reports 🧹\n"
-        "• /admin_stats - View bot statistics 📈\n"
+        " 📊 *Reports & Stats*\n"
+        "• /admin_reports - List reported users 🚨 \n"
+        "• /admin_clear_reports <user_id> - Clear reports 🧹 \n"
+        "• /admin_stats - View bot statistics 📈 \n"
         "━━━━━━━━━━━━━━\n\n"
-        "📢 *Broadcast*\n"
-        "• /admin_broadcast <message> - Send message to all users 📩\n"
+        " 📢 *Broadcast*\n"
+        "• /admin_broadcast <message> - Send message to all users 📣 \n"
     )
     safe_reply(update, access_text)
 
@@ -1860,21 +1638,21 @@ def admin_delete(update: Update, context: CallbackContext) -> None:
     """Delete a user's data"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     try:
         target_id = int(context.args[0])
         delete_user(target_id)
-        safe_reply(update, f"🗑️ User *{target_id}* data deleted successfully ✅.")
+        safe_reply(update, f" 🗑️ User *{target_id}* data deleted successfully 🌟 .")
         logger.info(f"Admin {user_id} deleted user {target_id}.")
     except (IndexError, ValueError):
-        safe_reply(update, "❌ Usage: /admin_delete <user_id> 😓.")
+        safe_reply(update, " ⚠️ Usage: /admin_delete <user_id> 📋 .")
 
 def admin_premium(update: Update, context: CallbackContext) -> None:
     """Grant premium status to a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     try:
         target_id = int(context.args[0])
@@ -1884,6 +1662,9 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
         expiry = int(time.time()) + days * 24 * 3600
         logger.debug(f"Calculated premium_expiry for user {target_id}: {expiry} ({datetime.fromtimestamp(expiry).strftime('%Y-%m-%d %H:%M:%S')})")
         user = get_user(target_id)
+        if not user:
+            safe_reply(update, " 😕 User not found 🌑 .")
+            return
         logger.debug(f"User {target_id} before admin_premium: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
         features = user.get("premium_features", {})
         features.update({
@@ -1907,22 +1688,25 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
         updated_user = get_user(target_id)
         expiry_date = datetime.fromtimestamp(updated_user.get('premium_expiry', 0)).strftime('%Y-%m-%d %H:%M:%S') if updated_user.get('premium_expiry') else 'None'
         logger.debug(f"User {target_id} after admin_premium: premium_expiry={updated_user.get('premium_expiry')} ({expiry_date}), premium_features={updated_user.get('premium_features')}")
-        safe_reply(update, f"🎁 Premium granted to user *{target_id}* for *{days}* days ✅.")
-        safe_bot_send_message(context.bot, target_id, f"🌟 You've been granted Premium status for {days} days 🎉!")
+        safe_reply(update, f" 🎁 Premium granted to user *{target_id}* for *{days}* days 🌟 .")
+        safe_bot_send_message(context.bot, target_id, f" 🎉 You've been granted Premium status for {days} days !")
         logger.info(f"Admin {user_id} granted premium to {target_id} for {days} days.")
     except (IndexError, ValueError) as e:
         logger.error(f"Error in admin_premium for user {target_id}: {e}")
-        safe_reply(update, "❌ Usage: /admin_premium <user_id> <days> 😓.")
+        safe_reply(update, " ⚠️ Usage: /admin_premium <user_id> <days> 📋 .")
 
 def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
     """Revoke premium status from a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     try:
         target_id = int(context.args[0])
         user = get_user(target_id)
+        if not user:
+            safe_reply(update, " 😕 User not found 🌑 .")
+            return
         logger.debug(f"User {target_id} before revoke_premium: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
         update_user(target_id, {
             "premium_expiry": None,
@@ -1934,24 +1718,27 @@ def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
             "ban_expiry": user.get("ban_expiry"),
             "created_at": user.get("created_at", int(time.time()))
         })
-        safe_reply(update, f"❌ Premium status revoked for user *{target_id}* ✅.")
-        safe_bot_send_message(context.bot, target_id, "🌟 Your Premium status has been revoked 😔.")
+        safe_reply(update, f" ❌ Premium status revoked for user *{target_id}* 🌑 .")
+        safe_bot_send_message(context.bot, target_id, " 😔 Your Premium status has been revoked .")
         updated_user = get_user(target_id)
         logger.info(f"Admin {user_id} revoked premium for {target_id}.")
         logger.debug(f"User {target_id} after revoke_premium: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
     except (IndexError, ValueError):
-        safe_reply(update, "❌ Usage: /admin_revoke_premium <user_id> 😓.")
+        safe_reply(update, " ⚠️ Usage: /admin_revoke_premium <user_id> 📋 .")
 
 def admin_ban(update: Update, context: CallbackContext) -> None:
     """Ban a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     try:
         target_id = int(context.args[0])
         ban_type = context.args[1].lower()
         user = get_user(target_id)
+        if not user:
+            safe_reply(update, " 😕 User not found 🌑 .")
+            return
         logger.debug(f"User {target_id} before admin_ban: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
         if ban_type == "permanent":
             ban_expiry = None
@@ -1973,31 +1760,46 @@ def admin_ban(update: Update, context: CallbackContext) -> None:
             "premium_features": user.get("premium_features", {}),
             "created_at": user.get("created_at", int(time.time()))
         })
+        violations = get_db_collection("keyword_violations")
+        violations.update_one(
+            {"user_id": target_id},
+            {"$set": {
+                "count": 5 if ban_type == "permanent" else 3,
+                "keyword": "admin_ban",
+                "last_violation": int(time.time()),
+                "ban_type": ban_type,
+                "ban_expiry": ban_expiry
+            }},
+            upsert=True
+        )
         if target_id in user_pairs:
             partner_id = user_pairs[target_id]
             del user_pairs[target_id]
             if partner_id in user_pairs:
                 del user_pairs[partner_id]
-            safe_bot_send_message(context.bot, partner_id, "❌ Your partner has left the chat 😔.")
+            safe_bot_send_message(context.bot, partner_id, " 😔 Your partner has left the chat .")
         if target_id in waiting_users:
             waiting_users.remove(target_id)
-        safe_reply(update, f"🔨 User *{target_id}* has been {ban_type} banned ✅.")
-        safe_bot_send_message(context.bot, target_id, f"🚫 You have been {ban_type} banned from Talk2Anyone 😔.")
+        safe_reply(update, f" 🚫 User *{target_id}* has been {ban_type} banned 🌑 .")
+        safe_bot_send_message(context.bot, target_id, f" 🚫 You have been {ban_type} banned from Talk2Anyone .")
         updated_user = get_user(target_id)
         logger.info(f"Admin {user_id} banned user {target_id} ({ban_type}).")
         logger.debug(f"User {target_id} after admin_ban: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
     except (IndexError, ValueError):
-        safe_reply(update, "❌ Usage: /admin_ban <user_id> <days/permanent> 😓.")
+        safe_reply(update, " ⚠️ Usage: /admin_ban <user_id> <days/permanent> 📋 .")
 
 def admin_unban(update: Update, context: CallbackContext) -> None:
     """Unban a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     try:
         target_id = int(context.args[0])
         user = get_user(target_id)
+        if not user:
+            safe_reply(update, " 😕 User not found 🌑 .")
+            return
         logger.debug(f"User {target_id} before admin_unban: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
         update_user(target_id, {
             "ban_type": None,
@@ -2009,406 +1811,370 @@ def admin_unban(update: Update, context: CallbackContext) -> None:
             "premium_features": user.get("premium_features", {}),
             "created_at": user.get("created_at", int(time.time()))
         })
-        conn = get_db_connection()
-        if conn:
-            try:
-                with conn.cursor() as c:
-                    c.execute("DELETE FROM keyword_violations WHERE user_id = %s", (target_id,))
-                    conn.commit()
-            except Exception as e:
-                logger.error(f"Error clearing keyword violations for {target_id}: {e}")
-            finally:
-                release_db_connection(conn)
-        safe_reply(update, f"✅ User *{target_id}* has been unbanned 🎉.")
-        safe_bot_send_message(context.bot, target_id, "🎉 You have been unbanned ✅. Use /start to begin.")
+        violations = get_db_collection("keyword_violations")
+        violations.delete_one({"user_id": target_id})
+        safe_reply(update, f" 🔓 User *{target_id}* has been unbanned 🌟 .")
+        safe_bot_send_message(context.bot, target_id, " 🎉 You have been unbanned . Use /start to begin.")
         updated_user = get_user(target_id)
         logger.info(f"Admin {user_id} unbanned user {target_id}.")
         logger.debug(f"User {target_id} after admin_unban: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
     except (IndexError, ValueError):
-        safe_reply(update, "❌ Usage: /admin_unban <user_id> 😓.")
+        safe_reply(update, " ⚠️ Usage: /admin_unban <user_id> 📋 .")
 
 def admin_violations(update: Update, context: CallbackContext) -> None:
     """List recent keyword violations"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
-        return
-    conn = get_db_connection()
-    if not conn:
-        safe_reply(update, "❌ Database error 😓.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     try:
-        with conn.cursor() as c:
-            c.execute(
-                "SELECT user_id, count, keyword, last_violation, ban_type, ban_expiry "
-                "FROM keyword_violations ORDER BY last_violation DESC LIMIT 10"
+        violations = get_db_collection("keyword_violations")
+        cursor = violations.find().sort("last_violation", -1).limit(10)
+        violations_list = list(cursor)
+        if not violations_list:
+            safe_reply(update, " ✅ No recent keyword violations 🌟 .")
+            return
+        violation_text = " ⚠️ *Recent Keyword Violations* ⚠️ \n\n"
+        for v in violations_list:
+            user_id = v["user_id"]
+            count = v.get("count", 0)
+            keyword = v.get("keyword", "N/A")
+            last_violation = datetime.fromtimestamp(v["last_violation"]).strftime('%Y-%m-%d %H:%M') if v.get("last_violation") else "Unknown"
+            ban_type = v.get("ban_type")
+            ban_expiry = v.get("ban_expiry")
+            ban_status = (
+                "Permanent 🔒" if ban_type == "permanent" else
+                f"Temporary until {datetime.fromtimestamp(ban_expiry).strftime('%Y-%m-%d %H:%M')} ⏰"
+                if ban_type == "temporary" and ban_expiry else "None ✅"
             )
-            violations = c.fetchall()
-            if not violations:
-                safe_reply(update, "✅ No recent keyword violations 🎉.")
-                return
-            violation_text = "⚠️ *Recent Keyword Violations* ⚠️\n\n"
-            for v in violations:
-                user_id, count, keyword, last_violation, ban_type, ban_expiry = v
-                ban_status = (
-                    "Permanent 🔒" if ban_type == "permanent" else
-                    f"Temporary until {datetime.fromtimestamp(ban_expiry).strftime('%Y-%m-%d %H:%M')} ⏰"
-                    if ban_type == "temporary" and ban_expiry else "None"
-                )
-                violation_text += (
-                    f"👤 User ID: *{user_id}*\n"
-                    f"🔢 Violations: *{count}*\n"
-                    f"📜 Keyword: *{keyword}*\n"
-                    f"📅 Last: *{last_violation.strftime('%Y-%m-%d %H:%M')}*\n"
-                    f"🚫 Ban: *{ban_status}*\n"
-                    "━━━━━━━━━━━━━━\n"
-                )
-            safe_reply(update, violation_text)
+            violation_text += (
+                f" 👤 User ID: *{user_id}*\n"
+                f" 📉 Violations: *{count}*\n"
+                f" 🔍 Keyword: *{keyword}*\n"
+                f" 🕒 Last: *{last_violation}*\n"
+                f" 🚫 Ban: *{ban_status}*\n"
+                "━━━━━━━━━━━━━━\n"
+            )
+        safe_reply(update, violation_text)
     except Exception as e:
         logger.error(f"Error fetching violations: {e}")
-        safe_reply(update, "❌ Error fetching violations 😓.")
-    finally:
-        release_db_connection(conn)
+        safe_reply(update, " 😔 Error fetching violations 🌑 .")
 
 def admin_userslist(update: Update, context: CallbackContext) -> None:
     """List all users for authorized admins"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
-        return
-    conn = get_db_connection()
-    if not conn:
-        safe_reply(update, "❌ Database error 😓.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     try:
-        with conn.cursor() as c:
-            c.execute("SELECT user_id, created_at, premium_expiry, ban_type, verified, profile, premium_features FROM users ORDER BY user_id")
-            users = c.fetchall()
-            logger.debug(f"Raw database users: {users}")
-            if not users:
-                safe_reply(update, "❌ No users found 😓.")
-                logger.info(f"Admin {user_id} requested users list: no users found.")
-                return
-            message = "📋 *All Users List* \\(Sorted by ID\\)\n\n"
-            user_count = 0
-            for user in users:
-                user_id, created_at, premium_expiry, ban_type, verified, profile_json, premium_features_json = user
-                profile = profile_json or {}
-                premium_features = premium_features_json or {}
-                logger.debug(f"Processing user {user_id}: profile={profile}, premium_features={premium_features}")
-                created_date = (
-                    datetime.fromtimestamp(created_at).strftime("%Y-%m-%d")
-                    if created_at and isinstance(created_at, (int, float))
-                    else "Unknown"
-                )
-                has_active_features = any(
-                    v is True or (isinstance(v, int) and v > time.time())
-                    for k, v in premium_features.items()
-                    if k != "instant_rematch_count"
-                )
-                premium_status = (
-                    "Premium 🌟" if (premium_expiry and premium_expiry > time.time()) or has_active_features else "Not Premium"
-                )
-                ban_status = ban_type.capitalize() if ban_type else "None"
-                verified_status = "Yes ✔️" if verified else "No"
-                # Escape all dynamic fields for MarkdownV2
-                name = escape_markdown_v2(profile.get("name", "Not set"))
-                user_id_str = escape_markdown_v2(str(user_id))
-                created_date = escape_markdown_v2(created_date)
-                premium_status = escape_markdown_v2(premium_status)
-                ban_status = escape_markdown_v2(ban_status)
-                verified_status = escape_markdown_v2(verified_status)
-                logger.debug(f"User {user_id}: name={name}, premium={premium_status}, ban={ban_status}, verified={verified_status}")
-                message += (
-                    f"👤 *User ID*: {user_id_str}\n"
-                    f"✍️ *Name*: {name}\n"
-                    f"📅 *Created*: {created_date}\n"
-                    f"🌟 *Premium*: {premium_status}\n"
-                    f"🚫 *Ban*: {ban_status}\n"
-                    f"✔️ *Verified*: {verified_status}\n"
-                    "━━━━━━━━━━━━━━\n"
-                )
-                user_count += 1
-                # Check message length and send if approaching Telegram limit
-                if len(message.encode('utf-8')) > 3500:
-                    logger.debug(f"Sending partial message: {message[:200]}...")
-                    safe_reply(update, message, parse_mode="MarkdownV2")
-                    message = ""
-                    logger.debug(f"Sent partial users list for admin {user_id}, users so far: {user_count}")
-            if message.strip():
-                message += f"🔢 *Total Users*: {user_count}\n"
-                logger.debug(f"Sending final message: {message[:200]}...")
+        users = get_db_collection("users")
+        users_list = list(users.find().sort("user_id", 1))
+        logger.debug(f"Raw database users: {len(users_list)} users")
+        if not users_list:
+            safe_reply(update, " 😕 No users found 🌑 .")
+            logger.info(f"Admin {user_id} requested users list: no users found.")
+            return
+        message = " 📋 *All Users List* \\(Sorted by ID\\) 📋 \n\n"
+        user_count = 0
+        for user in users_list:
+            user_id = user["user_id"]
+            profile = user.get("profile", {})
+            premium_features = user.get("premium_features", {})
+            created_at = user.get("created_at", int(time.time()))
+            created_date = (
+                datetime.fromtimestamp(created_at).strftime("%Y-%m-%d")
+                if created_at and isinstance(created_at, (int, float))
+                else "Unknown"
+            )
+            has_active_features = any(
+                v is True or (isinstance(v, int) and v > time.time())
+                for k, v in premium_features.items()
+                if k != "instant_rematch_count"
+            )
+            premium_status = (
+                "Premium 💎" if (user.get("premium_expiry") and user["premium_expiry"] > time.time()) or has_active_features else "Not Premium 🌑"
+            )
+            ban_status = user.get("ban_type", "None").capitalize()
+            verified_status = "Yes ✅" if user.get("verified", False) else "No ❌"
+            name = escape_markdown_v2(profile.get("name", "Not set"))
+            user_id_str = escape_markdown_v2(str(user_id))
+            created_date = escape_markdown_v2(created_date)
+            premium_status = escape_markdown_v2(premium_status)
+            ban_status = escape_markdown_v2(ban_status)
+            verified_status = escape_markdown_v2(verified_status)
+            logger.debug(f"User {user_id}: name={name}, premium={premium_status}, ban={ban_status}, verified={verified_status}")
+            message += (
+                f" 👤 *User ID*: {user_id_str}\n"
+                f" 🧑 *Name*: {name}\n"
+                f" 📅 *Created*: {created_date}\n"
+                f" 💎 *Premium*: {premium_status}\n"
+                f" 🚫 *Ban*: {ban_status}\n"
+                f" ✅ *Verified*: {verified_status}\n"
+                "━━━━━━━━━━━━━━\n"
+            )
+            user_count += 1
+            if len(message.encode('utf-8')) > 3500:
+                logger.debug(f"Sending partial message: {message[:200]}...")
                 safe_reply(update, message, parse_mode="MarkdownV2")
-            logger.info(f"Admin {user_id} requested users list with {user_count} users 📋")
-            logger.debug(f"Users list sent with {user_count} users.")
+                message = ""
+                logger.debug(f"Sent partial users list for admin {user_id}, users so far: {user_count}")
+        if message.strip():
+            message += f" 📊 *Total Users*: {user_count}\n"
+            logger.debug(f"Sending final message: {message[:200]}...")
+            safe_reply(update, message, parse_mode="MarkdownV2")
+        logger.info(f"Admin {user_id} requested users list with {user_count} users ")
+        logger.debug(f"Users list sent with {user_count} users.")
     except Exception as e:
         logger.error(f"Error fetching users list for admin {user_id}: {e}", exc_info=True)
-        safe_reply(update, "❌ Error retrieving users list 😓.")
-    finally:
-        release_db_connection(conn)
-        
+        safe_reply(update, " 😔 Error retrieving users list 🌑 .")
+
 def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
     """List premium users"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
-        return
-    conn = get_db_connection()
-    if not conn:
-        safe_reply(update, "❌ Database error 😓.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     try:
         current_time = int(time.time())
         logger.debug(f"Fetching premium users with premium_expiry > {current_time} ({datetime.fromtimestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')})")
-        with conn.cursor() as c:
-            c.execute(
-                "SELECT user_id, premium_expiry, premium_features, profile "
-                "FROM users "
-                "WHERE premium_expiry IS NOT NULL AND premium_expiry > %s "
-                "ORDER BY premium_expiry DESC",
-                (current_time,)
+        users = get_db_collection("users")
+        premium_users = list(users.find({"premium_expiry": {"$gt": current_time}}).sort("premium_expiry", -1))
+        logger.debug(f"Query returned {len(premium_users)} premium users")
+        if not premium_users:
+            safe_reply(update, " 😕 No premium users found 🌑 .")
+            logger.debug("No premium users found in database")
+            return
+        message = " 💎 *Premium Users List* \\(Sorted by Expiry\\) 💎 \n\n"
+        user_count = 0
+        for user in premium_users:
+            user_id = user["user_id"]
+            premium_expiry = user.get("premium_expiry")
+            profile = user.get("profile", {})
+            premium_features = user.get("premium_features", {})
+            expiry_date = (
+                datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
+                if premium_expiry and isinstance(premium_expiry, (int, float)) and premium_expiry > current_time
+                else "No expiry set"
             )
-            users = c.fetchall()
-            logger.debug(f"Query returned {len(users)} premium users")
-            if not users:
-                safe_reply(update, "❌ No premium users found 😓.")
-                logger.debug("No premium users found in database")
-                return
-            message = "🌟 *Premium Users List* \\(Sorted by Expiry\\)\n\n"
-            user_count = 0
-            for user in users:
-                user_id, premium_expiry, premium_features_json, profile_json = user
-                profile = profile_json or {}
-                premium_features = premium_features_json or {}
-                expiry_date = (
-                    datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
-                    if premium_expiry and isinstance(premium_expiry, (int, float)) and premium_expiry > current_time
-                    else "No expiry set"
-                )
-                logger.debug(f"User {user_id}: premium_expiry={premium_expiry} ({datetime.fromtimestamp(premium_expiry).strftime('%Y-%m-%d %H:%M:%S') if premium_expiry else 'None'}), expiry_date={expiry_date}")
-                name = profile.get("name", "Not set")
-                active_features = [
-                    k for k, v in premium_features.items()
-                    if v is True or (isinstance(v, int) and v > current_time)
-                ]
-                if "instant_rematch_count" in premium_features and premium_features["instant_rematch_count"] > 0:
-                    active_features.append(f"instant_rematch_count: {premium_features['instant_rematch_count']}")
-                features_str = ", ".join(active_features) or "None"
-                message += (
-                    f"👤 *User ID*: {user_id}\n"
-                    f"✍️ *Name*: {name}\n"
-                    f"📅 *Premium Until*: {expiry_date}\n"
-                    f"🎁 *Features*: {features_str}\n"
-                    "━━━━━━━━━━━━━━\n"
-                )
-                user_count += 1
-                if len(message.encode('utf-8')) > 4000:
-                    safe_reply(update, message)
-                    message = ""
-            if message:
-                message += f"🔢 *Total Premium Users*: {user_count}\n"
+            logger.debug(f"User {user_id}: premium_expiry={premium_expiry} ({datetime.fromtimestamp(premium_expiry).strftime('%Y-%m-%d %H:%M:%S') if premium_expiry else 'None'}), expiry_date={expiry_date}")
+            name = profile.get("name", "Not set")
+            active_features = [
+                k for k, v in premium_features.items()
+                if v is True or (isinstance(v, int) and v > current_time)
+            ]
+            if "instant_rematch_count" in premium_features and premium_features["instant_rematch_count"] > 0:
+                active_features.append(f"instant_rematch_count: {premium_features['instant_rematch_count']}")
+            features_str = ", ".join(active_features) or "None"
+            message += (
+                f" 👤 *User ID*: {user_id}\n"
+                f" 🧑 *Name*: {name}\n"
+                f" ⏰ *Premium Until*: {expiry_date}\n"
+                f" ✨ *Features*: {features_str}\n"
+                "━━━━━━━━━━━━━━\n"
+            )
+            user_count += 1
+            if len(message.encode('utf-8')) > 4000:
                 safe_reply(update, message)
-            logger.info(f"Admin {user_id} requested premium users list with {user_count} users.")
-            logger.debug(f"Premium users list: {[(u[0], u[1]) for u in users]}")
+                message = ""
+        if message:
+            message += f" 📊 *Total Premium Users*: {user_count}\n"
+            safe_reply(update, message)
+        logger.info(f"Admin {user_id} requested premium users list with {user_count} users.")
+        logger.debug(f"Premium users list: {[(u['user_id'], u.get('premium_expiry')) for u in premium_users]}")
     except Exception as e:
         logger.error(f"Error fetching premium users list: {e}")
-        safe_reply(update, "❌ Error retrieving premium users list 😓.")
-    finally:
-        release_db_connection(conn)
+        safe_reply(update, " 😔 Error retrieving premium users list 🌑 .")
 
 def admin_info(update: Update, context: CallbackContext) -> None:
     """Display detailed user information"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     try:
         target_id = int(context.args[0])
         user = get_user(target_id)
         if not user:
-            safe_reply(update, "❌ User not found 😓.")
+            safe_reply(update, " 😕 User not found 🌑 .")
             return
         profile = user.get("profile", {})
-        consent = "Yes" if user.get("consent") else "No"
-        verified = "Yes" if user.get("verified") else "No"
+        consent = "Yes ✅" if user.get("consent") else "No ❌"
+        verified = "Yes ✅" if user.get("verified") else "No ❌"
         premium = user.get("premium_expiry")
-        premium_status = f"Until {datetime.fromtimestamp(premium).strftime('%Y-%m-%d %H:%M:%S')}" if premium and premium > time.time() else "None"
+        premium_status = f"Until {datetime.fromtimestamp(premium).strftime('%Y-%m-%d %H:%M:%S')} ⏰" if premium and premium > time.time() else "None 🌑"
         ban_status = user.get("ban_type")
         if ban_status == "permanent":
             ban_info = "Permanent 🔒"
         elif ban_status == "temporary" and user.get("ban_expiry") > time.time():
             ban_info = f"Until {datetime.fromtimestamp(user.get('ban_expiry')).strftime('%Y-%m-%d %H:%M:%S')} ⏰"
         else:
-            ban_info = "None"
+            ban_info = "None ✅"
         created_at = datetime.fromtimestamp(user.get("created_at", int(time.time()))).strftime("%Y-%m-%d %H:%M:%S")
         features = ", ".join([k for k, v in user.get("premium_features", {}).items() if v is True or (isinstance(v, int) and v > time.time())]) or "None"
-        conn = get_db_connection()
-        violations_count = 0
-        violation_status = "None"
-        if conn:
-            try:
-                with conn.cursor() as c:
-                    c.execute("SELECT count, ban_type, ban_expiry FROM keyword_violations WHERE user_id = %s", (target_id,))
-                    violation = c.fetchone()
-                    if violation:
-                        violations_count = violation[0]
-                        ban_type, ban_expiry = violation[1], violation[2]
-                        violation_status = (
-                            "Permanent 🔒" if ban_type == "permanent" else
-                            f"Temporary until {datetime.fromtimestamp(ban_expiry).strftime('%Y-%m-%d %H:%M')} ⏰"
-                            if ban_type == "temporary" and ban_expiry else f"{violations_count} warnings ⚠️"
-                        )
-            finally:
-                release_db_connection(conn)
+        violations = get_db_collection("keyword_violations").find_one({"user_id": target_id})
+        violations_count = violations.get("count", 0) if violations else 0
+        violation_status = (
+            "Permanent 🔒" if violations and violations.get("ban_type") == "permanent" else
+            f"Temporary until {datetime.fromtimestamp(violations['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰"
+            if violations and violations.get("ban_type") == "temporary" and violations.get("ban_expiry") else
+            f"{violations_count} warnings ⚠️" if violations_count > 0 else "None ✅"
+        )
         message = (
-            f"🔍 *User Info: {target_id}* 🔍\n\n"
-            f"👤 *Name*: {profile.get('name', 'Not set')}\n"
-            f"🎂 *Age*: {profile.get('age', 'Not set')}\n"
-            f"⚧️ *Gender*: {profile.get('gender', 'Not set')}\n"
-            f"🌍 *Location*: {profile.get('location', 'Not set')}\n"
-            f"🏷️ *Tags*: {', '.join(profile.get('tags', [])) or 'None'}\n"
-            f"✅ *Consent*: {consent}\n"
-            f"✔️ *Verified*: {verified}\n"
-            f"🌟 *Premium*: {premium_status}\n"
-            f"🎁 *Features*: {features}\n"
-            f"🚫 *Ban*: {ban_info}\n"
-            f"⚠️ *Keyword Violations*: {violation_status}\n"
-            f"📅 *Joined*: {created_at}"
+            f" 🕵️ *User Info: {target_id}* 🕵️ \n\n"
+            f" 🧑 *Name*: {profile.get('name', 'Not set')}\n"
+            f" 🎂 *Age*: {profile.get('age', 'Not set')}\n"
+            f" 👤 *Gender*: {profile.get('gender', 'Not set')}\n"
+            f" 📍 *Location*: {profile.get('location', 'Not set')}\n"
+            f" 🏷️ *Tags*: {', '.join(profile.get('tags', [])) or 'None'}\n"
+            f" 🤝 *Consent*: {consent}\n"
+            f" ✅ *Verified*: {verified}\n"
+            f" 💎 *Premium*: {premium_status}\n"
+            f" ✨ *Features*: {features}\n"
+            f" 🚫 *Ban*: {ban_info}\n"
+            f" ⚠️ *Keyword Violations*: {violation_status}\n"
+            f" 📅 *Joined*: {created_at}"
         )
         safe_reply(update, message)
     except (IndexError, ValueError):
-        safe_reply(update, "❌ Usage: /admin_info <user_id> 😓.")
+        safe_reply(update, " ⚠️ Usage: /admin_info <user_id> 📋 .")
 
 def admin_reports(update: Update, context: CallbackContext) -> None:
     """List reported users"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
-        return
-    conn = get_db_connection()
-    if not conn:
-        safe_reply(update, "❌ Database error 😓.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     try:
-        with conn.cursor() as c:
-            c.execute("SELECT reported_id, COUNT(*) as count FROM reports GROUP BY reported_id ORDER BY count DESC LIMIT 20")
-            reports = c.fetchall()
-            if not reports:
-                safe_reply(update, "✅ No reports found 🎉.")
-                return
-            message = "🚩 *Reported Users* \\(Top 20\\)\n\n"
-            for reported_id, count in reports:
-                message += f"👤 {reported_id} | Reports: *{count}*\n"
-            safe_reply(update, message)
+        reports = get_db_collection("reports")
+        pipeline = [
+            {"$group": {"_id": "$reported_id", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 20}
+        ]
+        reports_list = list(reports.aggregate(pipeline))
+        if not reports_list:
+            safe_reply(update, " ✅ No reports found 🌟 .")
+            return
+        message = " 🚨 *Reported Users* \\(Top 20\\) 🚨 \n\n"
+        for report in reports_list:
+            reported_id = report["_id"]
+            count = report["count"]
+            message += f" 👤 {reported_id} | Reports: *{count}*\n"
+        safe_reply(update, message)
     except Exception as e:
         logger.error(f"Failed to list reports: {e}")
-        safe_reply(update, "❌ Error retrieving reports 😓.")
-    finally:
-        release_db_connection(conn)
+        safe_reply(update, " 😔 Error retrieving reports 🌑 .")
 
 def admin_clear_reports(update: Update, context: CallbackContext) -> None:
     """Clear reports for a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     try:
         target_id = int(context.args[0])
-        conn = get_db_connection()
-        if not conn:
-            safe_reply(update, "❌ Database error 😓.")
-            return
-        try:
-            with conn.cursor() as c:
-                c.execute("DELETE FROM reports WHERE reported_id = %s", (target_id,))
-                conn.commit()
-                safe_reply(update, f"🧹 Reports cleared for user *{target_id}* ✅.")
-                logger.info(f"Admin {user_id} cleared reports for {target_id}.")
-        finally:
-            release_db_connection(conn)
+        reports = get_db_collection("reports")
+        reports.delete_many({"reported_id": target_id})
+        safe_reply(update, f" 🧹 Reports cleared for user *{target_id}* 🌟 .")
+        logger.info(f"Admin {user_id} cleared reports for {target_id}.")
     except (IndexError, ValueError):
-        safe_reply(update, "❌ Usage: /admin_clear_reports <user_id> 😓.")
+        safe_reply(update, " ⚠️ Usage: /admin_clear_reports <user_id> 📋 .")
 
 def admin_broadcast(update: Update, context: CallbackContext) -> None:
     """Broadcast a message to all users"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     if not context.args:
-        safe_reply(update, "❌ Usage: /admin_broadcast <message> 😓.")
+        safe_reply(update, " ⚠️ Usage: /admin_broadcast <message> 📋 .")
         return
-    message = "📢 *Announcement*: " + " ".join(context.args)
-    conn = get_db_connection()
-    if not conn:
-        safe_reply(update, "❌ Database error 😓.")
-        return
+    message = " 📣 *Announcement*: " + " ".join(context.args)
     try:
-        with conn.cursor() as c:
-            c.execute("SELECT user_id FROM users WHERE consent = TRUE")
-            users = c.fetchall()
-            sent_count = 0
-            for (uid,) in users:
-                try:
-                    safe_bot_send_message(context.bot, uid, message)
-                    sent_count += 1
-                except Exception as e:
-                    logger.warning(f"Failed to send broadcast to {uid}: {e}")
-            safe_reply(update, f"📩 Broadcast sent to *{sent_count}* users ✅.")
-            logger.info(f"Admin {user_id} sent broadcast to {sent_count} users.")
+        users = get_db_collection("users")
+        users_list = users.find({"consent": True})
+        sent_count = 0
+        for user in users_list:
+            try:
+                safe_bot_send_message(context.bot, user["user_id"], message)
+                sent_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to send broadcast to {user['user_id']}: {e}")
+        safe_reply(update, f" 📢 Broadcast sent to *{sent_count}* users 🌟 .")
+        logger.info(f"Admin {user_id} sent broadcast to {sent_count} users.")
     except Exception as e:
         logger.error(f"Failed to send broadcast: {e}")
-        safe_reply(update, "❌ Error sending broadcast 😓.")
-    finally:
-        release_db_connection(conn)
+        safe_reply(update, " 😔 Error sending broadcast 🌑 .")
 
 def admin_stats(update: Update, context: CallbackContext) -> None:
     """Display bot statistics"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        safe_reply(update, "🚫 Unauthorized 😔.")
-        return
-    conn = get_db_connection()
-    if not conn:
-        safe_reply(update, "❌ Database error 😓.")
+        safe_reply(update, " 🔒 Unauthorized 🌑 .")
         return
     try:
-        with conn.cursor() as c:
-            c.execute("SELECT COUNT(*) FROM users")
-            total_users = c.fetchone()[0]
-            current_time = int(time.time())
-            c.execute(
-                "SELECT COUNT(*) FROM users WHERE premium_expiry IS NOT NULL AND premium_expiry > %s",
-                (current_time,)
-            )
-            premium_users = c.fetchone()[0]
-            c.execute(
-                "SELECT COUNT(*) FROM users WHERE ban_type IS NOT NULL AND (ban_type = 'permanent' OR (ban_type = 'temporary' AND ban_expiry > %s))",
-                (current_time,)
-            )
-            banned_users = c.fetchone()[0]
+        users = get_db_collection("users")
+        total_users = users.count_documents({})
+        current_time = int(time.time())
+        premium_users = users.count_documents({"premium_expiry": {"$gt": current_time}})
+        banned_users = users.count_documents({"ban_type": {"$in": ["permanent", "temporary"]}, "$or": [{"ban_expiry": {"$gt": current_time}}, {"ban_type": "permanent"}]})
         active_users = len(set(user_pairs.keys()).union(waiting_users))
         stats_message = (
-            "📈 *Bot Statistics* 📈\n\n"
-            f"👥 *Total Users*: *{total_users}*\n"
-            f"🌟 *Premium Users*: *{premium_users}*\n"
-            f"💬 *Active Users*: *{active_users}* \\(in chats or waiting\\)\n"
-            f"🚫 *Banned Users*: *{banned_users}*\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"📅 *Updated*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            " 📈 *Bot Statistics* 📈 \n\n"
+            f" 👥 *Total Users*: *{total_users}*\n"
+            f" 💎 *Premium Users*: *{premium_users}*\n"
+            f" 💬 *Active Users*: *{active_users}* \\(in chats or waiting\\)\n"
+            f" 🚫 *Banned Users*: *{banned_users}*\n"
+            "━━━━━━━━━━━━━━\n"
+            f" 🕒 *Updated*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
         safe_reply(update, stats_message)
         logger.info(f"Admin {user_id} requested bot statistics: total={total_users}, premium={premium_users}, active={active_users}, banned={banned_users}")
     except Exception as e:
         logger.error(f"Error fetching bot statistics: {e}")
-        safe_reply(update, "❌ Error retrieving statistics 😓.")
-    finally:
-        release_db_connection(conn)
+        safe_reply(update, " 😔 Error retrieving statistics 🌑 .")
+
+def set_tags(update: Update, context: CallbackContext) -> int:
+    """Set user tags for matching"""
+    user_id = update.effective_user.id
+    user = get_user(user_id)
+    profile = user.get("profile", {})
+    tags_input = update.message.text.strip().lower().split(",")
+    tags = [tag.strip() for tag in tags_input if tag.strip() in ALLOWED_TAGS]
+    if not tags:
+        safe_reply(update, " ⚠️ Invalid Tags 😕 \nEnter valid tags (e.g., music,gaming). Allowed: " + ", ".join(ALLOWED_TAGS))
+        return TAGS
+    if len(tags) > 5:
+        safe_reply(update, " ⚠️ Too Many Tags 😕 \nYou can set up to 5 tags.")
+        return TAGS
+    profile["tags"] = tags
+    if not update_user(user_id, {
+        "profile": profile,
+        "consent": user.get("consent", False),
+        "verified": user.get("verified", False),
+        "premium_expiry": user.get("premium_expiry"),
+        "premium_features": user.get("premium_features", {}),
+        "ban_type": user.get("ban_type"),
+        "ban_expiry": user.get("ban_expiry"),
+        "created_at": user.get("created_at", int(time.time()))
+    }):
+        safe_reply(update, " 😔 Error saving tags 🌑 .")
+        return TAGS
+    safe_reply(update, f" 🏷️ Tags set: *{', '.join(tags)}* 🌟 .")
+    if user_id not in waiting_users:
+        if has_premium_feature(user_id, "shine_profile"):
+            waiting_users.insert(0, user_id)
+        else:
+            waiting_users.append(user_id)
+        safe_reply(update, " 🔍 Looking for a chat partner... 🚀")
+    match_users(context)
+    logger.info(f"User {user_id} set tags: {tags}")
+    return ConversationHandler.END
 
 def cancel(update: Update, context: CallbackContext) -> int:
     """Cancel an operation"""
     user_id = update.effective_user.id
-    safe_reply(update, "❌ Operation cancelled 😔. Use /start to begin again.")
+    safe_reply(update, " 🛑 Operation cancelled 🌟 . Use /start to begin again.")
     logger.info(f"User {user_id} cancelled the operation.")
     return ConversationHandler.END
 
@@ -2417,17 +2183,16 @@ def error_handler(update: Update, context: CallbackContext) -> None:
     logger.error(f"Update {update} caused error: {context.error}")
     try:
         if update and (update.message or update.callback_query):
-            safe_reply(update, "❌ An error occurred 😓. Please try again later.")
+            safe_reply(update, " 😔 An error occurred 🌑 . Please try again later.")
     except Exception as e:
         logger.error(f"Failed to send error message: {e}")
-        
+
 def main() -> None:
     """Initialize and start the Telegram bot"""
     token = os.getenv("TOKEN")
     if not token:
-        logger.error("❌ TOKEN not set 😓")
+        logger.error(" TOKEN not set ")
         exit(1)
-
     updater = Updater(token, use_context=True)
     dp = updater.dispatcher
 
