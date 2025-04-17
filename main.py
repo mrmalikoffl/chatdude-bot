@@ -1312,6 +1312,124 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         user_profile = user.get("profile", {})
+        
+async def button(update: Update, context: ContextTypes) -> None:
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    data = query.data
+    
+    # Check ban status for all callbacks except consent and verification
+    if not data.startswith(("consent_", "emoji_")):
+        if is_banned(user_id):
+            user = get_user(user_id)
+            ban_msg = (
+                "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
+                if user["ban_type"] == "permanent"
+                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
+            )
+            await safe_reply(update, ban_msg, context)
+            return
+    
+    # Handle settings menu callbacks
+    if data in ["set_name", "set_age", "set_gender", "set_location", "set_tags"]:
+        # Check profile completeness (same as restrict_access)
+        user = get_user(user_id)
+        if not is_profile_complete(user):
+            await safe_reply(update, "⚠️ Please complete your profile setup with /start before using this feature.", context)
+            await query.message.delete()
+            return
+        context.user_data["settings_state"] = data  # Store the current settings state
+        if data == "set_name":
+            await safe_reply(update, "✨ Please enter your new name:", context)
+        elif data == "set_age":
+            await safe_reply(update, "🎂 Please enter your new age (e.g., 25):", context)
+        elif data == "set_gender":
+            keyboard = [
+                [InlineKeyboardButton("Male", callback_data="settings_gender_male"),
+                 InlineKeyboardButton("Female", callback_data="settings_gender_female")],
+                [InlineKeyboardButton("Other", callback_data="settings_gender_other")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await safe_reply(update, "👤 Please select your gender:", context, reply_markup=reply_markup)
+        elif data == "set_location":
+            await safe_reply(update, "📍 Please enter your new location (e.g., New York):", context)
+        elif data == "set_tags":
+            await safe_reply(update, "🏷️ Please enter your tags, separated by commas (e.g., music, gaming):", context)
+        
+        # Delete the original settings menu to keep the chat clean
+        await query.message.delete()
+        return
+    
+    # Handle gender selection for settings
+    if data.startswith("settings_gender_"):
+        gender = data.split("_")[2].capitalize()
+        update_user(user_id, {"profile.gender": gender})
+        await safe_reply(update, f"👤 Gender updated to {gender}! Use /settings to make more changes.", context)
+        context.user_data.pop("settings_state", None)  # Clear settings state
+        return
+    
+    # Handle help menu
+    if data == "help_menu":
+        help_text = (
+            "🆘 *Help Menu* 🆘\n\n"
+            "Here’s how to use the bot:\n"
+            "• /start - Set up or view your profile\n"
+            "• /next - Find a new chat partner\n"
+            "• /stop - End current chat or stop waiting\n"
+            "• /settings - Update your profile\n"
+            "• /help - Show this menu\n"
+            "• /deleteprofile - Delete your profile\n"
+        )
+        await safe_reply(update, help_text, context)
+        await query.message.delete()
+        return
+    
+    # Existing callback handlers
+    if data == "start_chat":
+        await start(update, context)
+    elif data == "next_chat":
+        await next_chat(update, context)
+    elif data == "stop_chat":
+        await stop(update, context)
+    elif data == "settings_menu":
+        await settings(update, context)
+    elif data == "premium_menu":
+        await premium(update, context)
+    elif data == "history_menu":
+        await history(update, context)
+    elif data == "report_user":
+        await report(update, context)
+    elif data == "rematch_partner":
+        await rematch(update, context)
+    elif data == "delete_profile":
+        await delete_profile(update, context)
+    elif data.startswith("buy_"):
+        await buy_premium(update, context)
+    elif data.startswith("mood_"):
+        await set_mood(update, context)
+    elif data.startswith("rematch_request_"):
+        partner_id = int(data.split("_")[-1])
+        if is_banned(user_id):
+            await safe_reply(update, "🚫 You are banned and cannot send rematch requests 🔒.", context)
+            return
+        user = get_user(user_id)
+        if user_id in user_pairs:
+            await safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.", context)
+            return
+        partner_data = get_user(partner_id)
+        if not partner_data:
+            await safe_reply(update, "❌ This user is no longer available 😓.", context)
+            return
+        if partner_id in user_pairs:
+            await safe_reply(update, "❌ This user is currently in another chat 💬.", context)
+            return
+        keyboard = [
+            [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{user_id}"),
+             InlineKeyboardButton("❌ Decline", callback_data="rematch_decline")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        user_profile = user.get("profile", {})
         request_message = (
             f"🔄 *Rematch Request* 🔄\n\n"
             f"A user wants to reconnect with you!\n"
@@ -1336,6 +1454,155 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 "message_id": message.message_id
             }
         except telegram.error.TelegramError as e:
+            await safe_reply(update, "❌ Unable to reach this user. They may be offline.", context)
+    elif data.startswith("rematch_accept_"):
+        requester_id = int(data.split("_")[-1])
+        if user_id in user_pairs:
+            await safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.", context)
+            return
+        requester_data = get_user(requester_id)
+        
+async def button(update: Update, context: ContextTypes) -> None:
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    data = query.data
+    
+    # Check ban status for all callbacks except consent and verification
+    if not data.startswith(("consent_", "emoji_")):
+        if is_banned(user_id):
+            user = get_user(user_id)
+            ban_msg = (
+                "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
+                if user["ban_type"] == "permanent"
+                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
+            )
+            await safe_reply(update, ban_msg, context)
+            return
+    
+    # Handle settings menu callbacks
+    if data in ["set_name", "set_age", "set_gender", "set_location", "set_tags"]:
+        # Check profile completeness (same as restrict_access)
+        user = get_user(user_id)
+        if not is_profile_complete(user):
+            await safe_reply(update, "⚠️ Please complete your profile setup with /start before using this feature.", context)
+            await query.message.delete()
+            return
+        context.user_data["settings_state"] = data  # Store the current settings state
+        if data == "set_name":
+            await safe_reply(update, "✨ Please enter your new name:", context)
+        elif data == "set_age":
+            await safe_reply(update, "🎂 Please enter your new age (e.g., 25):", context)
+        elif data == "set_gender":
+            keyboard = [
+                [InlineKeyboardButton("Male", callback_data="settings_gender_male"),
+                 InlineKeyboardButton("Female", callback_data="settings_gender_female")],
+                [InlineKeyboardButton("Other", callback_data="settings_gender_other")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await safe_reply(update, "👤 Please select your gender:", context, reply_markup=reply_markup)
+        elif data == "set_location":
+            await safe_reply(update, "📍 Please enter your new location (e.g., New York):", context)
+        elif data == "set_tags":
+            await safe_reply(update, "🏷️ Please enter your tags, separated by commas (e.g., music, gaming):", context)
+        
+        # Delete the original settings menu to keep the chat clean
+        await query.message.delete()
+        return
+    
+    # Handle gender selection for settings
+    if data.startswith("settings_gender_"):
+        gender = data.split("_")[2].capitalize()
+        update_user(user_id, {"profile.gender": gender})
+        await safe_reply(update, f"👤 Gender updated to {gender}! Use /settings to make more changes.", context)
+        context.user_data.pop("settings_state", None)  # Clear settings state
+        return
+    
+    # Handle help menu
+    if data == "help_menu":
+        help_text = (
+            "🆘 *Help Menu* 🆘\n\n"
+            "Here’s how to use the bot:\n"
+            "• /start - Set up or view your profile\n"
+            "• /next - Find a new chat partner\n"
+            "• /stop - End current chat or stop waiting\n"
+            "• /settings - Update your profile\n"
+            "• /help - Show this menu\n"
+            "• /deleteprofile - Delete your profile\n"
+        )
+        await safe_reply(update, help_text, context)
+        await query.message.delete()
+        return
+    
+    # Existing callback handlers
+    if data == "start_chat":
+        await start(update, context)
+    elif data == "next_chat":
+        await next_chat(update, context)
+    elif data == "stop_chat":
+        await stop(update, context)
+    elif data == "settings_menu":
+        await settings(update, context)
+    elif data == "premium_menu":
+        await premium(update, context)
+    elif data == "history_menu":
+        await history(update, context)
+    elif data == "report_user":
+        await report(update, context)
+    elif data == "rematch_partner":
+        await rematch(update, context)
+    elif data == "delete_profile":
+        await delete_profile(update, context)
+    elif data.startswith("buy_"):
+        await buy_premium(update, context)
+    elif data.startswith("mood_"):
+        await set_mood(update, context)
+    elif data.startswith("rematch_request_"):
+        partner_id = int(data.split("_")[-1])
+        if is_banned(user_id):
+            await safe_reply(update, "🚫 You are banned and cannot send rematch requests 🔒.", context)
+            return
+        user = get_user(user_id)
+        if user_id in user_pairs:
+            await safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.", context)
+            return
+        partner_data = get_user(partner_id)
+        if not partner_data:
+            await safe_reply(update, "❌ This user is no longer available 😓.", context)
+            return
+        if partner_id in user_pairs:
+            await safe_reply(update, "❌ This user is currently in another chat 💬.", context)
+            return
+        keyboard = [
+            [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{user_id}"),
+             InlineKeyboardButton("❌ Decline", callback_data="rematch_decline")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        user_profile = user.get("profile", {})
+        request_message = (
+            f"🔄 *Rematch Request* 🔄\n\n"
+            f"A user wants to reconnect with you!\n"
+            f"🧑 *Name*: {user_profile.get('name', 'Anonymous')}\n"
+            f"🎂 *Age*: {user_profile.get('age', 'Not set')}\n"
+            f"👤 *Gender*: {user_profile.get('gender', 'Not set')}\n"
+            f"📍 *Location*: {user_profile.get('location', 'Not set')}\n\n"
+            f"Would you like to chat again?"
+        )
+        try:
+            message = await context.bot.send_message(
+                chat_id=partner_id,
+                text=escape_markdown_v2(request_message),
+                parse_mode="MarkdownV2",
+                reply_markup=reply_markup
+            )
+            await safe_reply(update, "📩 Rematch request sent. Waiting for their response...", context)
+            context.bot_data["rematch_requests"] = context.bot_data.get("rematch_requests", {})
+            context.bot_data["rematch_requests"][partner_id] = {
+                "requester_id": user_id,
+                "timestamp": int(time.time()),
+                "message_id": message.message_id
+            }
+        except TelegramError as e:
             await safe_reply(update, "❌ Unable to reach this user. They may be offline.", context)
     elif data.startswith("rematch_accept_"):
         requester_id = int(data.split("_")[-1])
@@ -1371,9 +1638,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await consent_handler(update, context)
     elif data.startswith("gender_"):
         await set_gender(update, context)
+    else:
+        logger.warning(f"Unhandled callback data: {data} from user {user_id}")
 
 @restrict_access
-async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def settings(update: Update, context: ContextTypes) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
         user = get_user(user_id)
@@ -1403,6 +1672,75 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Use the buttons below to update your profile! 👇"
     )
     await safe_reply(update, settings_text, context, reply_markup=reply_markup)
+
+@restrict_access
+async def settings_update_handler(update: Update, context: ContextTypes) -> None:
+    user_id = update.effective_user.id
+    message = update.message.text.strip()
+    settings_state = context.user_data.get("settings_state")
+    
+    if not settings_state:
+        return  # Let message_handler process the message
+    
+    # Apply restrict_access logic
+    if is_banned(user_id):
+        user = get_user(user_id)
+        ban_msg = (
+            "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
+            if user["ban_type"] == "permanent"
+            else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
+        )
+        await safe_reply(update, ban_msg, context)
+        return
+    user = get_user(user_id)
+    if not is_profile_complete(user):
+        await safe_reply(update, "⚠️ Please complete your profile setup with /start before using this feature.", context)
+        return
+    
+    profile = user.get("profile", {})
+    
+    try:
+        if settings_state == "set_name":
+            if len(message) > 50:
+                await safe_reply(update, "❌ Name is too long. Please use 50 characters or fewer.", context)
+                return
+            profile["name"] = message
+            await safe_reply(update, f"🧑 Name updated to {message}! Use /settings to make more changes.", context)
+        
+        elif settings_state == "set_age":
+            age = int(message)
+            if not 13 <= age <= 120:
+                await safe_reply(update, "❌ Please enter a valid age between 13 and 120.", context)
+                return
+            profile["age"] = age
+            await safe_reply(update, f"🎂 Age updated to {age}! Use /settings to make more changes.", context)
+        
+        elif settings_state == "set_location":
+            if len(message) > 100:
+                await safe_reply(update, "❌ Location is too long. Please use 100 characters or fewer.", context)
+                return
+            profile["location"] = message
+            await safe_reply(update, f"📍 Location updated to {message}! Use /settings to make more changes.", context)
+        
+        elif settings_state == "set_tags":
+            tags = [tag.strip() for tag in message.split(",") if tag.strip()]
+            if len(tags) > 10:
+                await safe_reply(update, "❌ Too many tags. Please use up to 10 tags.", context)
+                return
+            profile["tags"] = tags
+            await safe_reply(update, f"🏷️ Tags updated to {', '.join(tags or ['None'])}! Use /settings to make more changes.", context)
+        
+        # Update the user’s profile in the database
+        update_user(user_id, {"profile": profile})
+        
+        # Clear the settings state
+        context.user_data.pop("settings_state", None)
+    
+    except ValueError:
+        await safe_reply(update, "❌ Invalid input. Please try again (e.g., use a number for age).", context)
+    except Exception as e:
+        logger.error(f"Error updating settings for user {user_id}: {e}")
+        await safe_reply(update, "❌ An error occurred. Please try again or contact support.", context)
 
 @restrict_access
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1516,8 +1854,15 @@ async def delete_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.error(f"Error deleting profile for user {user_id}: {e}")
         await safe_reply(update, "❌ Error deleting profile 😔. Please try again or contact support.", context)
 
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def message_handler(update: Update, context: ContextTypes) -> None:
     user_id = update.effective_user.id
+    
+    # Check if the user is updating settings
+    if context.user_data.get("settings_state"):
+        await settings_update_handler(update, context)
+        return
+    
+    # Existing message handler logic
     if is_banned(user_id):
         user = get_user(user_id)
         ban_msg = (
