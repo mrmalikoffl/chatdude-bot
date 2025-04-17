@@ -2144,10 +2144,10 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 def main() -> None:
     """Initialize and run the Telegram bot."""
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    token = os.getenv("TOKEN")
     if not token:
-        logger.error("TELEGRAM_BOT_TOKEN not set")
-        raise EnvironmentError("TELEGRAM_BOT_TOKEN not set")
+        logger.error("TOKEN not set")
+        raise EnvironmentError("TOKEN not set")
     
     application = Application.builder().token(token).build()
     
