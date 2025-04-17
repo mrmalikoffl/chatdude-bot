@@ -720,6 +720,13 @@ async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await match_users(context)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+from telegram import Update, ParseMode
+from datetime import datetime
+from your_utils import is_banned, get_user, safe_reply, ADMIN_IDS  # Adjust based on your codebase
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
         user = get_user(user_id)
@@ -736,7 +743,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
          InlineKeyboardButton("📜 History", callback_data="history_menu")],
         [InlineKeyboardButton("🚨 Report", callback_data="report_user"),
          InlineKeyboardButton("🔄 Re-Match", callback_data="rematch_partner")],
-        [ INLINEKeyboardButton("🗑️ Delete Profile", callback_data="delete_profile")]
+        [InlineKeyboardButton("🗑️ Delete Profile", callback_data="delete_profile")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     help_text = (
@@ -771,7 +778,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "• /admin - View admin tools and commands\n"
         )
     help_text += "\nUse the buttons below to get started! 👇"
-    await safe_reply(update, help_text, context, reply_markup=reply_markup)
+    await safe_reply(update, help_text, context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
