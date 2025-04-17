@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+# Part 1: Imports, constants, and utility functions
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
     Application,  # Replaces Updater
@@ -25,7 +28,6 @@ import warnings
 import telegram.error
 import random
 import threading
-
 
 # Suppress ConversationHandler warning
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram.ext.conversationhandler")
@@ -71,6 +73,7 @@ user_activities = {}
 command_timestamps = {}
 message_timestamps = defaultdict(list)
 chat_histories = {}
+INACTIVITY_TIMEOUT = 1800  # 30 minutes in seconds
 
 # Define states for ConversationHandler
 CONSENT, NAME, AGE, GENDER, LOCATION, VERIFICATION, TAGS, SETTINGS = range(8)
@@ -82,6 +85,8 @@ VERIFICATION_EMOJIS = ['😊', '😢', '😡', '😎', '😍', '😉', '😜', '
 mongo_client = None
 db = None
 operation_queue = Queue()
+user_cache = {}  # Added based on usage in get_user
+PYMONGO_AVAILABLE = True  # Assumed based on pymongo imports
 
 def init_mongodb():
     if not PYMONGO_AVAILABLE:
@@ -176,10 +181,6 @@ def cleanup_in_memory(context: CallbackContext) -> None:
                 safe_send_message(partner_id, "🛑 Chat ended due to inactivity.")
                 remove_pair(user_id, partner_id)
     logger.info(f"Cleanup complete. user_pairs size: {len(user_pairs)}, waiting_users size: {len(waiting_users)}")
-
-# Add at the top with other in-memory storage
-user_activities = {}
-INACTIVITY_TIMEOUT = 1800  # 30 minutes in seconds
 
 def remove_pair(user_id: int, partner_id: int) -> None:
     """Remove a user pair and clean up related data"""
@@ -582,7 +583,13 @@ def safe_bot_send_message(bot, chat_id: int, text: str, parse_mode: str = "Markd
         logger.error(f"Failed to send message to chat {chat_id}: {e}. Text: {text[:200]}")
     except Exception as e:
         logger.error(f"Unexpected error sending message to chat {chat_id}: {e}. Text: {text[:200]}")
-        
+
+def safe_send_message(chat_id: int, text: str):  # Added based on usage in cleanup_in_memory
+    try:
+        bot.send_message(chat_id=chat_id, text=text, parse_mode="MarkdownV2")
+    except telegram.error.TelegramError as e:
+        logger.error(f"Failed to send message to chat {chat_id}: {e}")
+
 def start(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     logger.info(f"Received /start command from user {user_id}")
