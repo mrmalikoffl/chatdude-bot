@@ -1577,6 +1577,77 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
     await send_channel_notification(context, notification_message)
 
+async def set_tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle user input for setting profile tags."""
+    user_id = update.effective_user.id
+    user = get_user(user_id)
+    current_state = context.user_data.get("state", user.get("setup_state"))
+    
+    if current_state != TAGS:
+        await safe_reply(update, "⚠️ Please complete the previous steps. Use /start to begin.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        return ConversationHandler.END
+    
+    profile = user.get("profile", {})
+    tags_input = update.message.text.strip().lower().split(",")
+    tags_input = [tag.strip() for tag in tags_input if tag.strip()]
+    
+    # Define allowed tags (adjust as needed)
+    ALLOWED_TAGS = [
+        "gaming", "music", "movies", "sports", "books", "tech", "food", "travel",
+        "art", "fitness", "nature", "photography", "fashion", "coding", "anime"
+    ]
+    
+    invalid_tags = [tag for tag in tags_input if tag not in ALLOWED_TAGS]
+    if invalid_tags:
+        await safe_reply(
+            update,
+            f"⚠️ Invalid tags: {', '.join(invalid_tags)}. Allowed tags: {', '.join(ALLOWED_TAGS)}",
+            context,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return TAGS
+    
+    if len(tags_input) > 5:
+        await safe_reply(update, "⚠️ You can only set up to 5 tags.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        return TAGS
+    
+    profile["tags"] = tags_input
+    update_user(user_id, {
+        "profile": profile,
+        "consent": user.get("consent", False),
+        "verified": user.get("verified", False),
+        "premium_expiry": user.get("premium_expiry"),
+        "premium_features": user.get("premium_features", {}),
+        "created_at": user.get("created_at", int(time.time())),
+        "ban_type": user.get("ban_type"),
+        "ban_expiry": user.get("ban_expiry"),
+        "setup_state": None
+    })
+    
+    context.user_data["state"] = None
+    await safe_reply(update, f"🏷️ Tags set: {', '.join(tags_input)} 🎉", context, parse_mode=ParseMode.MARKDOWN_V2)
+    await safe_reply(
+        update,
+        (
+            "🔍 Your profile is ready! 🎉\n\n"
+            "🚀 Use `/next` to find a chat partner and start connecting!\n"
+            "ℹ️ Sending text messages now won’t start a chat. Use /help for more options."
+        ),
+        context,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+    
+    notification_message = (
+        "🆕 *User Updated Tags* 🆕\n\n"
+        f"👤 *User ID*: {user_id}\n"
+        f"🧑 *Name*: {profile.get('name', 'Not set')}\n"
+        f"🏷️ *Tags*: {', '.join(tags_input)}\n"
+        f"🕒 *Updated At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    await send_channel_notification(context, notification_message)
+    
+    return ConversationHandler.END
+
 async def admin_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Grant admin access and display commands"""
     user_id = update.effective_user.id
