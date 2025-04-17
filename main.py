@@ -94,7 +94,7 @@ def init_mongodb():
         client = MongoClient(uri, serverSelectionTimeoutMS=5000)
         client.talk2anyone.command("ping")
         db = client.get_database("talk2anyone")
-        db.users.create_index("user_id", unique=True)  # Add index
+        db.users.create_index("user_id", unique=True)
         logger.info("MongoDB connected successfully")
         return db
     except ConnectionFailure as e:
@@ -107,30 +107,56 @@ def init_mongodb():
         logger.error(f"Unexpected error initializing MongoDB: {e}")
         raise
 
-def get_db_collection(collection_name):
-    """Get a MongoDB collection"""
-    return db[collection_name]
+def get_db_collection(collection_name: str):
+    """Get a MongoDB collection with reconnection logic"""
+    global db
+    try:
+        if db is None:
+            logger.info("Database not initialized, attempting to connect")
+            db = init_mongodb()
+        # Test connection
+        db.command("ping")
+        return db[collection_name]
+    except (ConnectionFailure, pymongo.errors.ServerSelectionTimeoutError) as e:
+        logger.error(f"Failed to connect to MongoDB: {e}")
+        try:
+            logger.info("Attempting to reconnect to MongoDB")
+            db = init_mongodb()
+            return db[collection_name]
+        except Exception as e2:
+            logger.error(f"Reconnection failed: {e2}")
+            raise pymongo.errors.ConnectionError("Unable to connect to MongoDB")
+    except Exception as e:
+        logger.error(f"Unexpected error accessing collection {collection_name}: {e}")
+        raise
 
 def process_queued_operations(context: CallbackContext):
+    """Process queued database operations"""
+    max_attempts = 5
     while not operation_queue.empty():
         op_type, args = operation_queue.get()
+        attempts = context.bot_data.get("queue_attempts", {}).get((op_type, args), 0)
+        if attempts >= max_attempts:
+            logger.error(f"Operation {op_type} with args {args} exceeded {max_attempts} attempts, discarding")
+            continue
         try:
             if op_type == "update_user":
                 update_user(*args)
             elif op_type == "delete_user":
                 delete_user(*args)
+            elif op_type == "insert_user":
+                user_id, user_data = args
+                users = get_db_collection("users")
+                users.insert_one(user_data)
+                user_cache[user_id] = user_data
             elif op_type == "issue_keyword_violation":
                 issue_keyword_violation(*args)
             logger.info(f"Successfully processed queued operation: {op_type} with args {args}")
+            context.bot_data.setdefault("queue_attempts", {}).pop((op_type, args), None)
         except Exception as e:
             logger.error(f"Failed to process queued operation {op_type} with args {args}: {e}")
-            operation_queue.put((op_type, args))  # Re-queue on failure
-
-try:
-    db = init_mongodb()
-except Exception as e:
-    logger.error(f"Failed to set up MongoDB: {e}")
-    exit(1)
+            context.bot_data.setdefault("queue_attempts", {})[(op_type, args)] = attempts + 1
+            operation_queue.put((op_type, args))  # Re-queue with attempt tracking
 
 def cleanup_in_memory(context: CallbackContext) -> None:
     logger.info(f"Cleaning up in-memory data. user_pairs size: {len(user_pairs)}, waiting_users size: {len(waiting_users)}")
@@ -202,26 +228,26 @@ def get_user(user_id: int) -> dict:
                 "premium_expiry": None,
                 "premium_features": {},
                 "ban_type": None,
-                "ban_expiry": None
+                "ban_expiry": None,
+                "setup_state": None
             }
             try:
                 users.insert_one(user)
                 user = users.find_one({"user_id": user_id})
                 if not user:
                     logger.error(f"Failed to create user {user_id}")
+                    operation_queue.put(("insert_user", (user_id, user)))
                     return {}
             except pymongo.errors.PyMongoError as e:
                 logger.error(f"Failed to insert user {user_id}: {e}")
                 operation_queue.put(("insert_user", (user_id, user)))
                 return {}
         
-        # Cache the user
         user_cache[user_id] = user
-        logger.debug(f"Returning user {user_id}: {user}")
+        logger.debug(f"Returning user {user_id}")
         return user
     except pymongo.errors.PyMongoError as e:
         logger.error(f"Database error fetching user {user_id}: {e}", exc_info=True)
-        # Return cached user if available
         if user_id in user_cache:
             logger.info(f"Returning cached user {user_id} due to DB error")
             return user_cache[user_id]
@@ -247,7 +273,8 @@ def update_user(user_id: int, data: dict) -> bool:
                     "ban_expiry": existing.get("ban_expiry"),
                     "verified": existing.get("verified", False),
                     "premium_features": existing.get("premium_features", {}),
-                    "created_at": existing.get("created_at", int(time.time()))
+                    "created_at": existing.get("created_at", int(time.time())),
+                    "setup_state": existing.get("setup_state")
                 }
             else:
                 existing_data = {
@@ -259,7 +286,8 @@ def update_user(user_id: int, data: dict) -> bool:
                     "ban_expiry": None,
                     "verified": False,
                     "premium_features": {},
-                    "created_at": int(time.time())
+                    "created_at": int(time.time()),
+                    "setup_state": None
                 }
             updated_data = {
                 "user_id": user_id,
@@ -271,14 +299,14 @@ def update_user(user_id: int, data: dict) -> bool:
                 "ban_expiry": data.get("ban_expiry", existing_data["ban_expiry"]),
                 "verified": data.get("verified", existing_data["verified"]),
                 "premium_features": data.get("premium_features", existing_data["premium_features"]),
-                "created_at": data.get("created_at", existing_data["created_at"])
+                "created_at": data.get("created_at", existing_data["created_at"]),
+                "setup_state": data.get("setup_state", existing_data["setup_state"])
             }
             users.update_one(
                 {"user_id": user_id},
                 {"$set": updated_data},
                 upsert=True
             )
-            # Update cache
             user_cache[user_id] = updated_data
             logger.debug(f"Updated user {user_id}")
             return True
@@ -303,9 +331,10 @@ def delete_user(user_id: int):
         result = users.delete_one({"user_id": user_id})
         if result.deleted_count > 0:
             logger.info(f"Deleted user {user_id} from database.")
+            user_cache.pop(user_id, None)
         else:
             logger.warning(f"No user found with user_id {user_id}")
-    except (ConnectionError, OperationFailure) as e:
+    except (pymongo.errors.ConnectionError, pymongo.errors.OperationFailure) as e:
         logger.error(f"Failed to delete user {user_id}: {e}")
         operation_queue.put(("delete_user", (user_id,)))
         raise
