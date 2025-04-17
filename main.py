@@ -72,8 +72,8 @@ command_timestamps = {}
 message_timestamps = defaultdict(list)
 chat_histories = {}
 
-# Conversation states
-NAME, AGE, GENDER, LOCATION, CONSENT, VERIFICATION, TAGS = range(7)
+# Define states for ConversationHandler
+CONSENT, NAME, AGE, GENDER, LOCATION, VERIFICATION, TAGS, SETTINGS = range(8)
 
 # Emoji list for verification
 VERIFICATION_EMOJIS = ['😊', '😢', '😡', '😎', '😍', '😉', '😜', '😴']
