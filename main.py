@@ -140,6 +140,40 @@ async def process_queued_operations(context: ContextTypes.DEFAULT_TYPE) -> None:
             else:
                 logger.error(f"Operation {op_type} discarded after {max_retries} attempts.")
 
+async def restrict_access(handler):
+    """Decorator to restrict access to users with complete profiles and no bans."""
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user_id = update.effective_user.id
+        
+        # Check ban status
+        if is_banned(user_id):
+            user = get_user(user_id)
+            ban_msg = (
+                "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
+                if user["ban_type"] == "permanent"
+                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
+            )
+            await safe_reply(update, ban_msg, context)
+            return
+        
+        # Allow /start and /deleteprofile even with incomplete profile
+        if handler.__name__ in ["start", "delete_profile"]:
+            return await handler(update, context, *args, **kwargs)
+        
+        # Allow admin commands for admins
+        if user_id in ADMIN_IDS and handler.__name__.startswith("admin_"):
+            return await handler(update, context, *args, **kwargs)
+        
+        # Check profile completeness
+        user = get_user(user_id)
+        if not is_profile_complete(user):
+            await safe_reply(update, "⚠️ Please complete your profile setup with /start before using this feature.", context)
+            return
+        
+        return await handler(update, context, *args, **kwargs)
+    
+    return wrapper
+
 async def cleanup_in_memory(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clean up in-memory data like inactive user pairs."""
     logger.info(f"Cleaning up in-memory data. user_pairs: {len(user_pairs)}, waiting_users: {len(waiting_users)}")
@@ -1514,40 +1548,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         chat_histories[user_id].append(f"You: {message}")
     if partner_id in chat_histories:
         chat_histories[partner_id].append(f"Partner: {message}")
-
-async def restrict_access(handler):
-    """Decorator to restrict access to users with complete profiles and no bans."""
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        user_id = update.effective_user.id
-        
-        # Check ban status
-        if is_banned(user_id):
-            user = get_user(user_id)
-            ban_msg = (
-                "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
-                if user["ban_type"] == "permanent"
-                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
-            )
-            await safe_reply(update, ban_msg, context)
-            return
-        
-        # Allow /start and /deleteprofile even with incomplete profile
-        if handler.__name__ in ["start", "delete_profile"]:
-            return await handler(update, context, *args, **kwargs)
-        
-        # Allow admin commands for admins
-        if user_id in ADMIN_IDS and handler.__name__.startswith("admin_"):
-            return await handler(update, context, *args, **kwargs)
-        
-        # Check profile completeness
-        user = get_user(user_id)
-        if not is_profile_complete(user):
-            await safe_reply(update, "⚠️ Please complete your profile setup with /start before using this feature.", context)
-            return
-        
-        return await handler(update, context, *args, **kwargs)
-    
-    return wrapper
 
 def is_safe_message(message: str) -> tuple[bool, str]:
     message_lower = message.lower()
