@@ -433,15 +433,21 @@ def issue_keyword_violation(user_id: int, keyword: str, update: Update, context:
         return "error"
 
 def is_banned(user_id: int) -> bool:
-    user = get_user(user_id)
-    if user.get("ban_type"):
-        if user["ban_type"] == "permanent":
+    try:
+        user = get_user(user_id)
+        if not user:
+            logger.error(f"Cannot check ban status for user {user_id}: No user data")
+            return False
+        ban_type = user.get("ban_type")
+        ban_expiry = user.get("ban_expiry")
+        if ban_type == "permanent":
             return True
-        if user["ban_type"] == "temporary" and user["ban_expiry"] and user["ban_expiry"] > time.time():
-            return True
-        if user["ban_type"] == "temporary" and user["ban_expiry"] and user["ban_expiry"] <= time.time():
-            update_user(user_id, {"ban_type": None, "ban_expiry": None})
-    return False
+        if ban_type == "temporary" and ban_expiry:
+            return int(time.time()) < ban_expiry
+        return False
+    except Exception as e:
+        logger.error(f"Error checking ban status for user {user_id}: {e}", exc_info=True)
+        return False
 
 def has_premium_feature(user_id: int, feature: str) -> bool:
     user = get_user(user_id)
