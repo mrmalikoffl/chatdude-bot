@@ -1,10 +1,9 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
-    Updater,
+    Application,  # Replaces Updater
     CommandHandler,
     MessageHandler,
-    Filters,
-    CallbackContext,
+    filters,  # New module for filters
     ConversationHandler,
     CallbackQueryHandler,
     PreCheckoutQueryHandler,
@@ -15,7 +14,7 @@ import os
 import time
 from datetime import datetime, timedelta
 from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure, OperationFailure  # Corrected import
+from pymongo.errors import ConnectionFailure, OperationFailure
 from queue import Queue
 from urllib.parse import urlparse
 import urllib.parse
@@ -26,6 +25,7 @@ import warnings
 import telegram.error
 import random
 import threading
+
 
 # Suppress ConversationHandler warning
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram.ext.conversationhandler")
