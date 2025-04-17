@@ -3,14 +3,14 @@
 # Part 1: Imports, constants, and utility functions
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
-    Application,  # Replaces Updater
+    Updater,
     CommandHandler,
     MessageHandler,
-    filters,  # New module for filters
+    Filters,  # Capitalized Filters for v13.7
     ConversationHandler,
     CallbackQueryHandler,
     PreCheckoutQueryHandler,
-    JobQueue,  # Added comma here
+    JobQueue,
     CallbackContext
 )
 import logging
@@ -2457,7 +2457,7 @@ def main() -> None:
         else:
             logger.warning("MongoDB not available, using in-memory cache only")
 
-        # Button handler (your implementation)
+        # Button handler (from your Part 2)
         def button(update: Update, context: CallbackContext) -> int:
             query = update.callback_query
             user_id = query.from_user.id
@@ -2483,7 +2483,7 @@ def main() -> None:
                     safe_reply(update, "New test button clicked!", parse_mode=None)
                     logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END")
                     return ConversationHandler.END
-                    
+
                 if not user:
                     logger.error(f"No user data for user_id={user_id}")
                     safe_reply(update, "⚠️ User data not found. Please restart with /start.", parse_mode=None)
@@ -2801,7 +2801,7 @@ def main() -> None:
         dp.add_handler(CommandHandler("history", history))
         dp.add_handler(CommandHandler("report", report))
         dp.add_handler(CommandHandler("deleteprofile", delete_profile))
-        dp.add_handler(CommandHandler("testbutton", test_button))  # New test button command
+        dp.add_handler(CommandHandler("testbutton", test_button))
         dp.add_handler(PreCheckoutQueryHandler(pre_checkout))
         dp.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
         dp.add_handler(MessageHandler(Filters.text & ~Filters.command, message_handler))
@@ -2892,7 +2892,6 @@ def main() -> None:
     except Exception as e:
         logger.error(f"Failed to start bot: {str(e)}", exc_info=True)
         raise
-
 
 if __name__ == "__main__":
     main()
