@@ -110,8 +110,18 @@ def get_db_collection(collection_name):
 
 async def process_queued_operations(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Process queued database or notification operations."""
+    max_retries = 3  # Maximum retries per operation
+    operation_retries = {}  # Track retries per operation
+
     while not operation_queue.empty():
         op_type, args = operation_queue.get()
+        operation_key = (op_type, str(args))  # Unique key for the operation
+        retries = operation_retries.get(operation_key, 0)
+
+        if retries >= max_retries:
+            logger.error(f"Operation {op_type} with args {args} failed after {max_retries} attempts. Discarding.")
+            continue
+
         try:
             if op_type == "update_user":
                 update_user(*args)
@@ -120,9 +130,15 @@ async def process_queued_operations(context: ContextTypes.DEFAULT_TYPE) -> None:
             elif op_type == "issue_keyword_violation":
                 issue_keyword_violation(*args)
             logger.info(f"Successfully processed queued operation: {op_type}")
+            operation_retries.pop(operation_key, None)  # Clear retry count on success
         except Exception as e:
             logger.error(f"Failed to process queued operation {op_type}: {e}")
-            operation_queue.put((op_type, args))
+            operation_retries[operation_key] = retries + 1
+            if operation_retries[operation_key] < max_retries:
+                logger.info(f"Requeuing operation {op_type} (attempt {retries + 1}/{max_retries})")
+                operation_queue.put((op_type, args))
+            else:
+                logger.error(f"Operation {op_type} discarded after {max_retries} attempts.")
 
 async def cleanup_in_memory(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clean up in-memory data like inactive user pairs."""
@@ -168,6 +184,7 @@ def get_user(user_id: int) -> dict:
     return user
 
 def update_user(user_id: int, data: dict) -> bool:
+def update_user(user_id: int, data: dict) -> bool:
     retries = 3
     for attempt in range(retries):
         try:
@@ -186,15 +203,15 @@ def update_user(user_id: int, data: dict) -> bool:
             }
             updated_data = {
                 "user_id": user_id,
-                "profile": data.get("profile", existing_data["profile"]),
-                "consent": data.get("consent", existing_data["consent"]),
-                "consent_time": data.get("consent_time", existing_data["consent_time"]),
-                "premium_expiry": data.get("premium_expiry", existing_data["premium_expiry"]),
-                "ban_type": data.get("ban_type", existing_data["ban_type"]),
-                "ban_expiry": data.get("ban_expiry", existing_data["ban_expiry"]),
-                "verified": data.get("verified", existing_data["verified"]),
-                "premium_features": data.get("premium_features", existing_data["premium_features"]),
-                "created_at": data.get("created_at", existing_data["created_at"])
+                "profile": data.get("profile", existing_data.get("profile", {})),
+                "consent": data.get("consent", existing_data.get("consent", False)),
+                "consent_time": data.get("consent_time", existing_data.get("consent_time", None)),
+                "premium_expiry": data.get("premium_expiry", existing_data.get("premium_expiry", None)),
+                "ban_type": data.get("ban_type", existing_data.get("ban_type", None)),
+                "ban_expiry": data.get("ban_expiry", existing_data.get("ban_expiry", None)),
+                "verified": data.get("verified", existing_data.get("verified", False)),
+                "premium_features": data.get("premium_features", existing_data.get("premium_features", {})),
+                "created_at": data.get("created_at", existing_data.get("created_at", int(time.time())))
             }
             users.update_one(
                 {"user_id": user_id},
@@ -211,8 +228,7 @@ def update_user(user_id: int, data: dict) -> bool:
             logger.error(f"Unexpected error updating user {user_id}: {e}")
             break
     logger.error(f"Failed to update user {user_id} after {retries} attempts")
-    operation_queue.put(("update_user", (user_id, data)))
-    return False
+    return False  # Do not requeue here
 
 def delete_user(user_id: int):
     try:
@@ -365,25 +381,33 @@ async def consent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = query.from_user.id
     choice = query.data
     if choice == "consent_agree":
-        user = get_user(user_id)
-        update_user(user_id, {
-            "consent": True,
-            "consent_time": int(time.time()),
-            "profile": user.get("profile", {}),
-            "premium_expiry": user.get("premium_expiry"),
-            "premium_features": user.get("premium_features", {}),
-            "created_at": user.get("created_at", int(time.time()))
-        })
-        await safe_reply(update, "✅ Thank you for agreeing! Let’s verify your profile.", context)
-        correct_emoji = random.choice(VERIFICATION_EMOJIS)
-        context.user_data["correct_emoji"] = correct_emoji
-        other_emojis = random.sample([e for e in VERIFICATION_EMOJIS if e != correct_emoji], 3)
-        all_emojis = [correct_emoji] + other_emojis
-        random.shuffle(all_emojis)
-        keyboard = [[InlineKeyboardButton(emoji, callback_data=f"emoji_{emoji}") for emoji in all_emojis]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await safe_reply(update, f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{correct_emoji}*", context, reply_markup=reply_markup)
-        return VERIFICATION
+        try:
+            user = get_user(user_id)
+            success = update_user(user_id, {
+                "consent": True,
+                "consent_time": int(time.time()),
+                "profile": user.get("profile", {}),
+                "premium_expiry": user.get("premium_expiry"),
+                "premium_features": user.get("premium_features", {}),
+                "created_at": user.get("created_at", int(time.time()))
+            })
+            if not success:
+                await safe_reply(update, "⚠️ Failed to update consent. Please try again.", context)
+                return ConversationHandler.END
+            await safe_reply(update, "✅ Thank you for agreeing! Let’s verify your profile.", context)
+            correct_emoji = random.choice(VERIFICATION_EMOJIS)
+            context.user_data["correct_emoji"] = correct_emoji
+            other_emojis = random.sample([e for e in VERIFICATION_EMOJIS if e != correct_emoji], 3)
+            all_emojis = [correct_emoji] + other_emojis
+            random.shuffle(all_emojis)
+            keyboard = [[InlineKeyboardButton(emoji, callback_data=f"emoji_{emoji}") for emoji in all_emojis]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await safe_reply(update, f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{correct_emoji}*".replace(".", "\\."), context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+            return VERIFICATION
+        except Exception as e:
+            logger.error(f"Error in consent_handler for user {user_id}: {e}")
+            await safe_reply(update, "⚠️ An error occurred. Please try again with /start.", context)
+            return ConversationHandler.END
     else:
         await safe_reply(update, "❌ You must agree to the rules to use this bot. Use /start to try again.", context)
         return ConversationHandler.END
