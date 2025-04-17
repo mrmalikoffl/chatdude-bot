@@ -23,6 +23,7 @@ import warnings
 import telegram.error
 import random
 import threading
+from functools import wraps  # Add this import
 
 # Suppress ConversationHandler warning
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram.ext.conversationhandler")
