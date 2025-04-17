@@ -10,7 +10,7 @@ from telegram.ext import (
     ConversationHandler,
     CallbackQueryHandler,
     PreCheckoutQueryHandler,
-    JobQueue
+    JobQueue,  # Added comma here
     CallbackContext
 )
 import logging
