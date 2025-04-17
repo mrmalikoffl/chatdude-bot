@@ -183,26 +183,53 @@ def cleanup_premium_features(user_id: int) -> bool:
 
 def get_user(user_id: int) -> dict:
     logger.info(f"Fetching user {user_id}")
-    
-    users = get_db_collection("users")
-    user = users.find_one({"user_id": user_id})
-    if not user:
-        logger.info(f"Creating new user {user_id}")
-        user = {
-            "user_id": user_id,
-            "profile": {},
-            "consent": False,
-            "verified": False,
-            "created_at": int(time.time()),
-            "premium_expiry": None,
-            "premium_features": {},
-            "ban_type": None,
-            "ban_expiry": None
-        }
-        users.insert_one(user)
-        user = users.find_one({"user_id": user_id})  # Fetch again instead of recursion
-    logger.debug(f"Returning user {user_id}: {user}")
-    return user
+    try:
+        # Check cache first
+        if user_id in user_cache:
+            logger.debug(f"Returning cached user {user_id}")
+            return user_cache[user_id]
+
+        users = get_db_collection("users")
+        user = users.find_one({"user_id": user_id})
+        if not user:
+            logger.info(f"Creating new user {user_id}")
+            user = {
+                "user_id": user_id,
+                "profile": {},
+                "consent": False,
+                "verified": False,
+                "created_at": int(time.time()),
+                "premium_expiry": None,
+                "premium_features": {},
+                "ban_type": None,
+                "ban_expiry": None
+            }
+            try:
+                users.insert_one(user)
+                user = users.find_one({"user_id": user_id})
+                if not user:
+                    logger.error(f"Failed to create user {user_id}")
+                    return {}
+            except pymongo.errors.PyMongoError as e:
+                logger.error(f"Failed to insert user {user_id}: {e}")
+                operation_queue.put(("insert_user", (user_id, user)))
+                return {}
+        
+        # Cache the user
+        user_cache[user_id] = user
+        logger.debug(f"Returning user {user_id}: {user}")
+        return user
+    except pymongo.errors.PyMongoError as e:
+        logger.error(f"Database error fetching user {user_id}: {e}", exc_info=True)
+        # Return cached user if available
+        if user_id in user_cache:
+            logger.info(f"Returning cached user {user_id} due to DB error")
+            return user_cache[user_id]
+        logger.error(f"No cached user for {user_id}, returning empty dict")
+        return {}
+    except Exception as e:
+        logger.error(f"Unexpected error fetching user {user_id}: {e}", exc_info=True)
+        return {}
 
 def update_user(user_id: int, data: dict) -> bool:
     retries = 3
@@ -251,14 +278,16 @@ def update_user(user_id: int, data: dict) -> bool:
                 {"$set": updated_data},
                 upsert=True
             )
-            logger.debug(f"Updated user {user_id}: {json.dumps(updated_data, default=str)}")
+            # Update cache
+            user_cache[user_id] = updated_data
+            logger.debug(f"Updated user {user_id}")
             return True
-        except (ConnectionError, OperationFailure) as e:
+        except (pymongo.errors.ConnectionError, pymongo.errors.OperationFailure, pymongo.errors.ServerSelectionTimeoutError) as e:
             logger.error(f"Attempt {attempt + 1}/{retries} failed to update user {user_id}: {e}")
             if attempt < retries - 1:
                 time.sleep(1)
         except Exception as e:
-            logger.error(f"Unexpected error updating user {user_id}: {e}")
+            logger.error(f"Unexpected error updating user {user_id}: {e}", exc_info=True)
             break
     logger.error(f"Failed to update user {user_id} after {retries} attempts")
     operation_queue.put(("update_user", (user_id, data)))
@@ -1494,7 +1523,7 @@ def flare(update: Update, context: CallbackContext) -> None:
     updated_user = get_user(user_id)
     logger.debug(f"User {user_id} after flare: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
         
-def settings(update: Update, context: CallbackContext) -> None:
+def settings(update: Update, context: CallbackContext) -> int:
     """Display settings menu for profile customization"""
     user_id = update.effective_user.id
     logger.info(f"Settings called for user {user_id}")
@@ -1504,17 +1533,17 @@ def settings(update: Update, context: CallbackContext) -> None:
         if not user:
             logger.error(f"No user data for user_id={user_id}")
             safe_reply(update, "⚠️ User data not found. Please restart with /start.", parse_mode=None)
-            return
+            return ConversationHandler.END
 
         if is_banned(user_id):
             ban_msg = (
                 "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
-                if user["ban_type"] == "permanent"
+                if user.get("ban_type") == "permanent"
                 else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
             )
             logger.info(f"User {user_id} is banned: {ban_msg}")
             safe_reply(update, ban_msg, parse_mode=None)
-            return
+            return ConversationHandler.END
 
         profile = user.get("profile", {})
         keyboard = [
@@ -1545,11 +1574,16 @@ def settings(update: Update, context: CallbackContext) -> None:
         logger.info(f"Sending settings menu for user {user_id}")
         safe_reply(update, settings_text, reply_markup=reply_markup, parse_mode=None)
         context.user_data["state"] = SETTINGS
-        update_user(user_id, {"setup_state": "SETTINGS"})
+        if not update_user(user_id, {"setup_state": "SETTINGS"}):
+            logger.error(f"Failed to update setup_state for user {user_id}")
+            safe_reply(update, "⚠️ Failed to save settings state. Please try again.", parse_mode=None)
+            return ConversationHandler.END
         logger.info(f"Set state for user {user_id}: bot_state=SETTINGS, setup_state=SETTINGS")
+        return SETTINGS
     except Exception as e:
         logger.error(f"Error in settings for user {user_id}: {e}", exc_info=True)
         safe_reply(update, "😔 An error occurred. Please try again or use /start.", parse_mode=None)
+        return ConversationHandler.END
     
 def report(update: Update, context: CallbackContext) -> None:
     """Report a user for inappropriate behavior"""
