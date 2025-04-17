@@ -2441,9 +2441,15 @@ def main() -> None:
         updater = Updater(token, use_context=True)
         dp = updater.dispatcher
 
-        # Initialize MongoDB
         global db
-        db = init_mongodb()
+        if PYMONGO_AVAILABLE:
+            try:
+                db = init_mongodb()
+            except Exception as e:
+                logger.error(f"Failed to initialize MongoDB: {e}. Using cache only.")
+                PYMONGO_AVAILABLE = False
+        else:
+            logger.warning("MongoDB not available, using in-memory cache only")
 
         # Button handler (your implementation)
         def button(update: Update, context: CallbackContext) -> int:
