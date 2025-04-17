@@ -451,6 +451,7 @@ def escape_markdown_v2(text: str) -> str:
 
 def safe_reply(update: Update, text: str, parse_mode: str = "MarkdownV2", **kwargs) -> None:
     user_id = update.effective_user.id if update.effective_user else "unknown"
+    logger.info(f"ENTER safe_reply: user={user_id}, text={text[:200]}, parse_mode={parse_mode}")
     try:
         if parse_mode == "MarkdownV2":
             escaped_text = escape_markdown_v2(text)
@@ -458,24 +459,36 @@ def safe_reply(update: Update, text: str, parse_mode: str = "MarkdownV2", **kwar
             text = escaped_text
         if update.message:
             update.message.reply_text(text, parse_mode=parse_mode, **kwargs)
+            logger.info(f"SUCCESS safe_reply: user={user_id}, sent via message")
         elif update.callback_query:
             query = update.callback_query
             query.answer()
+            if not query.message:
+                logger.error(f"No message in callback_query for user={user_id}")
+                return
             query.message.reply_text(text, parse_mode=parse_mode, **kwargs)
+            logger.info(f"SUCCESS safe_reply: user={user_id}, sent via callback_query")
+        else:
+            logger.error(f"INVALID update: user={user_id}, no message or callback_query")
     except telegram.error.BadRequest as bre:
         logger.warning(f"MarkdownV2 parsing failed for user {user_id}: {bre}. Text: {text[:200]}")
         clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', '', text)
         try:
-            if update.callback_query:
+            if update.callback_query and update.callback_query.message:
                 update.callback_query.message.reply_text(clean_text, parse_mode=None, **kwargs)
+                logger.info(f"SUCCESS safe_reply: user={user_id}, sent clean text via callback_query")
             elif update.message:
                 update.message.reply_text(clean_text, parse_mode=None, **kwargs)
+                logger.info(f"SUCCESS safe_reply: user={user_id}, sent clean text via message")
+            else:
+                logger.error(f"Cannot send clean text: user={user_id}, no valid message or callback_query")
         except telegram.error.TelegramError as te:
-            logger.error(f"Failed to send clean message for user {user_id}: {te}. Text: {clean_text[:200]}")
+            logger.error(f"FAILED safe_reply clean text: user={user_id}, error={te}, text={clean_text[:200]}")
     except telegram.error.TelegramError as te:
-        logger.error(f"Failed to send message for user {user_id}: {te}. Text: {text[:200]}")
+        logger.error(f"FAILED safe_reply: user={user_id}, error={te}, text={text[:200]}")
     except Exception as e:
-        logger.error(f"Unexpected error sending message for user {user_id}: {e}. Text: {text[:200]}")
+        logger.error(f"UNEXPECTED error in safe_reply: user={user_id}, error={e}, text={text[:200]}", exc_info=True)
+    logger.info(f"EXIT safe_reply: user={user_id}")
 
 def safe_bot_send_message(bot, chat_id: int, text: str, parse_mode: str = "MarkdownV2", **kwargs):
     try:
@@ -1022,7 +1035,8 @@ def help_command(update: Update, context: CallbackContext) -> None:
          InlineKeyboardButton("📜 History", callback_data="history_menu")],
         [InlineKeyboardButton("🚨 Report", callback_data="report_user"),
          InlineKeyboardButton("🔄 Re-Match", callback_data="rematch_partner")],
-        [InlineKeyboardButton("🗑️ Delete Profile", callback_data="delete_profile")]
+        [InlineKeyboardButton("🗑️ Delete Profile", callback_data="delete_profile"),
+         InlineKeyboardButton("🛠️ Debug Test", callback_data="debug_test")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     help_text = (
@@ -1049,6 +1063,7 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "━━━━━\n\n"
         "🚨 Safety 🚨\n"
         "- /report - Report inappropriate behavior\n"
+        "🛠️ Debug Test: Test button functionality\n"
     )
     if user_id in ADMIN_IDS:
         help_text += (
@@ -1483,67 +1498,99 @@ def button(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     user_id = query.from_user.id
     data = query.data
+    logger.info(f"ENTER button: user={user_id}, data={data}")
+    
     user = get_user(user_id)
     setup_state = user.get('setup_state') if user else None
     bot_state = context.user_data.get('state')
-    logger.info(f"Button callback: user={user_id}, data={data}, setup_state={setup_state}, bot_state={bot_state}")
+    logger.info(f"Button details: user={user_id}, data={data}, setup_state={setup_state}, bot_state={bot_state}")
     
-    if not user:
-        logger.error(f"No user data for user_id={user_id}")
-        safe_reply(update, "⚠️ User data not found. Please restart with /start.", parse_mode=None)
+    if not query:
+        logger.error(f"No callback_query for user={user_id}, data={data}")
         return ConversationHandler.END
-
-    if query.message.chat_id < 0:
-        query.answer("This button isn't for group chats.")
-        return ConversationHandler.END
-
+    
     try:
+        query.answer()  # Acknowledge callback
+        if not user:
+            logger.error(f"No user data for user_id={user_id}")
+            safe_reply(update, "⚠️ User data not found. Please restart with /start.", parse_mode=None)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (no user)")
+            return ConversationHandler.END
+
+        if query.message.chat_id < 0:
+            logger.info(f"Group chat detected for user={user_id}, data={data}")
+            safe_reply(update, "This button isn't for group chats.", parse_mode=None)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (group chat)")
+            return ConversationHandler.END
+
         if is_banned(user_id):
             logger.info(f"User {user_id} is banned, cannot process button: {data}")
             safe_reply(update, "🚫 You are banned.", parse_mode=None)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (banned)")
             return ConversationHandler.END
         if user_id in user_pairs and data in ["next_chat", "rematch_partner"]:
             logger.info(f"User {user_id} is in a chat, cannot process button: {data}")
             safe_reply(update, "❓ You're in a chat. Use /stop first.", parse_mode=None)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (in chat)")
             return ConversationHandler.END
         if data == "start_chat":
             logger.info(f"Processing start_chat for user {user_id}")
-            return start(update, context) or ConversationHandler.END
+            result = start(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         elif data == "next_chat":
             logger.info(f"Processing next_chat for user {user_id}")
-            return next_chat(update, context) or ConversationHandler.END
+            result = next_chat(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         elif data == "stop_chat":
             logger.info(f"Processing stop_chat for user {user_id}")
-            return stop(update, context) or ConversationHandler.END
+            result = stop(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         elif data == "settings_menu":
             logger.info(f"Processing settings_menu for user {user_id}")
-            return settings(update, context) or ConversationHandler.END
+            result = settings(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         elif data == "premium_menu":
             logger.info(f"Processing premium_menu for user {user_id}")
-            return premium(update, context) or ConversationHandler.END
+            result = premium(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         elif data == "history_menu":
             logger.info(f"Processing history_menu for user {user_id}")
-            return history(update, context) or ConversationHandler.END
+            result = history(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         elif data == "report_user":
             logger.info(f"Processing report_user for user {user_id}")
-            return report(update, context) or ConversationHandler.END
+            result = report(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         elif data == "rematch_partner":
             logger.info(f"Processing rematch_partner for user {user_id}")
-            return rematch(update, context) or ConversationHandler.END
+            result = rematch(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         elif data == "delete_profile":
             logger.info(f"Processing delete_profile for user {user_id}")
-            return delete_profile(update, context) or ConversationHandler.END
+            result = delete_profile(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         elif data == "set_name":
             logger.info(f"Processing set_name for user {user_id}")
             update_user(user_id, {"setup_state": "NAME"})
             context.user_data["state"] = NAME
             safe_reply(update, "🧑 Please enter your new name:", parse_mode=None)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=NAME")
             return NAME
         elif data == "set_age":
             logger.info(f"Processing set_age for user {user_id}")
             update_user(user_id, {"setup_state": "AGE"})
             context.user_data["state"] = AGE
             safe_reply(update, "🎂 Please enter your new age:", parse_mode=None)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=AGE")
             return AGE
         elif data == "set_gender":
             logger.info(f"Processing set_gender for user {user_id}")
@@ -1556,43 +1603,61 @@ def button(update: Update, context: CallbackContext) -> int:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             safe_reply(update, "👤 Please select your gender:", reply_markup=reply_markup, parse_mode=None)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=GENDER")
             return GENDER
         elif data == "set_location":
             logger.info(f"Processing set_location for user {user_id}")
             update_user(user_id, {"setup_state": "LOCATION"})
             context.user_data["state"] = LOCATION
             safe_reply(update, "📍 Please enter your new location:", parse_mode=None)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=LOCATION")
             return LOCATION
         elif data == "set_tags":
             logger.info(f"Processing set_tags for user {user_id}")
             update_user(user_id, {"setup_state": "TAGS"})
             context.user_data["state"] = TAGS
             safe_reply(update, "🏷️ Please enter your new tags (comma-separated):", parse_mode=None)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=TAGS")
             return TAGS
         elif data == "help_menu":
             logger.info(f"Processing help_menu for user {user_id}")
-            return help_command(update, context) or ConversationHandler.END
+            result = help_command(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         elif data.startswith("buy_"):
             logger.info(f"Processing buy_ for user {user_id}")
-            return buy_premium(update, context) or ConversationHandler.END
+            result = buy_premium(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
+        elif data == "debug_test":
+            logger.info(f"Processing debug_test for user {user_id}")
+            safe_reply(update, "Debug test button clicked!", parse_mode=None)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END")
+            return ConversationHandler.END
         elif data.startswith("mood_"):
             logger.info(f"Processing mood_ for user {user_id}")
-            return set_mood(update, context) or ConversationHandler.END
+            result = set_mood(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         elif data.startswith("rematch_request_"):
             logger.info(f"Processing rematch_request_ for user {user_id}")
             partner_id = int(data.split("_")[-1])
             if is_banned(user_id):
                 safe_reply(update, "🚫 You are banned and cannot send rematch requests 🔒.", parse_mode=None)
+                logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (banned)")
                 return ConversationHandler.END
             if user_id in user_pairs:
                 safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.", parse_mode=None)
+                logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (in chat)")
                 return ConversationHandler.END
             partner_data = get_user(partner_id)
             if not partner_data:
                 safe_reply(update, "❌ This user is no longer available 😓.", parse_mode=None)
+                logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (partner unavailable)")
                 return ConversationHandler.END
             if partner_id in user_pairs:
                 safe_reply(update, "❌ This user is currently in another chat 💬.", parse_mode=None)
+                logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (partner in chat)")
                 return ConversationHandler.END
             keyboard = [
                 [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{user_id}"),
@@ -1624,22 +1689,28 @@ def button(update: Update, context: CallbackContext) -> int:
                     "message_id": message.message_id
                 }
                 logger.info(f"User {user_id} sent rematch request to {partner_id}")
+                logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END")
+                return ConversationHandler.END
             except telegram.error.TelegramError as e:
                 safe_reply(update, "❌ Unable to reach this user. They may be offline.", parse_mode=None)
                 logger.warning(f"Failed to send rematch request to {partner_id}: {e}")
-            return ConversationHandler.END
+                logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END")
+                return ConversationHandler.END
         elif data.startswith("rematch_accept_"):
             logger.info(f"Processing rematch_accept_ for user {user_id}")
             requester_id = int(data.split("_")[-1])
             if user_id in user_pairs:
                 safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.", parse_mode=None)
+                logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (in chat)")
                 return ConversationHandler.END
             requester_data = get_user(requester_id)
             if not requester_data:
                 safe_reply(update, "❌ This user is no longer available 😓.", parse_mode=None)
+                logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (requester unavailable)")
                 return ConversationHandler.END
             if requester_id in user_pairs:
                 safe_reply(update, "❌ This user is currently in another chat 💬.", parse_mode=None)
+                logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (requester in chat)")
                 return ConversationHandler.END
             user_pairs[user_id] = requester_id
             user_pairs[requester_id] = user_id
@@ -1651,6 +1722,7 @@ def button(update: Update, context: CallbackContext) -> int:
                 chat_histories[requester_id] = chat_histories.get(requester_id, [])
             context.bot_data.get("rematch_requests", {}).pop(user_id, None)
             logger.info(f"User {user_id} accepted rematch with {requester_id}")
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END")
             return ConversationHandler.END
         elif data == "rematch_decline":
             logger.info(f"Processing rematch_decline for user {user_id}")
@@ -1661,27 +1733,37 @@ def button(update: Update, context: CallbackContext) -> int:
                 safe_bot_send_message(context.bot, requester_id, "❌ Your rematch request was declined 😔.", parse_mode=None)
                 logger.info(f"User {user_id} declined rematch with {requester_id}")
             context.bot_data.get("rematch_requests", {}).pop(user_id, None)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END")
             return ConversationHandler.END
         elif data == "test_button":
             logger.info(f"Processing test_button for user {user_id}")
             safe_reply(update, "Test button clicked!", parse_mode=None)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END")
             return ConversationHandler.END
         elif data.startswith("emoji_"):
             logger.info(f"Processing emoji_ for user {user_id}")
-            return verify_emoji(update, context) or ConversationHandler.END
+            result = verify_emoji(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         elif data.startswith("consent_"):
             logger.info(f"Processing consent_ for user {user_id}")
-            return consent_handler(update, context) or ConversationHandler.END
+            result = consent_handler(update, context) or ConversationHandler.END
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         elif data.startswith("gender_"):
             logger.info(f"Processing gender_ for user {user_id}")
-            return set_gender(update, context)
+            result = set_gender(update, context)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result={result}")
+            return result
         else:
             logger.warning(f"Unhandled callback data for user {user_id}: {data}")
             safe_reply(update, "❌ This button is not recognized. Try another option or use /help.", parse_mode=None)
+            logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (unhandled)")
             return ConversationHandler.END
     except Exception as e:
-        logger.error(f"Error processing button callback for user {user_id}, data={data}: {e}")
+        logger.error(f"Error processing button callback for user {user_id}, data={data}: {e}", exc_info=True)
         safe_reply(update, "😔 An error occurred. Please try again.", parse_mode=None)
+        logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (error)")
         return ConversationHandler.END
         
 def settings(update: Update, context: CallbackContext) -> None:
@@ -2520,11 +2602,21 @@ def main() -> None:
         updater = Updater(token, use_context=True)
         dp = updater.dispatcher
 
+        # Global callback handler to log all callbacks
+        def log_callback(update: Update, context: CallbackContext) -> None:
+            query = update.callback_query
+            user_id = query.from_user.id if query and query.from_user else "unknown"
+            data = query.data if query else "None"
+            logger.info(f"GLOBAL callback received: user={user_id}, data={data}")
+        dp.add_handler(CallbackQueryHandler(log_callback), group=1)
+
         # Conversation handler
         conv_handler = ConversationHandler(
             entry_points=[
                 CommandHandler("start", start),
                 CommandHandler("settings", settings),
+                CommandHandler("help", help_command),
+                CommandHandler("premium", premium),
             ],
             states={
                 CONSENT: [CallbackQueryHandler(consent_handler)],
@@ -2538,15 +2630,20 @@ def main() -> None:
             fallbacks=[
                 CommandHandler("cancel", cancel),
                 CallbackQueryHandler(button),
-                MessageHandler(Filters.text & ~Filters.command, lambda u, c: logger.warning(f"Fallback handler triggered for user {u.effective_user.id} with input: {u.message.text}, state: {c.user_data.get('state')}") or safe_reply(u, "⚠️ Please provide the requested information or use /cancel to exit."))
+                MessageHandler(Filters.text & ~Filters.command, lambda u, c: (
+                    logger.warning(f"Fallback handler triggered for user {u.effective_user.id} with input: {u.message.text}, state: {c.user_data.get('state')}"),
+                    safe_reply(u, "⚠️ Please provide the requested information or use /cancel to exit.", parse_mode=None)
+                )[1])
             ],
         )
 
-        dp.add_handler(conv_handler)
+        logger.info("Registering ConversationHandler")
+        dp.add_handler(conv_handler, group=2)
+
+        # Command handlers
+        logger.info("Registering command handlers")
         dp.add_handler(CommandHandler("stop", stop))
         dp.add_handler(CommandHandler("next", next_chat))
-        dp.add_handler(CommandHandler("help", help_command))
-        dp.add_handler(CommandHandler("premium", premium))
         dp.add_handler(CommandHandler("shine", shine))
         dp.add_handler(CommandHandler("instant", instant))
         dp.add_handler(CommandHandler("flare", flare))
@@ -2578,7 +2675,7 @@ def main() -> None:
         def test_command(update: Update, context: CallbackContext) -> None:
             keyboard = [[InlineKeyboardButton("Test", callback_data="test_button")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            update.message.reply_text("Click:", reply_markup=reply_markup)
+            update.message.reply_text("Click:", reply_markup=reply_markup, parse_mode=None)
         dp.add_handler(CommandHandler("test", test_command))
 
         def test_reply(update: Update, context: CallbackContext) -> None:
@@ -2592,6 +2689,7 @@ def main() -> None:
         dp.add_handler(CommandHandler("testdb", test_db))
 
         # Admin commands
+        logger.info("Registering admin command handlers")
         dp.add_handler(CommandHandler("admin", admin_access))
         dp.add_handler(CommandHandler("admin_delete", admin_delete))
         dp.add_handler(CommandHandler("admindelete", admin_delete))
@@ -2620,6 +2718,8 @@ def main() -> None:
         dp.add_handler(CommandHandler("admin_stats", admin_stats))
         dp.add_handler(CommandHandler("adminstats", admin_stats))
 
+        # Error handler
+        logger.info("Registering error handler")
         dp.add_error_handler(error_handler)
 
         # Periodic cleanup
