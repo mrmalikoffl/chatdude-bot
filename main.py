@@ -1462,16 +1462,17 @@ def button(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     user_id = query.from_user.id
     data = query.data
-    logger.info(f"Button callback for user {user_id} with data: {data}")
+    logger.info(f"Button callback for user {user_id} with data: {data}, state: {context.user_data.get('state')}")
 
     if query.message.chat_id < 0:
         query.answer("This button isn't for group chats.")
         return ConversationHandler.END
 
-    if data == "start_chat":
-        return start(update, context) or ConversationHandler.END
-    elif data == "next_chat":
-        return next_chat(update, context) or ConversationHandler.END
+    try:
+        if data == "start_chat":
+            return start(update, context) or ConversationHandler.END
+        elif data == "next_chat":
+            return next_chat(update, context) or ConversationHandler.END
     elif data == "stop_chat":
         return stop(update, context) or ConversationHandler.END
     elif data == "settings_menu":
@@ -1577,8 +1578,15 @@ def button(update: Update, context: CallbackContext) -> int:
     elif data.startswith("consent_"):
         return consent_handler(update, context) or ConversationHandler.END
     elif data.startswith("gender_"):
-        return set_gender(update, context)  # Ensure set_gender returns a state
-    return ConversationHandler.END
+            return set_gender(update, context)
+        else:
+            logger.warning(f"Unhandled callback data for user {user_id}: {data}")
+            safe_reply(update, "❌ This button is not recognized. Try another option or use /help.")
+            return ConversationHandler.END
+    except Exception as e:
+        logger.error(f"Error processing button callback for user {user_id}, data={data}: {e}")
+        safe_reply(update, "😔 An error occurred. Please try again.")
+        return ConversationHandler.END
 
 def settings(update: Update, context: CallbackContext) -> None:
     """Display settings menu for profile customization"""
