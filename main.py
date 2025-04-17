@@ -2339,6 +2339,15 @@ def error_handler(update: Update, context: CallbackContext) -> None:
     except Exception as e:
         logger.error(f"Failed to send error message: {e}")
 
+def test_button(update: Update, context: CallbackContext) -> None:
+    """Display a test inline button"""
+    user_id = update.effective_user.id
+    logger.info(f"Test button command called for user {user_id}")
+    keyboard = [[InlineKeyboardButton("Test Button", callback_data="test_new_button")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    safe_reply(update, "Click the test button below:", reply_markup=reply_markup, parse_mode=None)
+    logger.info(f"Sent test button menu for user {user_id}")
+
 def main() -> None:
     """Initialize and start the Telegram bot"""
     token = os.getenv("TOKEN")
@@ -2390,6 +2399,11 @@ def main() -> None:
                     logger.info(f"User {user_id} is in a chat, cannot process button: {data}")
                     safe_reply(update, "❓ You're in a chat. Use /stop first.", parse_mode=None)
                     logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (in chat)")
+                    return ConversationHandler.END
+                if data == "test_new_button":
+                    logger.info(f"Processing test_new_button for user {user_id}")
+                    safe_reply(update, "New test button clicked!", parse_mode=None)
+                    logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END")
                     return ConversationHandler.END
                 if data == "start_chat":
                     logger.info(f"Processing start_chat for user {user_id}")
@@ -2685,6 +2699,7 @@ def main() -> None:
         dp.add_handler(CommandHandler("history", history))
         dp.add_handler(CommandHandler("report", report))
         dp.add_handler(CommandHandler("deleteprofile", delete_profile))
+        dp.add_handler(CommandHandler("testbutton", test_button))  # New test button command
         dp.add_handler(PreCheckoutQueryHandler(pre_checkout))
         dp.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
         dp.add_handler(MessageHandler(Filters.text & ~Filters.command, message_handler))
