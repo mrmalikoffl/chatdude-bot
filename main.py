@@ -1392,17 +1392,22 @@ def admin_ban(update: Update, context: CallbackContext) -> None:
         with waiting_users_lock:
             if target_id in waiting_users:
                 waiting_users.remove(target_id)
-        ban_message = (
-            f"🚫 You have been {escape_markdown_v2(ban_type)} banned from Talk2Anyone\\."
-            f"{'' if ban_type == 'permanent' else f' Until {escape_markdown_v2(datetime.fromtimestamp(ban_expiry).strftime("%Y-%m-%d %H:%M"))}.'}"
-            f"{' Contact support to appeal.' if ban_type == 'permanent' else ''}"
-        )
+        if ban_type == "permanent":
+            ban_message = (
+                f"🚫 You have been {escape_markdown_v2(ban_type)} banned from Talk2Anyone\\."
+                f" Contact support to appeal\\."
+            )
+        else:
+            ban_message = (
+                f"🚫 You have been {escape_markdown_v2(ban_type)} banned from Talk2Anyone\\."
+                f" Until {escape_markdown_v2(datetime.fromtimestamp(ban_expiry).strftime('%Y-%m-%d %H:%M'))}\\."
+            )
         safe_bot_send_message(context.bot, target_id, ban_message, parse_mode="MarkdownV2")
         safe_reply(update, f"🚫 User *{escape_markdown_v2(str(target_id))}* has been {escape_markdown_v2(ban_type)} banned\\.", parse_mode="MarkdownV2")
         logger.info(f"Admin {user_id} banned user {target_id} ({ban_type})")
     except (IndexError, ValueError):
         safe_reply(update, "⚠️ Usage: /admin_ban <user_id> <days/permanent> 📋\\.", parse_mode="MarkdownV2")
-
+        
 def admin_unban(update: Update, context: CallbackContext) -> None:
     """Unban a user"""
     user_id = update.effective_user.id
