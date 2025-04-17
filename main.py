@@ -107,7 +107,8 @@ def init_mongodb():
 def get_db_collection(collection_name):
     return db[collection_name]
 
-def process_queued_operations(context: ContextTypes.DEFAULT_TYPE):
+async def process_queued_operations(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Process queued database or notification operations."""
     while not operation_queue.empty():
         op_type, args = operation_queue.get()
         try:
@@ -121,12 +122,6 @@ def process_queued_operations(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Failed to process queued operation {op_type}: {e}")
             operation_queue.put((op_type, args))
-
-try:
-    db = init_mongodb()
-except Exception as e:
-    logger.error(f"Failed to set up MongoDB: {e}")
-    exit(1)
 
 async def cleanup_in_memory(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clean up in-memory data like inactive user pairs."""
@@ -560,6 +555,7 @@ async def set_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return ConversationHandler.END
 
 async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Match waiting users for chats."""
     with waiting_users_lock:
         if len(waiting_users) < 2:
             return
@@ -639,6 +635,13 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
                     if has_premium_feature(user2, "vaulted_chats"):
                         chat_histories[user2] = []
                     return
+
+# Initialize MongoDB
+try:
+    db = init_mongodb()
+except Exception as e:
+    logger.error(f"Failed to set up MongoDB: {e}")
+    exit(1)
 
 def can_match(user1: int, user2: int) -> bool:
     profile1 = get_user(user1).get("profile", {})
@@ -2220,9 +2223,13 @@ def main() -> None:
     if not token:
         logger.error("TOKEN not set")
         raise EnvironmentError("TOKEN not set")
-    
-    # Build Application without job_queue parameter
+    # Build Application
     application = Application.builder().token(token).build()
+    
+    # Explicitly create job queue
+    if application.job_queue is None:
+        application.job_queue = application.create_job_queue()
+        logger.info("Job queue explicitly created")
     
     # Define ConversationHandler for user setup
     conv_handler = ConversationHandler(
@@ -2286,18 +2293,19 @@ def main() -> None:
     # Add error handler
     application.add_error_handler(error_handler)
     
-    # Schedule recurring jobs
+     # Schedule recurring jobs
     if application.job_queue:
         try:
             application.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
             application.job_queue.run_repeating(process_queued_operations, interval=60, first=10)
             application.job_queue.run_repeating(match_users, interval=10, first=5)
+            logger.info("Scheduled job queue tasks")
         except NameError as e:
             logger.error(f"Job queue function not defined: {e}")
             raise
     else:
-        logger.error("Job queue not initialized")
-        raise RuntimeError("Job queue not initialized")
+        logger.error("Failed to initialize job queue")
+        raise RuntimeError("Failed to initialize job queue")
     
     logger.info("Starting bot...")
     try:
