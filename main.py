@@ -140,9 +140,10 @@ async def process_queued_operations(context: ContextTypes.DEFAULT_TYPE) -> None:
             else:
                 logger.error(f"Operation {op_type} discarded after {max_retries} attempts.")
 
-async def restrict_access(handler):
+def restrict_access(handler):
     """Decorator to restrict access to users with complete profiles and no bans."""
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+    @wraps(handler)
+    async def wrapper(update: Update, context: ContextTypes, *args, **kwargs):
         user_id = update.effective_user.id
         
         # Check ban status
@@ -153,7 +154,7 @@ async def restrict_access(handler):
                 if user["ban_type"] == "permanent"
                 else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
             )
-            await safe_reply(update, ban_msg, context)
+            await update.message.reply_text(ban_msg)
             return
         
         # Allow /start and /deleteprofile even with incomplete profile
@@ -161,13 +162,14 @@ async def restrict_access(handler):
             return await handler(update, context, *args, **kwargs)
         
         # Allow admin commands for admins
+        ADMIN_IDS = [int(admin_id) for admin_id in os.getenv("ADMIN_IDS", "").split(",") if admin_id]
         if user_id in ADMIN_IDS and handler.__name__.startswith("admin_"):
             return await handler(update, context, *args, **kwargs)
         
         # Check profile completeness
         user = get_user(user_id)
         if not is_profile_complete(user):
-            await safe_reply(update, "⚠️ Please complete your profile setup with /start before using this feature.", context)
+            await update.message.reply_text("⚠️ Please complete your profile setup with /start before using this feature.")
             return
         
         return await handler(update, context, *args, **kwargs)
