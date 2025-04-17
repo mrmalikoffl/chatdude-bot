@@ -505,7 +505,6 @@ def start(update: Update, context: CallbackContext) -> int:
             safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again ⏰.")
             return ConversationHandler.END
         
-        # Check if user is already in a chat or waiting
         if user_id in user_pairs:
             logger.info(f"User {user_id} already in a chat")
             safe_reply(update, "💬 You're already in a chat 😔. Use /next to switch or /stop to end.")
@@ -517,6 +516,13 @@ def start(update: Update, context: CallbackContext) -> int:
             return ConversationHandler.END
         
         user = get_user(user_id)
+        current_state = user.get("setup_state")
+        if current_state is not None:
+            context.user_data["state"] = current_state
+            safe_reply(update, f"Continuing setup. Please provide the requested information for {current_state}.")
+            logger.info(f"User {user_id} resuming setup at state {current_state}")
+            return current_state
+        
         if not user.get("consent"):
             logger.info(f"User {user_id} needs to consent")
             keyboard = [
@@ -542,6 +548,8 @@ def start(update: Update, context: CallbackContext) -> int:
                 f"📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
                 "ℹ️ Awaiting consent"
             ))
+            update_user(user_id, {"setup_state": CONSENT})
+            context.user_data["state"] = CONSENT
             return CONSENT
         
         if not user.get("verified"):
@@ -554,6 +562,8 @@ def start(update: Update, context: CallbackContext) -> int:
             keyboard = [[InlineKeyboardButton(emoji, callback_data=f"emoji_{emoji}") for emoji in all_emojis]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             safe_reply(update, f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{correct_emoji}*", reply_markup=reply_markup)
+            update_user(user_id, {"setup_state": VERIFICATION})
+            context.user_data["state"] = VERIFICATION
             return VERIFICATION
         
         profile = user.get("profile", {})
@@ -562,11 +572,13 @@ def start(update: Update, context: CallbackContext) -> int:
         if missing_fields:
             logger.info(f"User {user_id} missing profile fields: {missing_fields}")
             safe_reply(update, "✨ Let’s set up your profile\\! Please enter your name:")
+            update_user(user_id, {"setup_state": NAME})
+            context.user_data["state"] = NAME
             return NAME
         
-        # Check if profile was just set up (e.g., from conversation flow)
-        # For simplicity, assume if all fields are present and user just started, prompt for /next
         safe_reply(update, "🎉 Your profile is ready! Use `/next` to find a chat partner and start connecting! 🚀")
+        update_user(user_id, {"setup_state": None})
+        context.user_data["state"] = None
         return ConversationHandler.END
     
     except Exception as e:
@@ -639,13 +651,18 @@ def set_name(update: Update, context: CallbackContext) -> int:
     user = get_user(user_id)
     profile = user.get("profile", {})
     name = update.message.text.strip()
+    logger.info(f"set_name called for user {user_id} with input: {name}")
+
     if not 1 <= len(name) <= 50:
         safe_reply(update, "⚠️ Name must be 1-50 characters.")
+        logger.warning(f"User {user_id} provided invalid name: {name}")
         return NAME
-    is_safe, _ = is_safe_message(name)
+    is_safe, reason = is_safe_message(name)
     if not is_safe:
-        safe_reply(update, "⚠️ Name contains inappropriate content.")
+        safe_reply(update, f"⚠️ Name contains inappropriate content: {reason}")
+        logger.warning(f"User {user_id} provided unsafe name: {name}")
         return NAME
+
     profile["name"] = name
     update_user(user_id, {
         "profile": profile,
@@ -653,10 +670,13 @@ def set_name(update: Update, context: CallbackContext) -> int:
         "verified": user.get("verified", False),
         "premium_expiry": user.get("premium_expiry"),
         "premium_features": user.get("premium_features", {}),
-        "created_at": user.get("created_at", int(time.time()))
+        "created_at": user.get("created_at", int(time.time())),
+        "setup_state": AGE
     })
+    context.user_data["state"] = AGE
     safe_reply(update, f"🧑 Name set to: *{name}*!")
     safe_reply(update, "🎂 Please enter your age (e.g., 25):")
+    logger.info(f"User {user_id} set name to {name}. Transitioning to AGE.")
     return AGE
 
 def set_age(update: Update, context: CallbackContext) -> int:
@@ -664,10 +684,13 @@ def set_age(update: Update, context: CallbackContext) -> int:
     user = get_user(user_id)
     profile = user.get("profile", {})
     age_text = update.message.text.strip()
+    logger.info(f"set_age called for user {user_id} with input: {age_text}")
+
     try:
         age = int(age_text)
         if not 13 <= age <= 120:
             safe_reply(update, "⚠️ Age must be between 13 and 120.")
+            logger.warning(f"User {user_id} provided invalid age: {age_text}")
             return AGE
         profile["age"] = age
         update_user(user_id, {
@@ -676,8 +699,10 @@ def set_age(update: Update, context: CallbackContext) -> int:
             "verified": user.get("verified", False),
             "premium_expiry": user.get("premium_expiry"),
             "premium_features": user.get("premium_features", {}),
-            "created_at": user.get("created_at", int(time.time()))
+            "created_at": user.get("created_at", int(time.time())),
+            "setup_state": GENDER
         })
+        context.user_data["state"] = GENDER
         safe_reply(update, f"🎂 Age set to: *{age}*!")
         keyboard = [
             [
@@ -688,9 +713,11 @@ def set_age(update: Update, context: CallbackContext) -> int:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         safe_reply(update, "👤 *Set Your Gender* 👤\n\nChoose your gender below:", reply_markup=reply_markup)
+        logger.info(f"User {user_id} set age to {age}. Transitioning to GENDER.")
         return GENDER
     except ValueError:
         safe_reply(update, "⚠️ Please enter a valid number for your age.")
+        logger.warning(f"User {user_id} provided non-numeric age: {age_text}")
         return AGE
 
 def set_gender(update: Update, context: CallbackContext) -> int:
@@ -698,10 +725,16 @@ def set_gender(update: Update, context: CallbackContext) -> int:
     query.answer()
     user_id = query.from_user.id
     data = query.data
+    logger.info(f"set_gender called for user {user_id} with data: {data}")
     user = get_user(user_id)
     profile = user.get("profile", {})
+
     if data.startswith("gender_"):
         gender = data.split("_")[1].capitalize()
+        if gender not in ["Male", "Female", "Other"]:
+            safe_reply(update, "⚠️ Invalid gender selection.")
+            logger.warning(f"Invalid gender value for user {user_id}: {gender}")
+            return GENDER
         profile["gender"] = gender
         update_user(user_id, {
             "profile": profile,
@@ -709,30 +742,43 @@ def set_gender(update: Update, context: CallbackContext) -> int:
             "verified": user.get("verified", False),
             "premium_expiry": user.get("premium_expiry"),
             "premium_features": user.get("premium_features", {}),
-            "created_at": user.get("created_at", int(time.time()))
+            "created_at": user.get("created_at", int(time.time())),
+            "setup_state": LOCATION
         })
+        context.user_data["state"] = LOCATION
         safe_reply(update, f"👤 Gender set to: *{gender}*!")
         safe_reply(update, "📍 Please enter your location (e.g., New York):")
+        logger.info(f"User {user_id} set gender to {gender}. Transitioning to LOCATION.")
         return LOCATION
     safe_reply(update, "⚠️ Invalid selection. Please choose a gender.")
+    logger.warning(f"Invalid gender data for user {user_id}: {data}")
     return GENDER
 
 def set_location(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
+    logger.info(f"set_location called for user {user_id} with input: {update.message.text}")
     user = get_user(user_id)
+    current_state = context.user_data.get("state", user.get("setup_state"))
+    if current_state != LOCATION:
+        safe_reply(update, "⚠️ Please complete the previous steps. Use /start to begin.")
+        logger.warning(f"User {user_id} in wrong state: {current_state}")
+        return ConversationHandler.END
+    
     profile = user.get("profile", {})
     location = update.message.text.strip()
+    logger.debug(f"Validating location: {location}")
 
-    # Validate location
     if not 1 <= len(location) <= 100:
         safe_reply(update, "⚠️ Location must be 1-100 characters.")
+        logger.warning(f"User {user_id} provided invalid location: {location}")
         return LOCATION
-    is_safe, _ = is_safe_message(location)
+    is_safe, reason = is_safe_message(location)
+    logger.debug(f"is_safe_message result: is_safe={is_safe}, reason={reason}")
     if not is_safe:
-        safe_reply(update, "⚠️ Location contains inappropriate content.")
+        safe_reply(update, f"⚠️ Location contains inappropriate content: {reason}")
+        logger.warning(f"User {user_id} provided unsafe location: {location}")
         return LOCATION
 
-    # Update user's profile with location
     profile["location"] = location
     update_user(user_id, {
         "profile": profile,
@@ -740,17 +786,20 @@ def set_location(update: Update, context: CallbackContext) -> int:
         "verified": user.get("verified", False),
         "premium_expiry": user.get("premium_expiry"),
         "premium_features": user.get("premium_features", {}),
-        "created_at": user.get("created_at", int(time.time()))
+        "created_at": user.get("created_at", int(time.time())),
+        "setup_state": None
     })
-    logger.info(f"User {user_id} set location to: {location}")
+    context.user_data["state"] = None
+    logger.info(f"User {user_id} set location to: {location}. Full profile: {profile}")
 
-    # Send congratulatory message
-    safe_reply(update, "🎉 Congratulations! Profile setup complete!")
+    safe_reply(update, "🎉 Congratulations! Profile setup complete! 🎉")
+    safe_reply(update, (
+        "🔍 Your profile is ready! 🎉\n\n"
+        "🚀 Use `/next` to find a chat partner and start connecting!\n"
+        "ℹ️ Sending text messages now won’t start a chat. Use /help for more options."
+    ))
+    logger.info(f"User {user_id} completed profile setup. Prompted /next.")
 
-    # Prompt user to use /next to connect
-    safe_reply(update, "🔍 Your profile is ready! Use `/next` to find a chat partner and start connecting! 🚀")
-
-    # Send notification to channel
     notification_message = (
         "🆕 *New User Registered* 🆕\n\n"
         f"👤 *User ID*: {user_id}\n"
@@ -2232,6 +2281,7 @@ def cancel(update: Update, context: CallbackContext) -> int:
 def message_handler(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     message_text = update.message.text.strip()
+    logger.info(f"Processing message from user {user_id}: '{message_text}'")
 
     # Update last activity
     user_activities[user_id] = {"last_activity": time.time()}
@@ -2244,56 +2294,62 @@ def message_handler(update: Update, context: CallbackContext) -> None:
             else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
         )
         safe_reply(update, ban_msg)
+        logger.info(f"User {user_id} is banned. Response: {ban_msg}")
         return
 
-    # Check if user is waiting for a match or already in a chat
+    # Check if user is in setup
+    user = get_user(user_id)
+    if user.get("setup_state") is not None:
+        safe_reply(update, "⚠️ Please complete your profile setup. Use /start to continue.")
+        logger.info(f"User {user_id} in setup state: {user.get('setup_state')}. Prompted /start.")
+        return
+
+    # Check if user is waiting or in a chat
     if user_id in user_pairs:
-        # User is in a chat, proceed with message relay
         partner_id = user_pairs[user_id]
         if not partner_id or partner_id not in user_pairs:
             safe_reply(update, "❌ Your partner is no longer available 😔. Use /next to find a new one.")
+            logger.info(f"User {user_id} has no valid partner. Prompted /next.")
             del user_pairs[user_id]
             return
+        is_safe, reason = is_safe_message(message_text)
+        if not is_safe:
+            violation_result = issue_keyword_violation(user_id, reason, update, context)
+            logger.warning(f"User {user_id} sent unsafe message: '{message_text}' (reason: {reason})")
+            return
+        display_text = message_text
+        if has_premium_feature(user_id, "flare_messages"):
+            display_text = f"✨ {message_text} ✨"
+        try:
+            safe_bot_send_message(context.bot, partner_id, display_text)
+            logger.debug(f"Message relayed from {user_id} to {partner_id}: '{message_text}'")
+        except telegram.error.TelegramError as e:
+            safe_reply(update, "❌ Failed to send message 😔. Your partner may be offline.")
+            logger.error(f"Failed to send message from {user_id} to {partner_id}: {e}")
+            return
+        if has_premium_feature(user_id, "vaulted_chats"):
+            chat_histories[user_id] = chat_histories.get(user_id, []) + [f"You: {message_text}"]
+        if has_premium_feature(partner_id, "vaulted_chats"):
+            partner_name = get_user(user_id).get("profile", {}).get("name", "Anonymous")
+            chat_histories[partner_id] = chat_histories.get(partner_id, []) + [f"{partner_name}: {message_text}"]
     elif user_id in waiting_users:
         safe_reply(update, "🔍 You're currently waiting for a chat partner... Please wait! Use /next to refresh or /stop to cancel.")
+        logger.info(f"User {user_id} is waiting. Prompted to wait or use /next.")
         return
     else:
-        # User is neither waiting nor in a chat, prompt to start
-        safe_reply(update, "❓ You're not in a chat or waiting 😔. Use /start to begin.")
+        profile = user.get("profile", {})
+        required_fields = ["name", "age", "gender", "location"]
+        if all(field in profile for field in required_fields):
+            safe_reply(update, (
+                "🎉 Your profile is ready! 🎉\n\n"
+                "🔍 Use `/next` to find a chat partner and start connecting! 🚀\n"
+                "ℹ️ Sending text messages now won’t start a chat. Use /help for more options."
+            ))
+            logger.info(f"User {user_id} has complete profile: {profile}. Prompted /next.")
+        else:
+            safe_reply(update, "❓ You're not in a chat or waiting 😔. Use /start to begin.")
+            logger.info(f"User {user_id} has incomplete profile: {profile}. Prompted /start.")
         return
-
-    # Check message rate limit
-    if not check_message_rate_limit(user_id):
-        safe_reply(update, "⏳ You're sending messages too fast! Please slow down ⏰.")
-        return
-
-    # Check if message is safe
-    is_safe, reason = is_safe_message(message_text)
-    if not is_safe:
-        violation_result = issue_keyword_violation(user_id, reason, update, context)
-        logger.warning(f"User {user_id} sent unsafe message: {message_text} (reason: {reason})")
-        return
-
-    # Get partner and relay message
-    partner_id = user_pairs[user_id]
-    display_text = message_text
-    if has_premium_feature(user_id, "flare_messages"):
-        display_text = f"✨ {message_text} ✨"
-
-    try:
-        safe_bot_send_message(context.bot, partner_id, display_text)
-        logger.debug(f"Message relayed from {user_id} to {partner_id}: {message_text}")
-    except telegram.error.TelegramError as e:
-        safe_reply(update, "❌ Failed to send message 😔. Your partner may be offline.")
-        logger.error(f"Failed to send message from {user_id} to {partner_id}: {e}")
-        return
-
-    # Save to chat history if vaulted
-    if has_premium_feature(user_id, "vaulted_chats"):
-        chat_histories[user_id] = chat_histories.get(user_id, []) + [f"You: {message_text}"]
-    if has_premium_feature(partner_id, "vaulted_chats"):
-        partner_name = get_user(user_id).get("profile", {}).get("name", "Anonymous")
-        chat_histories[partner_id] = chat_histories.get(partner_id, []) + [f"{partner_name}: {message_text}"]
 
 def cleanup_rematch_requests(context: CallbackContext) -> None:
     """Clean up expired rematch requests"""
