@@ -1394,7 +1394,8 @@ def admin_ban(update: Update, context: CallbackContext) -> None:
                 waiting_users.remove(target_id)
         ban_message = (
             f"🚫 You have been {escape_markdown_v2(ban_type)} banned from Talk2Anyone\\."
-            f"{'' if ban_type == 'permanent' else f" Until {escape_markdown_v2(...)}\\.")}"
+            f"{'' if ban_type == 'permanent' else f' Until {escape_markdown_v2(datetime.fromtimestamp(ban_expiry).strftime("%Y-%m-%d %H:%M"))}.'}"
+            f"{' Contact support to appeal.' if ban_type == 'permanent' else ''}"
         )
         safe_bot_send_message(context.bot, target_id, ban_message, parse_mode="MarkdownV2")
         safe_reply(update, f"🚫 User *{escape_markdown_v2(str(target_id))}* has been {escape_markdown_v2(ban_type)} banned\\.", parse_mode="MarkdownV2")
