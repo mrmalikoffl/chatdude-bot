@@ -174,6 +174,15 @@ async def restrict_access(handler):
     
     return wrapper
 
+def is_profile_complete(user: dict) -> bool:
+    """Check if the user's profile is complete."""
+    if not user.get("consent", False):
+        return False
+    if not user.get("verified", False):
+        return False
+    profile = user.get("profile", {})
+    required_fields = ["name", "age", "gender", "location"]  # Add "tags" if mandatory
+    return all(profile.get(field) for field in required_fields)
 async def cleanup_in_memory(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clean up in-memory data like inactive user pairs."""
     logger.info(f"Cleaning up in-memory data. user_pairs: {len(user_pairs)}, waiting_users: {len(waiting_users)}")
@@ -287,16 +296,6 @@ def delete_user(user_id: int):
     except Exception as e:
         logger.error(f"Unexpected error deleting user {user_id}: {e}")
         raise
-
-def is_profile_complete(user: dict) -> bool:
-    """Check if the user's profile is complete."""
-    if not user.get("consent", False):
-        return False
-    if not user.get("verified", False):
-        return False
-    profile = user.get("profile", {})
-    required_fields = ["name", "age", "gender", "location"]  # Add "tags" if mandatory
-    return all(profile.get(field) for field in required_fields)
 
 def escape_markdown_v2(text: str) -> str:
     if not isinstance(text, str):
