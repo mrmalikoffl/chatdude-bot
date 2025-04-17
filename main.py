@@ -2226,10 +2226,6 @@ def main() -> None:
     # Build Application
     application = Application.builder().token(token).build()
     
-    # Explicitly create job queue
-    if application.job_queue is None:
-        application.job_queue = application.create_job_queue()
-        logger.info("Job queue explicitly created")
     
     # Define ConversationHandler for user setup
     conv_handler = ConversationHandler(
