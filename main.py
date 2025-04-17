@@ -2419,26 +2419,36 @@ def main() -> None:
         updater = Updater(token, use_context=True)
         dp = updater.dispatcher
 
+        # Debug callback handler
+        def debug_button(update: Update, context: CallbackContext) -> None:
+            query = update.callback_query
+            user_id = query.from_user.id
+            data = query.data
+            logger.info(f"Debug callback: user={user_id}, data={data}")
+            query.answer("Button received!")
+            safe_reply(update, f"Button clicked: {data}")
+        dp.add_handler(CallbackQueryHandler(debug_button), group=0)
+
         # Conversation handler
         conv_handler = ConversationHandler(
-        entry_points=[
-        CommandHandler("start", start),
-        CommandHandler("settings", settings),
-        ],
-        states={
-        CONSENT: [CallbackQueryHandler(consent_handler)],
-        NAME: [MessageHandler(Filters.text & ~Filters.command, set_name), CallbackQueryHandler(button)],
-        AGE: [MessageHandler(Filters.text & ~Filters.command, set_age), CallbackQueryHandler(button)],
-        GENDER: [CallbackQueryHandler(button)],
-        LOCATION: [MessageHandler(Filters.text & ~Filters.command, set_location)],
-        VERIFICATION: [CallbackQueryHandler(verify_emoji)],
-        TAGS: [MessageHandler(Filters.text & ~Filters.command, set_tags), CallbackQueryHandler(button)],
-        },
-        fallbacks=[
-        CommandHandler("cancel", cancel),
-        CallbackQueryHandler(button),
-        MessageHandler(Filters.text & ~Filters.command, lambda u, c: logger.warning(f"Fallback handler triggered for user {u.effective_user.id} with input: {u.message.text}, state: {c.user_data.get('state')}") or safe_reply(u, "⚠️ Please provide the requested information or use /cancel to exit."))
-        ],
+            entry_points=[
+                CommandHandler("start", start),
+                CommandHandler("settings", settings),
+            ],
+            states={
+                CONSENT: [CallbackQueryHandler(consent_handler)],
+                NAME: [MessageHandler(Filters.text & ~Filters.command, set_name), CallbackQueryHandler(button)],
+                AGE: [MessageHandler(Filters.text & ~Filters.command, set_age), CallbackQueryHandler(button)],
+                GENDER: [CallbackQueryHandler(button)],
+                LOCATION: [MessageHandler(Filters.text & ~Filters.command, set_location)],
+                VERIFICATION: [CallbackQueryHandler(verify_emoji)],
+                TAGS: [MessageHandler(Filters.text & ~Filters.command, set_tags), CallbackQueryHandler(button)],
+            },
+            fallbacks=[
+                CommandHandler("cancel", cancel),
+                CallbackQueryHandler(button),
+                MessageHandler(Filters.text & ~Filters.command, lambda u, c: logger.warning(f"Fallback handler triggered for user {u.effective_user.id} with input: {u.message.text}, state: {c.user_data.get('state')}") or safe_reply(u, "⚠️ Please provide the requested information or use /cancel to exit."))
+            ],
         )
 
         dp.add_handler(conv_handler)
@@ -2457,6 +2467,28 @@ def main() -> None:
         dp.add_handler(PreCheckoutQueryHandler(pre_checkout))
         dp.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
         dp.add_handler(MessageHandler(Filters.text & ~Filters.command, message_handler))
+
+        # Debug commands
+        def check_state(update: Update, context: CallbackContext) -> None:
+            user_id = update.effective_user.id
+            user = get_user(user_id)
+            setup_state = user.get('setup_state') if user else None
+            bot_state = context.user_data.get('state')
+            safe_reply(update, f"Setup state: {setup_state}\nBot state: {bot_state}")
+        dp.add_handler(CommandHandler("checkstate", check_state))
+
+        def reset_state(update: Update, context: CallbackContext) -> None:
+            user_id = update.effective_user.id
+            update_user(user_id, {"setup_state": None})
+            context.user_data["state"] = None
+            safe_reply(update, "🔄 State reset. Use /start or /help.")
+        dp.add_handler(CommandHandler("resetstate", reset_state))
+
+        def test_command(update: Update, context: CallbackContext) -> None:
+            keyboard = [[InlineKeyboardButton("Test", callback_data="test_button")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            update.message.reply_text("Click:", reply_markup=reply_markup)
+        dp.add_handler(CommandHandler("test", test_command))
 
         # Admin commands
         dp.add_handler(CommandHandler("admin", admin_access))
