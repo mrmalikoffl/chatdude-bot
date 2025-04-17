@@ -2362,42 +2362,25 @@ def main() -> None:
         updater = Updater(token, use_context=True)
         dp = updater.dispatcher
 
-        # Conversation handler and other handlers (unchanged)
+        # Conversation handler
         conv_handler = ConversationHandler(
             entry_points=[
                 CommandHandler("start", start),
                 CommandHandler("settings", settings),
             ],
             states={
-                NAME: [
-                    MessageHandler(Filters.text & ~Filters.command, set_name),
-                    CallbackQueryHandler(button),
-                ],
-                AGE: [
-                    MessageHandler(Filters.text & ~Filters.command, set_age),
-                    CallbackQueryHandler(button),
-                ],
-                GENDER: [
-                    CallbackQueryHandler(button),
-                ],
-                LOCATION: [
-                    MessageHandler(Filters.text & ~Filters.command, set_location),
-                    CallbackQueryHandler(button),
-                ],
-                CONSENT: [
-                    CallbackQueryHandler(consent_handler),
-                ],
-                VERIFICATION: [
-                    CallbackQueryHandler(verify_emoji),
-                ],
-                TAGS: [
-                    MessageHandler(Filters.text & ~Filters.command, set_tags),
-                    CallbackQueryHandler(button),
-                ],
+                NAME: [MessageHandler(Filters.text & ~Filters.command, set_name), CallbackQueryHandler(button)],
+                AGE: [MessageHandler(Filters.text & ~Filters.command, set_age), CallbackQueryHandler(button)],
+                GENDER: [CallbackQueryHandler(button)],
+                LOCATION: [MessageHandler(Filters.text & ~Filters.command, set_location), CallbackQueryHandler(button)],
+                CONSENT: [CallbackQueryHandler(consent_handler)],
+                VERIFICATION: [CallbackQueryHandler(verify_emoji)],
+                TAGS: [MessageHandler(Filters.text & ~Filters.command, set_tags), CallbackQueryHandler(button)],
             },
             fallbacks=[
                 CommandHandler("cancel", cancel),
                 CallbackQueryHandler(button),
+                MessageHandler(Filters.text & ~Filters.command, lambda u, c: safe_reply(u, "⚠️ Please provide the requested information or use /cancel to exit."))
             ],
         )
 
@@ -2414,12 +2397,11 @@ def main() -> None:
         dp.add_handler(CommandHandler("history", history))
         dp.add_handler(CommandHandler("report", report))
         dp.add_handler(CommandHandler("deleteprofile", delete_profile))
-        dp.add_handler(CallbackQueryHandler(button))
         dp.add_handler(PreCheckoutQueryHandler(pre_checkout))
         dp.add_handler(MessageHandler(Filters.successful_payment, successful_payment))
         dp.add_handler(MessageHandler(Filters.text & ~Filters.command, message_handler))
 
-        # Admin commands (unchanged)
+        # Admin commands
         dp.add_handler(CommandHandler("admin", admin_access))
         dp.add_handler(CommandHandler("admin_delete", admin_delete))
         dp.add_handler(CommandHandler("admindelete", admin_delete))
@@ -2465,5 +2447,6 @@ def main() -> None:
     except Exception as e:
         logger.error(f"Failed to start bot: {str(e)}", exc_info=True)
         raise
+
 if __name__ == "__main__":
     main()
