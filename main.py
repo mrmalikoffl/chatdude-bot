@@ -128,7 +128,8 @@ except Exception as e:
     logger.error(f"Failed to set up MongoDB: {e}")
     exit(1)
 
-def cleanup_in_memory(context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cleanup_in_memory(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clean up in-memory data like inactive user pairs."""
     logger.info(f"Cleaning up in-memory data. user_pairs: {len(user_pairs)}, waiting_users: {len(waiting_users)}")
     current_time = time.time()
     for user_id in list(user_pairs.keys()):
@@ -136,8 +137,8 @@ def cleanup_in_memory(context: ContextTypes.DEFAULT_TYPE) -> None:
         if current_time - last_activity > INACTIVITY_TIMEOUT:
             partner_id = user_pairs.get(user_id)
             if partner_id:
-                safe_send_message(user_id, "🛑 Chat ended due to inactivity.", context)
-                safe_send_message(partner_id, "🛑 Chat ended due to inactivity.", context)
+                await safe_send_message(user_id, "🛑 Chat ended due to inactivity.", context, parse_mode=ParseMode.MARKDOWN_V2)
+                await safe_send_message(partner_id, "🛑 Chat ended due to inactivity.", context, parse_mode=ParseMode.MARKDOWN_V2)
                 remove_pair(user_id, partner_id)
     logger.info(f"Cleanup complete. user_pairs: {len(user_pairs)}, waiting_users: {len(waiting_users)}")
 
@@ -2220,8 +2221,8 @@ def main() -> None:
         logger.error("TOKEN not set")
         raise EnvironmentError("TOKEN not set")
     
-    # Enable job queue explicitly
-    application = Application.builder().token(token).job_queue(True).build()
+    # Build Application without job_queue parameter
+    application = Application.builder().token(token).build()
     
     # Define ConversationHandler for user setup
     conv_handler = ConversationHandler(
@@ -2285,7 +2286,7 @@ def main() -> None:
     # Add error handler
     application.add_error_handler(error_handler)
     
-    # Schedule recurring jobs if job queue is available
+    # Schedule recurring jobs
     if application.job_queue:
         try:
             application.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
@@ -2294,6 +2295,9 @@ def main() -> None:
         except NameError as e:
             logger.error(f"Job queue function not defined: {e}")
             raise
+    else:
+        logger.error("Job queue not initialized")
+        raise RuntimeError("Job queue not initialized")
     
     logger.info("Starting bot...")
     try:
