@@ -184,7 +184,6 @@ def get_user(user_id: int) -> dict:
     return user
 
 def update_user(user_id: int, data: dict) -> bool:
-def update_user(user_id: int, data: dict) -> bool:
     retries = 3
     for attempt in range(retries):
         try:
