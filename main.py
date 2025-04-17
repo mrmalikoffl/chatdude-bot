@@ -2423,6 +2423,10 @@ def main() -> None:
         updater = Updater(token, use_context=True)
         dp = updater.dispatcher
 
+        # Initialize MongoDB
+        global db
+        db = init_mongodb()
+
         # Button handler (your implementation)
         def button(update: Update, context: CallbackContext) -> int:
             query = update.callback_query
