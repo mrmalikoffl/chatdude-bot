@@ -176,7 +176,8 @@ def get_user(user_id: int) -> dict:
             "premium_expiry": None,
             "premium_features": {},
             "ban_type": None,
-            "ban_expiry": None
+            "ban_expiry": None,
+            "setup_state": None
         }
         users.insert_one(user)
         user = users.find_one({"user_id": user_id})
@@ -241,6 +242,10 @@ def delete_user(user_id: int):
             logger.info(f"Deleted user {user_id} from database.")
         else:
             logger.warning(f"No user found with user_id {user_id}")
+        # Clear in-memory user activities
+        user_activities.pop(user_id, None)
+        command_timestamps.pop(user_id, None)
+        message_timestamps.pop(user_id, None)
     except (ConnectionError, OperationFailure) as e:
         logger.error(f"Failed to delete user {user_id}: {e}")
         operation_queue.put(("delete_user", (user_id,)))
@@ -248,6 +253,16 @@ def delete_user(user_id: int):
     except Exception as e:
         logger.error(f"Unexpected error deleting user {user_id}: {e}")
         raise
+
+def is_profile_complete(user: dict) -> bool:
+    """Check if the user's profile is complete."""
+    if not user.get("consent", False):
+        return False
+    if not user.get("verified", False):
+        return False
+    profile = user.get("profile", {})
+    required_fields = ["name", "age", "gender", "location"]  # Add "tags" if mandatory
+    return all(profile.get(field) for field in required_fields)
 
 def escape_markdown_v2(text: str) -> str:
     if not isinstance(text, str):
@@ -286,6 +301,7 @@ async def safe_send_message(chat_id: int, text: str, context: ContextTypes.DEFAU
     except Exception as e:
         logger.error(f"Failed to send message to {chat_id}: {e}")
 
+@restrict_access
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     logger.info(f"Received /start command from user {user_id}")
@@ -695,6 +711,7 @@ def can_match(user1: int, user2: int) -> bool:
             return False
     return True
 
+@restrict_access
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
@@ -719,6 +736,8 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         await safe_reply(update, "❓ You're not in a chat or waiting. Use /start to find a partner.", context)
 
+
+@restrict_access
 async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
@@ -743,6 +762,7 @@ async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await safe_reply(update, "🔍 Looking for a new chat partner...", context)
     await match_users(context)
 
+@restrict_access
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
@@ -797,6 +817,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     help_text += "\nUse the buttons below to get started! 👇"
     await safe_reply(update, help_text, context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
 
+@restrict_access
 async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
@@ -953,7 +974,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
             await send_channel_notification(context, notification_message)
             break
-
+@restrict_access
 async def shine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
@@ -972,6 +993,7 @@ async def shine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         await safe_reply(update, "❓ You're already in a chat or waiting list.", context)
 
+@restrict_access
 async def instant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Attempt an instant rematch with a previous partner using premium feature."""
     user_id = update.effective_user.id
@@ -1071,6 +1093,7 @@ async def instant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await safe_reply(update, "❌ Unable to reach your previous partner. They may be offline.", context, parse_mode=ParseMode.MARKDOWN_V2)
         logger.warning(f"Failed to send rematch request to {partner_id}: {e}")
 
+@restrict_access
 async def mood(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
@@ -1091,6 +1114,7 @@ async def mood(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply_markup = InlineKeyboardMarkup(keyboard)
     await safe_reply(update, "🎭 Choose your chat mood:", context, reply_markup=reply_markup)
 
+@restrict_access
 async def set_mood(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -1118,6 +1142,7 @@ async def set_mood(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     }):
         await safe_reply(update, "❌ Error setting mood. Please try again.", context)
 
+@restrict_access
 async def vault(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
@@ -1136,6 +1161,7 @@ async def vault(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_histories[user_id] = []
     await safe_reply(update, "📜 Your current chat is being saved to the vault!", context)
 
+@restrict_access
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
@@ -1155,6 +1181,7 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         history_text += f"{idx}. {msg}\n"
     await safe_reply(update, history_text, context)
 
+@restrict_access
 async def rematch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
@@ -1186,6 +1213,7 @@ async def rematch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply_markup = InlineKeyboardMarkup(keyboard)
     await safe_reply(update, "🔄 *Choose a Past Partner to Rematch* 🔄", context, reply_markup=reply_markup)
 
+@restrict_access
 async def flare(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
@@ -1308,6 +1336,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif data.startswith("gender_"):
         await set_gender(update, context)
 
+@restrict_access
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
@@ -1339,6 +1368,7 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     await safe_reply(update, settings_text, context, reply_markup=reply_markup)
 
+@restrict_access
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
@@ -1416,25 +1446,36 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def delete_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    
+    # End any active chats
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
         del user_pairs[user_id]
         if partner_id in user_pairs:
             del user_pairs[partner_id]
         await safe_send_message(partner_id, "👋 Your partner has left the chat. Use /start to find a new one.", context)
+    
+    # Remove from waiting list
     if user_id in waiting_users:
-        waiting_users.remove(user_id)
+        with waiting_users_lock:
+            waiting_users.remove(user_id)
+    
+    # Clear chat history
+    if user_id in chat_histories:
+        del chat_histories[user_id]
+    
+    # Clear user data from database
     try:
         delete_user(user_id)
-        await safe_reply(update, "🗑️ Your profile and data have been deleted successfully 🌟.", context)
+        # Clear in-memory context to force setup restart
+        context.user_data.clear()
+        await safe_reply(update, "🗑️ Your profile and data have been deleted successfully 🌟. Use /start to set up a new profile.", context)
         notification_message = (
             "🗑️ *User Deleted Profile* 🗑️\n\n"
             f"👤 *User ID*: {user_id}\n"
             f"🕒 *Deleted At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
         await send_channel_notification(context, notification_message)
-        if user_id in chat_histories:
-            del chat_histories[user_id]
     except Exception as e:
         logger.error(f"Error deleting profile for user {user_id}: {e}")
         await safe_reply(update, "❌ Error deleting profile 😔. Please try again or contact support.", context)
@@ -1473,6 +1514,40 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         chat_histories[user_id].append(f"You: {message}")
     if partner_id in chat_histories:
         chat_histories[partner_id].append(f"Partner: {message}")
+
+async def restrict_access(handler):
+    """Decorator to restrict access to users with complete profiles and no bans."""
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user_id = update.effective_user.id
+        
+        # Check ban status
+        if is_banned(user_id):
+            user = get_user(user_id)
+            ban_msg = (
+                "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
+                if user["ban_type"] == "permanent"
+                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
+            )
+            await safe_reply(update, ban_msg, context)
+            return
+        
+        # Allow /start and /deleteprofile even with incomplete profile
+        if handler.__name__ in ["start", "delete_profile"]:
+            return await handler(update, context, *args, **kwargs)
+        
+        # Allow admin commands for admins
+        if user_id in ADMIN_IDS and handler.__name__.startswith("admin_"):
+            return await handler(update, context, *args, **kwargs)
+        
+        # Check profile completeness
+        user = get_user(user_id)
+        if not is_profile_complete(user):
+            await safe_reply(update, "⚠️ Please complete your profile setup with /start before using this feature.", context)
+            return
+        
+        return await handler(update, context, *args, **kwargs)
+    
+    return wrapper
 
 def is_safe_message(message: str) -> tuple[bool, str]:
     message_lower = message.lower()
@@ -2267,22 +2342,22 @@ def main() -> None:
         allow_reentry=True
     )
     
-    # Add all handlers
+    # Add handlers with restrict_access
     application.add_handler(conv_handler)
-    application.add_handler(CommandHandler("stop", stop))
-    application.add_handler(CommandHandler("next", next_chat))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("premium", premium))
-    application.add_handler(CommandHandler("shine", shine))
-    application.add_handler(CommandHandler("instant", instant))
-    application.add_handler(CommandHandler("mood", mood))
-    application.add_handler(CommandHandler("vault", vault))
-    application.add_handler(CommandHandler("history", history))
-    application.add_handler(CommandHandler("rematch", rematch))
-    application.add_handler(CommandHandler("flare", flare))
-    application.add_handler(CommandHandler("settings", settings))
-    application.add_handler(CommandHandler("report", report))
-    application.add_handler(CommandHandler("deleteprofile", delete_profile))
+    application.add_handler(CommandHandler("stop", restrict_access(stop)))
+    application.add_handler(CommandHandler("next", restrict_access(next_chat)))
+    application.add_handler(CommandHandler("help", restrict_access(help_command)))
+    application.add_handler(CommandHandler("premium", restrict_access(premium)))
+    application.add_handler(CommandHandler("shine", restrict_access(shine)))
+    application.add_handler(CommandHandler("instant", restrict_access(instant)))
+    application.add_handler(CommandHandler("mood", restrict_access(mood)))
+    application.add_handler(CommandHandler("vault", restrict_access(vault)))
+    application.add_handler(CommandHandler("history", restrict_access(history)))
+    application.add_handler(CommandHandler("rematch", restrict_access(rematch)))
+    application.add_handler(CommandHandler("flare", restrict_access(flare)))
+    application.add_handler(CommandHandler("settings", restrict_access(settings)))
+    application.add_handler(CommandHandler("report", restrict_access(report)))
+    application.add_handler(CommandHandler("deleteprofile", restrict_access(delete_profile)))
     
     # Add admin command handlers
     application.add_handler(CommandHandler("admin", admin_access))
