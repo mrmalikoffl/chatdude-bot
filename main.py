@@ -1002,11 +1002,16 @@ def next_chat(update: Update, context: CallbackContext) -> None:
 
 def help_command(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
+    logger.info(f"Help command called for user {user_id}")
     if is_banned(user_id):
         user = get_user(user_id)
+        if not user:
+            logger.error(f"No user data for user_id={user_id}")
+            safe_reply(update, "⚠️ User data not found. Please restart with /start.", parse_mode=None)
+            return
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
-        safe_reply(update, ban_msg)
+        safe_reply(update, ban_msg, parse_mode=None)
         return
     keyboard = [
         [InlineKeyboardButton("💬 Start Chat", callback_data="start_chat"),
@@ -1021,46 +1026,51 @@ def help_command(update: Update, context: CallbackContext) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     help_text = (
-        "🌟 *Talk2Anyone Help Menu* 🌟\n\n"
+        "🌟 Talk2Anyone Help Menu 🌟\n\n"
         "Explore all the ways to connect and customize your experience:\n\n"
-        "💬 *Chat Commands* 💬\n"
-        "• /start - Begin a new anonymous chat\n"
-        "• /next - Find a new chat partner\n"
-        "• /stop - End the current chat\n"
+        "💬 Chat Commands 💬\n"
+        "- /start - Begin a new anonymous chat\n"
+        "- /next - Find a new chat partner\n"
+        "- /stop - End the current chat\n"
         "━━━━━\n\n"
-        "⚙️ *Profile & Settings* ⚙️\n"
-        "• /settings - Customize your profile\n"
-        "• /deleteprofile - Erase your data\n"
+        "⚙️ Profile & Settings ⚙️\n"
+        "- /settings - Customize your profile\n"
+        "- /deleteprofile - Erase your data\n"
         "━━━━━\n\n"
-        "🌟 *Premium Features* 🌟\n"
-        "• /premium - Unlock amazing features\n"
-        "• /history - View past chats\n"
-        "• /rematch - Reconnect with past partners\n"
-        "• /shine - Boost your profile\n"
-        "• /instant - Instant rematch\n"
-        "• /mood - Set chat mood\n"
-        "• /vault - Save chats forever\n"
-        "• /flare - Add sparkle to messages\n"
+        "🌟 Premium Features 🌟\n"
+        "- /premium - Unlock amazing features\n"
+        "- /history - View past chats\n"
+        "- /rematch - Reconnect with past partners\n"
+        "- /shine - Boost your profile\n"
+        "- /instant - Instant rematch\n"
+        "- /mood - Set chat mood\n"
+        "- /vault - Save chats forever\n"
+        "- /flare - Add sparkle to messages\n"
         "━━━━━\n\n"
-        "🚨 *Safety* 🚨\n"
-        "• /report - Report inappropriate behavior\n"
+        "🚨 Safety 🚨\n"
+        "- /report - Report inappropriate behavior\n"
     )
     if user_id in ADMIN_IDS:
         help_text += (
             "━━━━━\n\n"
-            "🔐 *Admin Access* 🔐\n"
-            "• /admin - View admin tools and commands\n"
+            "🔐 Admin Access 🔐\n"
+            "- /admin - View admin tools and commands\n"
         )
     help_text += "\nUse the buttons below to get started! 👇"
-    safe_reply(update, help_text, reply_markup=reply_markup)
+    safe_reply(update, help_text, reply_markup=reply_markup, parse_mode=None)
 
 def premium(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
+    logger.info(f"Premium called for user {user_id}")
     if is_banned(user_id):
         user = get_user(user_id)
+        if not user:
+            logger.error(f"No user data for user_id={user_id}")
+            safe_reply(update, "⚠️ User data not found. Please restart with /start.", parse_mode=None)
+            return
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
-        safe_reply(update, ban_msg)
+        safe_reply(update, ban_msg, parse_mode=None)
         return
     keyboard = [
         [InlineKeyboardButton("✨ Flare Messages - 100 ⭐", callback_data="buy_flare"),
@@ -1073,18 +1083,18 @@ def premium(update: Update, context: CallbackContext) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = (
-        "🌟 *Unlock Premium Features!* 🌟\n\n"
+        "🌟 Unlock Premium Features! 🌟\n\n"
         "Enhance your chat experience with these exclusive perks:\n\n"
-        "• *Flare Messages* - Add sparkle effects for 7 days (100 ⭐)\n"
-        "• *Instant Rematch* - Reconnect instantly (100 ⭐)\n"
-        "• *Shine Profile* - Priority matching for 24 hours (250 ⭐)\n"
-        "• *Mood Match* - Vibe-based matches for 30 days (250 ⭐)\n"
-        "• *Partner Details* - View name, age, gender, location for 30 days (500 ⭐)\n"
-        "• *Vaulted Chats* - Save chats forever (500 ⭐)\n"
-        "• *Premium Pass* - All features for 30 days + 5 Instant Rematches (1000 ⭐)\n\n"
+        "- Flare Messages - Add sparkle effects for 7 days (100 ⭐)\n"
+        "- Instant Rematch - Reconnect instantly (100 ⭐)\n"
+        "- Shine Profile - Priority matching for 24 hours (250 ⭐)\n"
+        "- Mood Match - Vibe-based matches for 30 days (250 ⭐)\n"
+        "- Partner Details - View name, age, gender, location for 30 days (500 ⭐)\n"
+        "- Vaulted Chats - Save chats forever (500 ⭐)\n"
+        "- Premium Pass - All features for 30 days + 5 Instant Rematches (1000 ⭐)\n\n"
         "Tap a button to purchase with Telegram Stars! 👇"
     )
-    safe_reply(update, message_text, reply_markup=reply_markup)
+    safe_reply(update, message_text, reply_markup=reply_markup, parse_mode=None)
 
 def buy_premium(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
@@ -1523,6 +1533,45 @@ def button(update: Update, context: CallbackContext) -> int:
         elif data == "delete_profile":
             logger.info(f"Processing delete_profile for user {user_id}")
             return delete_profile(update, context) or ConversationHandler.END
+        elif data == "set_name":
+            logger.info(f"Processing set_name for user {user_id}")
+            update_user(user_id, {"setup_state": "NAME"})
+            context.user_data["state"] = NAME
+            safe_reply(update, "🧑 Please enter your new name:", parse_mode=None)
+            return NAME
+        elif data == "set_age":
+            logger.info(f"Processing set_age for user {user_id}")
+            update_user(user_id, {"setup_state": "AGE"})
+            context.user_data["state"] = AGE
+            safe_reply(update, "🎂 Please enter your new age:", parse_mode=None)
+            return AGE
+        elif data == "set_gender":
+            logger.info(f"Processing set_gender for user {user_id}")
+            update_user(user_id, {"setup_state": "GENDER"})
+            context.user_data["state"] = GENDER
+            keyboard = [
+                [InlineKeyboardButton("👨 Male", callback_data="gender_male"),
+                 InlineKeyboardButton("👩 Female", callback_data="gender_female")],
+                [InlineKeyboardButton("🌈 Other", callback_data="gender_other")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            safe_reply(update, "👤 Please select your gender:", reply_markup=reply_markup, parse_mode=None)
+            return GENDER
+        elif data == "set_location":
+            logger.info(f"Processing set_location for user {user_id}")
+            update_user(user_id, {"setup_state": "LOCATION"})
+            context.user_data["state"] = LOCATION
+            safe_reply(update, "📍 Please enter your new location:", parse_mode=None)
+            return LOCATION
+        elif data == "set_tags":
+            logger.info(f"Processing set_tags for user {user_id}")
+            update_user(user_id, {"setup_state": "TAGS"})
+            context.user_data["state"] = TAGS
+            safe_reply(update, "🏷️ Please enter your new tags (comma-separated):", parse_mode=None)
+            return TAGS
+        elif data == "help_menu":
+            logger.info(f"Processing help_menu for user {user_id}")
+            return help_command(update, context) or ConversationHandler.END
         elif data.startswith("buy_"):
             logger.info(f"Processing buy_ for user {user_id}")
             return buy_premium(update, context) or ConversationHandler.END
@@ -1535,7 +1584,6 @@ def button(update: Update, context: CallbackContext) -> int:
             if is_banned(user_id):
                 safe_reply(update, "🚫 You are banned and cannot send rematch requests 🔒.", parse_mode=None)
                 return ConversationHandler.END
-            user = get_user(user_id)
             if user_id in user_pairs:
                 safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.", parse_mode=None)
                 return ConversationHandler.END
@@ -1553,19 +1601,19 @@ def button(update: Update, context: CallbackContext) -> int:
             reply_markup = InlineKeyboardMarkup(keyboard)
             user_profile = user.get("profile", {})
             request_message = (
-                f"🔄 *Rematch Request* 🔄\n\n"
+                f"🔄 Rematch Request 🔄\n\n"
                 f"A user wants to reconnect with you!\n"
-                f"🧑 *Name*: {user_profile.get('name', 'Anonymous')}\n"
-                f"🎂 *Age*: {user_profile.get('age', 'Not set')}\n"
-                f"👤 *Gender*: {user_profile.get('gender', 'Not set')}\n"
-                f"📍 *Location*: {user_profile.get('location', 'Not set')}\n\n"
+                f"🧑 Name: {user_profile.get('name', 'Anonymous')}\n"
+                f"🎂 Age: {user_profile.get('age', 'Not set')}\n"
+                f"👤 Gender: {user_profile.get('gender', 'Not set')}\n"
+                f"📍 Location: {user_profile.get('location', 'Not set')}\n\n"
                 f"Would you like to chat again?"
             )
             try:
                 message = context.bot.send_message(
                     chat_id=partner_id,
-                    text=escape_markdown_v2(request_message),
-                    parse_mode="MarkdownV2",
+                    text=request_message,
+                    parse_mode=None,
                     reply_markup=reply_markup
                 )
                 safe_reply(update, "📩 Rematch request sent. Waiting for their response...", parse_mode=None)
@@ -1595,8 +1643,8 @@ def button(update: Update, context: CallbackContext) -> int:
                 return ConversationHandler.END
             user_pairs[user_id] = requester_id
             user_pairs[requester_id] = user_id
-            safe_reply(update, "🔄 *Reconnected!* Start chatting! 🗣️", parse_mode=None)
-            safe_bot_send_message(context.bot, requester_id, "🔄 *Reconnected!* Start chatting! 🗣️")
+            safe_reply(update, "🔄 Reconnected! Start chatting! 🗣️", parse_mode=None)
+            safe_bot_send_message(context.bot, requester_id, "🔄 Reconnected! Start chatting! 🗣️", parse_mode=None)
             if has_premium_feature(user_id, "vaulted_chats"):
                 chat_histories[user_id] = chat_histories.get(user_id, [])
             if has_premium_feature(requester_id, "vaulted_chats"):
@@ -1610,9 +1658,13 @@ def button(update: Update, context: CallbackContext) -> int:
             requester_data = context.bot_data.get("rematch_requests", {}).get(user_id, {})
             requester_id = requester_data.get("requester_id")
             if requester_id:
-                safe_bot_send_message(context.bot, requester_id, "❌ Your rematch request was declined 😔.")
+                safe_bot_send_message(context.bot, requester_id, "❌ Your rematch request was declined 😔.", parse_mode=None)
                 logger.info(f"User {user_id} declined rematch with {requester_id}")
             context.bot_data.get("rematch_requests", {}).pop(user_id, None)
+            return ConversationHandler.END
+        elif data == "test_button":
+            logger.info(f"Processing test_button for user {user_id}")
+            safe_reply(update, "Test button clicked!", parse_mode=None)
             return ConversationHandler.END
         elif data.startswith("emoji_"):
             logger.info(f"Processing emoji_ for user {user_id}")
