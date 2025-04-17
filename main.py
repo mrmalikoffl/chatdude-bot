@@ -10,7 +10,8 @@ from telegram.ext import (
     ConversationHandler,
     CallbackQueryHandler,
     PreCheckoutQueryHandler,
-    JobQueue,
+    JobQueue
+    CallbackContext,
 )
 import logging
 import os
