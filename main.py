@@ -1493,91 +1493,91 @@ def button(update: Update, context: CallbackContext) -> int:
             return set_mood(update, context) or ConversationHandler.END
         elif data.startswith("rematch_request_"):
             partner_id = int(data.split("_")[-1])
-        if is_banned(user_id):
-            safe_reply(update, "🚫 You are banned and cannot send rematch requests 🔒.")
-            return ConversationHandler.END
-        user = get_user(user_id)
-        if user_id in user_pairs:
-            safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.")
-            return ConversationHandler.END
-        partner_data = get_user(partner_id)
-        if not partner_data:
-            safe_reply(update, "❌ This user is no longer available 😓.")
-            return ConversationHandler.END
-        if partner_id in user_pairs:
-            safe_reply(update, "❌ This user is currently in another chat 💬.")
-            return ConversationHandler.END
-        keyboard = [
-            [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{user_id}"),
-             InlineKeyboardButton("❌ Decline", callback_data="rematch_decline")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        user_profile = user.get("profile", {})
-        request_message = (
-            f"🔄 *Rematch Request* 🔄\n\n"
-            f"A user wants to reconnect with you!\n"
-            f"🧑 *Name*: {user_profile.get('name', 'Anonymous')}\n"
-            f"🎂 *Age*: {user_profile.get('age', 'Not set')}\n"
-            f"👤 *Gender*: {user_profile.get('gender', 'Not set')}\n"
-            f"📍 *Location*: {user_profile.get('location', 'Not set')}\n\n"
-            f"Would you like to chat again?"
-        )
-        try:
-            message = context.bot.send_message(
-                chat_id=partner_id,
-                text=escape_markdown_v2(request_message),
-                parse_mode="MarkdownV2",
-                reply_markup=reply_markup
+            if is_banned(user_id):
+                safe_reply(update, "🚫 You are banned and cannot send rematch requests 🔒.")
+                return ConversationHandler.END
+            user = get_user(user_id)
+            if user_id in user_pairs:
+                safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.")
+                return ConversationHandler.END
+            partner_data = get_user(partner_id)
+            if not partner_data:
+                safe_reply(update, "❌ This user is no longer available 😓.")
+                return ConversationHandler.END
+            if partner_id in user_pairs:
+                safe_reply(update, "❌ This user is currently in another chat 💬.")
+                return ConversationHandler.END
+            keyboard = [
+                [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{user_id}"),
+                 InlineKeyboardButton("❌ Decline", callback_data="rematch_decline")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            user_profile = user.get("profile", {})
+            request_message = (
+                f"🔄 *Rematch Request* 🔄\n\n"
+                f"A user wants to reconnect with you!\n"
+                f"🧑 *Name*: {user_profile.get('name', 'Anonymous')}\n"
+                f"🎂 *Age*: {user_profile.get('age', 'Not set')}\n"
+                f"👤 *Gender*: {user_profile.get('gender', 'Not set')}\n"
+                f"📍 *Location*: {user_profile.get('location', 'Not set')}\n\n"
+                f"Would you like to chat again?"
             )
-            safe_reply(update, "📩 Rematch request sent. Waiting for their response...")
-            context.bot_data["rematch_requests"] = context.bot_data.get("rematch_requests", {})
-            context.bot_data["rematch_requests"][partner_id] = {
-                "requester_id": user_id,
-                "timestamp": int(time.time()),
-                "message_id": message.message_id
-            }
-            logger.info(f"User {user_id} sent rematch request to {partner_id}")
-        except telegram.error.TelegramError as e:
-            safe_reply(update, "❌ Unable to reach this user. They may be offline.")
-            logger.warning(f"Failed to send rematch request to {partner_id}: {e}")
-        return ConversationHandler.END
-    elif data.startswith("rematch_accept_"):
-        requester_id = int(data.split("_")[-1])
-        if user_id in user_pairs:
-            safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.")
+            try:
+                message = context.bot.send_message(
+                    chat_id=partner_id,
+                    text=escape_markdown_v2(request_message),
+                    parse_mode="MarkdownV2",
+                    reply_markup=reply_markup
+                )
+                safe_reply(update, "📩 Rematch request sent. Waiting for their response...")
+                context.bot_data["rematch_requests"] = context.bot_data.get("rematch_requests", {})
+                context.bot_data["rematch_requests"][partner_id] = {
+                    "requester_id": user_id,
+                    "timestamp": int(time.time()),
+                    "message_id": message.message_id
+                }
+                logger.info(f"User {user_id} sent rematch request to {partner_id}")
+            except telegram.error.TelegramError as e:
+                safe_reply(update, "❌ Unable to reach this user. They may be offline.")
+                logger.warning(f"Failed to send rematch request to {partner_id}: {e}")
             return ConversationHandler.END
-        requester_data = get_user(requester_id)
-        if not requester_data:
-            safe_reply(update, "❌ This user is no longer available 😓.")
+        elif data.startswith("rematch_accept_"):
+            requester_id = int(data.split("_")[-1])
+            if user_id in user_pairs:
+                safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.")
+                return ConversationHandler.END
+            requester_data = get_user(requester_id)
+            if not requester_data:
+                safe_reply(update, "❌ This user is no longer available 😓.")
+                return ConversationHandler.END
+            if requester_id in user_pairs:
+                safe_reply(update, "❌ This user is currently in another chat 💬.")
+                return ConversationHandler.END
+            user_pairs[user_id] = requester_id
+            user_pairs[requester_id] = user_id
+            safe_reply(update, "🔄 *Reconnected!* Start chatting! 🗣️")
+            safe_bot_send_message(context.bot, requester_id, "🔄 *Reconnected!* Start chatting! 🗣️")
+            if has_premium_feature(user_id, "vaulted_chats"):
+                chat_histories[user_id] = chat_histories.get(user_id, [])
+            if has_premium_feature(requester_id, "vaulted_chats"):
+                chat_histories[requester_id] = chat_histories.get(requester_id, [])
+            context.bot_data.get("rematch_requests", {}).pop(user_id, None)
+            logger.info(f"User {user_id} accepted rematch with {requester_id}")
             return ConversationHandler.END
-        if requester_id in user_pairs:
-            safe_reply(update, "❌ This user is currently in another chat 💬.")
+        elif data == "rematch_decline":
+            safe_reply(update, "❌ Rematch request declined.")
+            requester_data = context.bot_data.get("rematch_requests", {}).get(user_id, {})
+            requester_id = requester_data.get("requester_id")
+            if requester_id:
+                safe_bot_send_message(context.bot, requester_id, "❌ Your rematch request was declined 😔.")
+                logger.info(f"User {user_id} declined rematch with {requester_id}")
+            context.bot_data.get("rematch_requests", {}).pop(user_id, None)
             return ConversationHandler.END
-        user_pairs[user_id] = requester_id
-        user_pairs[requester_id] = user_id
-        safe_reply(update, "🔄 *Reconnected!* Start chatting! 🗣️")
-        safe_bot_send_message(context.bot, requester_id, "🔄 *Reconnected!* Start chatting! 🗣️")
-        if has_premium_feature(user_id, "vaulted_chats"):
-            chat_histories[user_id] = chat_histories.get(user_id, [])
-        if has_premium_feature(requester_id, "vaulted_chats"):
-            chat_histories[requester_id] = chat_histories.get(requester_id, [])
-        context.bot_data.get("rematch_requests", {}).pop(user_id, None)
-        logger.info(f"User {user_id} accepted rematch with {requester_id}")
-        return ConversationHandler.END
-    elif data == "rematch_decline":
-        safe_reply(update, "❌ Rematch request declined.")
-        requester_data = context.bot_data.get("rematch_requests", {}).get(user_id, {})
-        requester_id = requester_data.get("requester_id")
-        if requester_id:
-            safe_bot_send_message(context.bot, requester_id, "❌ Your rematch request was declined 😔.")
-            logger.info(f"User {user_id} declined rematch with {requester_id}")
-        context.bot_data.get("rematch_requests", {}).pop(user_id, None)
-        return ConversationHandler.END
-    elif data.startswith("emoji_"):
-        return verify_emoji(update, context) or ConversationHandler.END
-    elif data.startswith("consent_"):
-        return consent_handler(update, context) or ConversationHandler.END
-    elif data.startswith("gender_"):
+        elif data.startswith("emoji_"):
+            return verify_emoji(update, context) or ConversationHandler.END
+        elif data.startswith("consent_"):
+            return consent_handler(update, context) or ConversationHandler.END
+        elif data.startswith("gender_"):
             return set_gender(update, context)
         else:
             logger.warning(f"Unhandled callback data for user {user_id}: {data}")
@@ -1587,7 +1587,6 @@ def button(update: Update, context: CallbackContext) -> int:
         logger.error(f"Error processing button callback for user {user_id}, data={data}: {e}")
         safe_reply(update, "😔 An error occurred. Please try again.")
         return ConversationHandler.END
-
 def settings(update: Update, context: CallbackContext) -> None:
     """Display settings menu for profile customization"""
     user_id = update.effective_user.id
