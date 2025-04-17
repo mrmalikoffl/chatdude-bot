@@ -2378,12 +2378,22 @@ def main() -> None:
 
             try:
                 query.answer()  # Acknowledge callback
+                logger.info(f"Callback query acknowledged for user={user_id}, data={data}")
+
+                # Handle test_new_button without user checks
+                if data == "test_new_button":
+                    logger.info(f"Processing test_new_button for user {user_id}")
+                    safe_reply(update, "New test button clicked!", parse_mode=None)
+                    logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END")
+                    return ConversationHandler.END
+                    
                 if not user:
                     logger.error(f"No user data for user_id={user_id}")
                     safe_reply(update, "⚠️ User data not found. Please restart with /start.", parse_mode=None)
                     logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (no user)")
                     return ConversationHandler.END
 
+                logger.info(f"Checking if user={user_id} is in group chat")
                 if query.message.chat_id < 0:
                     logger.info(f"Group chat detected for user={user_id}, data={data}")
                     safe_reply(update, "This button isn't for group chats.", parse_mode=None)
@@ -2399,11 +2409,6 @@ def main() -> None:
                     logger.info(f"User {user_id} is in a chat, cannot process button: {data}")
                     safe_reply(update, "❓ You're in a chat. Use /stop first.", parse_mode=None)
                     logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END (in chat)")
-                    return ConversationHandler.END
-                if data == "test_new_button":
-                    logger.info(f"Processing test_new_button for user {user_id}")
-                    safe_reply(update, "New test button clicked!", parse_mode=None)
-                    logger.info(f"EXIT button: user={user_id}, data={data}, result=ConversationHandler.END")
                     return ConversationHandler.END
                 if data == "start_chat":
                     logger.info(f"Processing start_chat for user {user_id}")
