@@ -726,10 +726,12 @@ def set_location(update: Update, context: CallbackContext) -> int:
     # Validate location
     if not 1 <= len(location) <= 100:
         safe_reply(update, "⚠️ Location must be 1-100 characters.")
+        logger.warning(f"User {user_id} provided invalid location: {location}")
         return LOCATION
     is_safe, _ = is_safe_message(location)
     if not is_safe:
         safe_reply(update, "⚠️ Location contains inappropriate content.")
+        logger.warning(f"User {user_id} provided unsafe location: {location}")
         return LOCATION
 
     # Update user's profile with location
@@ -742,13 +744,18 @@ def set_location(update: Update, context: CallbackContext) -> int:
         "premium_features": user.get("premium_features", {}),
         "created_at": user.get("created_at", int(time.time()))
     })
-    logger.info(f"User {user_id} set location to: {location}")
+    logger.info(f"User {user_id} set location to: {location}. Full profile: {profile}")
 
     # Send congratulatory message
-    safe_reply(update, "🎉 Congratulations! Profile setup complete!")
+    safe_reply(update, "🎉 Congratulations! Profile setup complete! 🎉")
 
     # Prompt user to use /next to connect
-    safe_reply(update, "🔍 Your profile is ready! Use `/next` to find a chat partner and start connecting! 🚀")
+    safe_reply(update, (
+        "🔍 Your profile is ready! 🎉\n\n"
+        "🚀 Use `/next` to find a chat partner and start connecting!\n"
+        "ℹ️ Sending text messages now won’t start a chat. Use /help for more options."
+    ))
+    logger.info(f"User {user_id} completed profile setup. Prompted /next.")
 
     # Send notification to channel
     notification_message = (
@@ -2239,8 +2246,8 @@ def message_handler(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     message_text = update.message.text.strip()
 
-    # Log the message for debugging
-    logger.info(f"Message from user {user_id}: {message_text}")
+    # Log the incoming message
+    logger.info(f"Processing message from user {user_id}: '{message_text}'")
 
     # Update last activity
     user_activities[user_id] = {"last_activity": time.time()}
@@ -2253,18 +2260,42 @@ def message_handler(update: Update, context: CallbackContext) -> None:
             else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
         )
         safe_reply(update, ban_msg)
+        logger.info(f"User {user_id} is banned. Response: {ban_msg}")
         return
 
-    # Check if user is waiting for a match or already in a chat
+    # Check if user is waiting or in a chat
     if user_id in user_pairs:
-        # User is in a chat, proceed with message relay
         partner_id = user_pairs[user_id]
         if not partner_id or partner_id not in user_pairs:
             safe_reply(update, "❌ Your partner is no longer available 😔. Use /next to find a new one.")
+            logger.info(f"User {user_id} has no valid partner. Prompted /next.")
             del user_pairs[user_id]
             return
+        # Relay message to partner (existing logic)
+        is_safe, reason = is_safe_message(message_text)
+        if not is_safe:
+            violation_result = issue_keyword_violation(user_id, reason, update, context)
+            logger.warning(f"User {user_id} sent unsafe message: '{message_text}' (reason: {reason})")
+            return
+        display_text = message_text
+        if has_premium_feature(user_id, "flare_messages"):
+            display_text = f"✨ {message_text} ✨"
+        try:
+            safe_bot_send_message(context.bot, partner_id, display_text)
+            logger.debug(f"Message relayed from {user_id} to {partner_id}: '{message_text}'")
+        except telegram.error.TelegramError as e:
+            safe_reply(update, "❌ Failed to send message 😔. Your partner may be offline.")
+            logger.error(f"Failed to send message from {user_id} to {partner_id}: {e}")
+            return
+        # Save to chat history if applicable
+        if has_premium_feature(user_id, "vaulted_chats"):
+            chat_histories[user_id] = chat_histories.get(user_id, []) + [f"You: {message_text}"]
+        if has_premium_feature(partner_id, "vaulted_chats"):
+            partner_name = get_user(user_id).get("profile", {}).get("name", "Anonymous")
+            chat_histories[partner_id] = chat_histories.get(partner_id, []) + [f"{partner_name}: {message_text}"]
     elif user_id in waiting_users:
         safe_reply(update, "🔍 You're currently waiting for a chat partner... Please wait! Use /next to refresh or /stop to cancel.")
+        logger.info(f"User {user_id} is waiting. Prompted to wait or use /next.")
         return
     else:
         # Check if user has a complete profile
@@ -2272,43 +2303,16 @@ def message_handler(update: Update, context: CallbackContext) -> None:
         profile = user.get("profile", {})
         required_fields = ["name", "age", "gender", "location"]
         if all(field in profile for field in required_fields):
-            safe_reply(update, "🎉 Your profile is ready! Use `/next` to find a chat partner and start connecting! 🚀")
+            safe_reply(update, (
+                "🎉 Your profile is ready! 🎉\n\n"
+                "🔍 Use `/next` to find a chat partner and start connecting! 🚀\n"
+                "ℹ️ Sending text messages now won’t start a chat. Use /help for more options."
+            ))
+            logger.info(f"User {user_id} has complete profile: {profile}. Prompted /next.")
         else:
             safe_reply(update, "❓ You're not in a chat or waiting 😔. Use /start to begin.")
+            logger.info(f"User {user_id} has incomplete profile: {profile}. Prompted /start.")
         return
-
-    # Check message rate limit
-    if not check_message_rate_limit(user_id):
-        safe_reply(update, "⏳ You're sending messages too fast! Please slow down ⏰.")
-        return
-
-    # Check if message is safe
-    is_safe, reason = is_safe_message(message_text)
-    if not is_safe:
-        violation_result = issue_keyword_violation(user_id, reason, update, context)
-        logger.warning(f"User {user_id} sent unsafe message: {message_text} (reason: {reason})")
-        return
-
-    # Get partner and relay message
-    partner_id = user_pairs[user_id]
-    display_text = message_text
-    if has_premium_feature(user_id, "flare_messages"):
-        display_text = f"✨ {message_text} ✨"
-
-    try:
-        safe_bot_send_message(context.bot, partner_id, display_text)
-        logger.debug(f"Message relayed from {user_id} to {partner_id}: {message_text}")
-    except telegram.error.TelegramError as e:
-        safe_reply(update, "❌ Failed to send message 😔. Your partner may be offline.")
-        logger.error(f"Failed to send message from {user_id} to {partner_id}: {e}")
-        return
-
-    # Save to chat history if vaulted
-    if has_premium_feature(user_id, "vaulted_chats"):
-        chat_histories[user_id] = chat_histories.get(user_id, []) + [f"You: {message_text}"]
-    if has_premium_feature(partner_id, "vaulted_chats"):
-        partner_name = get_user(user_id).get("profile", {}).get("name", "Anonymous")
-        chat_histories[partner_id] = chat_histories.get(partner_id, []) + [f"{partner_name}: {message_text}"]
         
 def cleanup_rematch_requests(context: CallbackContext) -> None:
     """Clean up expired rematch requests"""
