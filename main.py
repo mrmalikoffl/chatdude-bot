@@ -6,7 +6,7 @@ from telegram.ext import (
     Updater,
     CommandHandler,
     MessageHandler,
-    Filters,  # Capitalized Filters for v13.7
+    Filters,  # Ensure this is correct for v13.7
     ConversationHandler,
     CallbackQueryHandler,
     PreCheckoutQueryHandler,
