@@ -1473,26 +1473,26 @@ def button(update: Update, context: CallbackContext) -> int:
             return start(update, context) or ConversationHandler.END
         elif data == "next_chat":
             return next_chat(update, context) or ConversationHandler.END
-    elif data == "stop_chat":
-        return stop(update, context) or ConversationHandler.END
-    elif data == "settings_menu":
-        return settings(update, context) or ConversationHandler.END
-    elif data == "premium_menu":
-        return premium(update, context) or ConversationHandler.END
-    elif data == "history_menu":
-        return history(update, context) or ConversationHandler.END
-    elif data == "report_user":
-        return report(update, context) or ConversationHandler.END
-    elif data == "rematch_partner":
-        return rematch(update, context) or ConversationHandler.END
-    elif data == "delete_profile":
-        return delete_profile(update, context) or ConversationHandler.END
-    elif data.startswith("buy_"):
-        return buy_premium(update, context) or ConversationHandler.END
-    elif data.startswith("mood_"):
-        return set_mood(update, context) or ConversationHandler.END
-    elif data.startswith("rematch_request_"):
-        partner_id = int(data.split("_")[-1])
+        elif data == "stop_chat":
+            return stop(update, context) or ConversationHandler.END
+        elif data == "settings_menu":
+            return settings(update, context) or ConversationHandler.END
+        elif data == "premium_menu":
+            return premium(update, context) or ConversationHandler.END
+        elif data == "history_menu":
+            return history(update, context) or ConversationHandler.END
+        elif data == "report_user":
+            return report(update, context) or ConversationHandler.END
+        elif data == "rematch_partner":
+            return rematch(update, context) or ConversationHandler.END
+        elif data == "delete_profile":
+            return delete_profile(update, context) or ConversationHandler.END
+        elif data.startswith("buy_"):
+            return buy_premium(update, context) or ConversationHandler.END
+        elif data.startswith("mood_"):
+            return set_mood(update, context) or ConversationHandler.END
+        elif data.startswith("rematch_request_"):
+            partner_id = int(data.split("_")[-1])
         if is_banned(user_id):
             safe_reply(update, "🚫 You are banned and cannot send rematch requests 🔒.")
             return ConversationHandler.END
