@@ -1495,50 +1495,61 @@ def flare(update: Update, context: CallbackContext) -> None:
     logger.debug(f"User {user_id} after flare: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
         
 def settings(update: Update, context: CallbackContext) -> None:
+    """Display settings menu for profile customization"""
     user_id = update.effective_user.id
     logger.info(f"Settings called for user {user_id}")
-    user = get_user(user_id)
-    if not user:
-        logger.error(f"No user data for user_id={user_id}")
-        safe_reply(update, "⚠️ User data not found. Please restart with /start.", parse_mode=None)
-        return
-    if is_banned(user_id):
-        ban_msg = (
-            "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
-            if user["ban_type"] == "permanent"
-            else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
+    try:
+        user = get_user(user_id)
+        logger.info(f"Fetched user data for user {user_id}: {user}")
+        if not user:
+            logger.error(f"No user data for user_id={user_id}")
+            safe_reply(update, "⚠️ User data not found. Please restart with /start.", parse_mode=None)
+            return
+
+        if is_banned(user_id):
+            ban_msg = (
+                "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
+                if user["ban_type"] == "permanent"
+                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
+            )
+            logger.info(f"User {user_id} is banned: {ban_msg}")
+            safe_reply(update, ban_msg, parse_mode=None)
+            return
+
+        profile = user.get("profile", {})
+        keyboard = [
+            [
+                InlineKeyboardButton("🧑 Change Name", callback_data="set_name"),
+                InlineKeyboardButton("🎂 Change Age", callback_data="set_age"),
+            ],
+            [
+                InlineKeyboardButton("👤 Change Gender", callback_data="set_gender"),
+                InlineKeyboardButton("📍 Change Location", callback_data="set_location"),
+            ],
+            [
+                InlineKeyboardButton("🏷️ Set Tags", callback_data="set_tags"),
+                InlineKeyboardButton("🔙 Back to Help", callback_data="help_menu"),
+            ],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        settings_text = (
+            "⚙️ Settings Menu ⚙️\n\n"
+            "Customize your profile to enhance your chat experience:\n\n"
+            f"🧑 Name: {profile.get('name', 'Not set')}\n"
+            f"🎂 Age: {profile.get('age', 'Not set')}\n"
+            f"👤 Gender: {profile.get('gender', 'Not set')}\n"
+            f"📍 Location: {profile.get('location', 'Not set')}\n"
+            f"🏷️ Tags: {', '.join(profile.get('tags', []) or ['None'])}\n\n"
+            "Use the buttons below to update your profile! 👇"
         )
-        safe_reply(update, ban_msg, parse_mode=None)
-        return
-    profile = user.get("profile", {})
-    keyboard = [
-        [
-            InlineKeyboardButton("🧑 Change Name", callback_data="set_name"),
-            InlineKeyboardButton("🎂 Change Age", callback_data="set_age"),
-        ],
-        [
-            InlineKeyboardButton("👤 Change Gender", callback_data="set_gender"),
-            InlineKeyboardButton("📍 Change Location", callback_data="set_location"),
-        ],
-        [
-            InlineKeyboardButton("🏷️ Set Tags", callback_data="set_tags"),
-            InlineKeyboardButton("🔙 Back to Help", callback_data="help_menu"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    settings_text = (
-        "⚙️ Settings Menu ⚙️\n\n"
-        "Customize your profile to enhance your chat experience:\n\n"
-        f"🧑 Name: {profile.get('name', 'Not set')}\n"
-        f"🎂 Age: {profile.get('age', 'Not set')}\n"
-        f"👤 Gender: {profile.get('gender', 'Not set')}\n"
-        f"📍 Location: {profile.get('location', 'Not set')}\n"
-        f"🏷️ Tags: {', '.join(profile.get('tags', []) or ['None'])}\n\n"
-        "Use the buttons below to update your profile! 👇"
-    )
-    safe_reply(update, settings_text, reply_markup=reply_markup, parse_mode=None)
-    context.user_data["state"] = SETTINGS
-    update_user(user_id, {"setup_state": "SETTINGS"})
+        logger.info(f"Sending settings menu for user {user_id}")
+        safe_reply(update, settings_text, reply_markup=reply_markup, parse_mode=None)
+        context.user_data["state"] = SETTINGS
+        update_user(user_id, {"setup_state": "SETTINGS"})
+        logger.info(f"Set state for user {user_id}: bot_state=SETTINGS, setup_state=SETTINGS")
+    except Exception as e:
+        logger.error(f"Error in settings for user {user_id}: {e}", exc_info=True)
+        safe_reply(update, "😔 An error occurred. Please try again or use /start.", parse_mode=None)
     
 def report(update: Update, context: CallbackContext) -> None:
     """Report a user for inappropriate behavior"""
@@ -2328,27 +2339,6 @@ def error_handler(update: Update, context: CallbackContext) -> None:
     except Exception as e:
         logger.error(f"Failed to send error message: {e}")
 
-import os
-import time
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
-    Updater,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    ConversationHandler,
-    PreCheckoutQueryHandler,
-    Filters,
-)
-import logging
-import telegram.error
-
-# Set up logging
-logger = logging.getLogger(__name__)
-
-# Define states for ConversationHandler
-CONSENT, NAME, AGE, GENDER, LOCATION, VERIFICATION, TAGS, SETTINGS = range(8)
-
 def main() -> None:
     """Initialize and start the Telegram bot"""
     token = os.getenv("TOKEN")
@@ -2645,7 +2635,7 @@ def main() -> None:
             logger.info(f"GLOBAL callback received: user={user_id}, data={data}")
             query.answer()  # Acknowledge callback
 
-        dp.add_handler(CallbackQueryHandler(log_callback), group=3)  # Moved to group 3
+        dp.add_handler(CallbackQueryHandler(log_callback), group=3)
 
         # Conversation handler
         conv_handler = ConversationHandler(
@@ -2663,7 +2653,7 @@ def main() -> None:
                 LOCATION: [MessageHandler(Filters.text & ~Filters.command, set_location)],
                 VERIFICATION: [CallbackQueryHandler(verify_emoji)],
                 TAGS: [MessageHandler(Filters.text & ~Filters.command, set_tags), CallbackQueryHandler(button)],
-                SETTINGS: [CallbackQueryHandler(button)],  # Added SETTINGS state
+                SETTINGS: [CallbackQueryHandler(button)],
             },
             fallbacks=[
                 CommandHandler("cancel", cancel),
@@ -2680,7 +2670,7 @@ def main() -> None:
             ],
         )
 
-        logger.info("Registering ConversationHandler")
+        logger.info("ConversationHandler registered with states: CONSENT, NAME, AGE, GENDER, LOCATION, VERIFICATION, TAGS, SETTINGS")
         dp.add_handler(conv_handler, group=2)
 
         # Command handlers
