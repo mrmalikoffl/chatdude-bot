@@ -945,36 +945,40 @@ async def shine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await safe_reply(update, "❓ You're already in a chat or waiting list.", context)
 
 async def instant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Attempt an instant rematch with a previous partner using premium feature."""
     user_id = update.effective_user.id
     if is_banned(user_id):
         user = get_user(user_id)
-        ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
-                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
+        ban_msg = (
+            "🚫 You are permanently banned. Contact support to appeal."
+            if user["ban_type"] == "permanent"
+            else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
+        )
         await safe_reply(update, ban_msg, context)
         return
     if not has_premium_feature(user_id, "instant_rematch"):
-        await safe_reply(update, "🔄 *Instant Rematch* is a premium feature. Buy it with /premium!", context)
+        await safe_reply(update, "🔄 *Instant Rematch* is a premium feature. Buy it with /premium!", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     user = get_user(user_id)
     features = user.get("premium_features", {})
     rematch_count = features.get("instant_rematch_count", 0)
     if rematch_count <= 0:
-        await safe_reply(update, "🔄 You need an *Instant Rematch*! Buy one with /premium!", context)
+        await safe_reply(update, "🔄 You need an *Instant Rematch*! Buy one with /premium!", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     partners = user.get("profile", {}).get("past_partners", [])
     if not partners:
-        await safe_reply(update, "❌ No past partners to rematch with.", context)
+        await safe_reply(update, "❌ No past partners to rematch with.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     partner_id = partners[-1]
     partner_data = get_user(partner_id)
     if not partner_data:
-        await safe_reply(update, "❌ Your previous partner is no longer available.", context)
+        await safe_reply(update, "❌ Your previous partner is no longer available.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     if user_id in user_pairs:
-        await safe_reply(update, "❓ You're already in a chat. Use /stop to end it first.", context)
+        await safe_reply(update, "❓ You're already in a chat. Use /stop to end it first.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     if partner_id in user_pairs:
-        await safe_reply(update, "❌ Your previous partner is currently in another chat.", context)
+        await safe_reply(update, "❌ Your previous partner is currently in another chat.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     if partner_id in waiting_users:
         waiting_users.remove(partner_id)
@@ -987,14 +991,24 @@ async def instant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "profile": user.get("profile", {}),
             "consent": user.get("consent", False),
             "verified": user.get("verified", False),
-            "created_at": user.get("created_at", int(time.time()))
+            "created_at": user.get("created_at", int(time.time())),
+            "ban_type": user.get("ban_type"),
+            "ban_expiry": user.get("ban_expiry")
         })
-        await safe_reply(update, "🔄 *Instantly reconnected!* Start chatting! 🗣️", context)
+        await safe_reply(update, "🔄 *Instantly reconnected!* Start chatting! 🗣️", context, parse_mode=ParseMode.MARKDOWN_V2)
         await safe_send_message(partner_id, "🔄 *Instantly reconnected!* Start chatting! 🗣️", context)
         if has_premium_feature(user_id, "vaulted_chats"):
             chat_histories[user_id] = chat_histories.get(user_id, [])
         if has_premium_feature(partner_id, "vaulted_chats"):
             chat_histories[partner_id] = chat_histories.get(partner_id, [])
+        logger.info(f"Instant rematch: user {user_id} with {partner_id}")
+        notification_message = (
+            f"🔄 *Instant Rematch* 🔄\n\n"
+            f"👤 *User ID*: {user_id}\n"
+            f"🤝 *Partner ID*: {partner_id}\n"
+            f"🕒 *Rematched At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        await send_channel_notification(context, notification_message)
         return
     keyboard = [
         [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{user_id}"),
@@ -1014,11 +1028,11 @@ async def instant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         message = await context.bot.send_message(
             chat_id=partner_id,
-            text=escape_markdown_v2(request_message),
-            parse_mode="MarkdownV2",
+            text=request_message,  # Removed escape_markdown_v2 since it's applied in safe_reply
+            parse_mode=ParseMode.MARKDOWN_V2,
             reply_markup=reply_markup
         )
-        await safe_reply(update, "📩 Rematch request sent to your previous partner. Waiting for their response...", context)
+        await safe_reply(update, "📩 Rematch request sent to your previous partner. Waiting for their response...", context, parse_mode=ParseMode.MARKDOWN_V2)
         context.bot_data["rematch_requests"] = context.bot_data.get("rematch_requests", {})
         context.bot_data["rematch_requests"][partner_id] = {
             "requester_id": user_id,
@@ -1026,7 +1040,8 @@ async def instant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "message_id": message.message_id
         }
     except telegram.error.TelegramError as e:
-        awaited safe_reply(update, "❌ Unable to reach your previous partner. They may be offline.", context)
+        await safe_reply(update, "❌ Unable to reach your previous partner. They may be offline.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        logger.warning(f"Failed to send rematch request to {partner_id}: {e}")
 
 async def mood(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
