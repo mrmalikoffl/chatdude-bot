@@ -892,7 +892,7 @@ def stop(update: Update, context: CallbackContext) -> None:
     if user_id in waiting_users:
         waiting_users.remove(user_id)
         logger.info(f"User {user_id} removed from waiting list. Current waiting list: {waiting_users}")
-        safe_reply(update, "⏹️ You’ve stopped waiting for a chat partner. Use /start to begin again.")
+        safe_reply(update, "⏹️ You’ve stopped waiting for a chat partner. Use /next to try again.")
         return
     
     # Check if user is in a chat
@@ -901,13 +901,19 @@ def stop(update: Update, context: CallbackContext) -> None:
         del user_pairs[user_id]
         if partner_id in user_pairs:
             del user_pairs[partner_id]
-        safe_bot_send_message(context.bot, partner_id, "👋 Your partner has left the chat. Use /start to find a new one.")
-        safe_reply(update, "👋 Chat ended. Use /start to begin a new chat.")
+        safe_bot_send_message(context.bot, partner_id, "👋 Your partner has left the chat. Use /next to find a new one.")
+        safe_reply(update, "👋 Chat ended. Use /next to begin a new chat.")
         logger.info(f"User {user_id} stopped chat with {partner_id}.")
         if user_id in chat_histories and not has_premium_feature(user_id, "vaulted_chats"):
             del chat_histories[user_id]
     else:
-        safe_reply(update, "❓ You're not in a chat or waiting. Use /start to find a partner.")
+        user = get_user(user_id)
+        profile = user.get("profile", {})
+        required_fields = ["name", "age", "gender", "location"]
+        if all(field in profile for field in required_fields):
+            safe_reply(update, "🎉 Your profile is ready! Use `/next` to find a chat partner and start connecting! 🚀")
+        else:
+            safe_reply(update, "❓ You're not in a chat or waiting. Use /start to begin.")
         
 def next_chat(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
@@ -2233,6 +2239,9 @@ def message_handler(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     message_text = update.message.text.strip()
 
+    # Log the message for debugging
+    logger.info(f"Message from user {user_id}: {message_text}")
+
     # Update last activity
     user_activities[user_id] = {"last_activity": time.time()}
 
@@ -2258,8 +2267,14 @@ def message_handler(update: Update, context: CallbackContext) -> None:
         safe_reply(update, "🔍 You're currently waiting for a chat partner... Please wait! Use /next to refresh or /stop to cancel.")
         return
     else:
-        # User is neither waiting nor in a chat, prompt to start
-        safe_reply(update, "❓ You're not in a chat or waiting 😔. Use /start to begin.")
+        # Check if user has a complete profile
+        user = get_user(user_id)
+        profile = user.get("profile", {})
+        required_fields = ["name", "age", "gender", "location"]
+        if all(field in profile for field in required_fields):
+            safe_reply(update, "🎉 Your profile is ready! Use `/next` to find a chat partner and start connecting! 🚀")
+        else:
+            safe_reply(update, "❓ You're not in a chat or waiting 😔. Use /start to begin.")
         return
 
     # Check message rate limit
@@ -2294,7 +2309,7 @@ def message_handler(update: Update, context: CallbackContext) -> None:
     if has_premium_feature(partner_id, "vaulted_chats"):
         partner_name = get_user(user_id).get("profile", {}).get("name", "Anonymous")
         chat_histories[partner_id] = chat_histories.get(partner_id, []) + [f"{partner_name}: {message_text}"]
-
+        
 def cleanup_rematch_requests(context: CallbackContext) -> None:
     """Clean up expired rematch requests"""
     current_time = int(time.time())
