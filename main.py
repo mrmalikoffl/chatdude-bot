@@ -514,8 +514,6 @@ def send_channel_notification(bot, message: str) -> bool:
         logger.error(f"Failed to send notification to channel {NOTIFICATION_CHANNEL_ID}: {e}")
         return False
 
-import re
-
 def escape_markdown_v2(text: str) -> str:
     if not isinstance(text, str):
         return str(text) if text is not None else ""
