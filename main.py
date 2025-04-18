@@ -2808,68 +2808,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.error(f"Error fetching bot statistics: {e}", exc_info=True)
         await safe_reply(update, "😔 Error retrieving statistics 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
-async def shutdown(application: Application) -> None:
-    """Gracefully shut down the Telegram bot."""
-    logger.info("Initiating bot shutdown...")
-    try:
-        if application.job_queue:
-            logger.info("Stopping job queue and canceling tasks...")
-            # Cancel all scheduled message deletion jobs
-            deletion_jobs = application.bot_data.get("message_deletion_jobs", {})
-            for job_id, job in deletion_jobs.items():
-                job.schedule_removal()
-                logger.debug(f"Canceled message deletion job {job_id}")
-            application.bot_data["message_deletion_jobs"] = {}
-            # Stop the job queue
-            application.job_queue.stop()
-        if application.running:
-            logger.info("Stopping application...")
-            await application.stop()
-        logger.info("Shutting down application...")
-        await application.shutdown()
-        logger.info("Bot shut down successfully")
-    except Exception as e:
-        logger.error(f"Error during shutdown: {e}")
 
-def handle_shutdown(loop: asyncio.AbstractEventLoop, application: Application) -> None:
-    """Handle shutdown signals (SIGTERM, SIGINT)."""
-    logger.info("Received shutdown signal")
-    tasks = [task for task in asyncio.all_tasks(loop) if task is not asyncio.current_task()]
-    for task in tasks:
-        task.cancel()
-    loop.run_until_complete(loop.create_task(shutdown(application)))
-    loop.run_until_complete(loop.shutdown_asyncgens())
-    loop.close()
-    logger.info("Event loop closed")
-
-async def main() -> None:
-    """Initialize and run the Telegram bot."""
-    token = os.getenv("TOKEN")
-    if not token:
-        logger.error("TOKEN not set")
-        raise EnvironmentError("TOKEN not set")
-
-    # Build Application
-    application = Application.builder().token(token).build()
-
-    # Define ConversationHandler for user setup
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            CONSENT: [CallbackQueryHandler(consent_handler, pattern="^consent_")],
-            VERIFICATION: [CallbackQueryHandler(verify_emoji, pattern="^emoji_")],
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_name)],
-            AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_age)],
-            GENDER: [CallbackQueryHandler(set_gender, pattern="^gender_")],
-            LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_location)],
-            TAGS: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_tags)],
-        },
-        fallbacks=[CommandHandler("start", start)],
-        allow_reentry=True,
-        per_message=False,
-    )
-
-    # Add handlers (unchanged)
 async def close_mongo_client() -> None:
     """Close the MongoDB client connection."""
     global mongo_client
@@ -2904,21 +2843,7 @@ async def shutdown(application: Application) -> None:
         await close_mongo_client()
         logger.info("Bot shut down successfully")
     except Exception as e:
-        logger.error(f"Error during shutdown: {e}")
-
-def handle_shutdown(application: Application) -> None:
-    """Handle shutdown signals (SIGTERM, SIGINT)."""
-    logger.info("Received shutdown signal")
-    loop = asyncio.get_event_loop()
-    try:
-        loop.run_until_complete(shutdown(application))
-    except Exception as e:
-        logger.error(f"Error in shutdown handler: {e}")
-    finally:
-        if not loop.is_closed():
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.close()
-            logger.info("Event loop closed")
+        logger.error(f"Error during shutdown: {e}", exc_info=True)
 
 async def main() -> None:
     """Initialize and run the Telegram bot."""
@@ -3009,10 +2934,6 @@ async def main() -> None:
     await application.initialize()
     logger.info("Application initialized")
 
-    # Set up signal handlers
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda signum, frame: handle_shutdown(application))
-
     # Run polling
     try:
         logger.info("Starting polling...")
@@ -3020,16 +2941,27 @@ async def main() -> None:
     except asyncio.CancelledError:
         logger.info("Polling cancelled, shutting down...")
     except Exception as e:
-        logger.error(f"Error during polling: {e}")
+        logger.error(f"Error during polling: {e}", exc_info=True)
         raise
     finally:
         await shutdown(application)
 
 if __name__ == "__main__":
+    def handle_shutdown(signum, frame):
+        """Handle shutdown signals (SIGTERM, SIGINT)."""
+        logger.info(f"Received signal {signum}, shutting down...")
+        raise SystemExit  # Trigger finally block in main()
+
+    # Set up signal handlers
+    signal.signal(signal.SIGTERM, handle_shutdown)
+    signal.signal(signal.SIGINT, handle_shutdown)
+
     try:
         asyncio.run(main())
+    except SystemExit:
+        logger.info("Shutdown signal processed")
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
-        logger.error(f"Error running bot: {e}")
+        logger.error(f"Error running bot: {e}", exc_info=True)
         raise
