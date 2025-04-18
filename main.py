@@ -682,8 +682,6 @@ async def set_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await send_channel_notification(context, notification_message)
     return ConversationHandler.END
 
-import random
-
 async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Match waiting users for chats."""
     with waiting_users_lock:
@@ -692,7 +690,7 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
         # Filter out banned users
         valid_users = [u for u in waiting_users if not is_banned(u)]
         if len(valid_users) < 2:
-            waiting_users[:] = [u for u in waiting_users if u in valid_users]
+            waiting_users[:] = valid_users
             return
         # Prioritize premium users with shine_profile
         premium_users = [u for u in valid_users if has_premium_feature(u, "shine_profile")]
@@ -708,87 +706,94 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
             if user1 not in waiting_users or user2 not in waiting_users:
                 i += 1
                 continue
-            if can_match(user1, user2):
-                waiting_users.remove(user1)
-                waiting_users.remove(user2)
-                user_pairs[user1] = user2
-                user_pairs[user2] = user1
-                # Set chat start time
-                chat_key = tuple(sorted([user1, user2]))
-                context.bot_data["chat_start_times"] = context.bot_data.get("chat_start_times", {})
-                context.bot_data["chat_start_times"][chat_key] = int(time.time())
-                logger.info(f"Matched users {user1} and {user2}, started chat timer")
-                user1_data = get_user(user1)
-                user2_data = get_user(user2)
-                user1_profile = user1_data.get("profile", {})
-                user2_profile = user2_data.get("profile", {})
-                user1_past = user1_profile.get("past_partners", [])
-                user2_past = user2_profile.get("past_partners", [])
-                if user2 not in user1_past:
-                    user1_past.append(user2)
-                if user1 not in user2_past:
-                    user2_past.append(user1)
-                user1_profile["past_partners"] = user1_past[-5:]
-                user2_profile["past_partners"] = user2_past[-5:]
-                update_user(user1, {
-                    "profile": user1_profile,
-                    "consent": user1_data.get("consent", False),
-                    "verified": user1_data.get("verified", False),
-                    "premium_expiry": user1_data.get("premium_expiry"),
-                    "premium_features": user1_data.get("premium_features", {}),
-                    "created_at": user1_data.get("created_at", int(time.time()))
-                })
-                update_user(user2, {
-                    "profile": user2_profile,
-                    "consent": user2_data.get("consent", False),
-                    "verified": user2_data.get("verified", False),
-                    "premium_expiry": user2_data.get("premium_expiry"),
-                    "premium_features": user2_data.get("premium_features", {}),
-                    "created_at": user2_data.get("created_at", int(time.time()))
-                })
-                user1_message = (
-                    "✅ *Connected!* Start chatting now! 🗣️\n\n"
-                    f"👤 *Partner Details*:\n"
-                    f"🧑 *Name*: {user2_profile.get('name', 'Not set')}\n"
-                    f"🎂 *Age*: {user2_profile.get('age', 'Not set')}\n"
-                    f"👤 *Gender*: {user2_profile.get('gender', 'Not set')}\n"
-                    f"📍 *Location*: {user2_profile.get('location', 'Not set')}\n\n"
-                    "Use /help for more options."
-                ) if has_premium_feature(user1, "partner_details") else (
-                    "✅ *Connected!* Start chatting now! 🗣️\n\n"
-                    "🔒 *Partner Details*: Upgrade to *Premium* to view your partner’s profile!\n"
-                    "Unlock with /premium.\n\n"
-                    "Use /help for more options."
-                )
-                user2_message = (
-                    "✅ *Connected!* Start chatting now! 🗣️\n\n"
-                    f"👤 *Partner Details*:\n"
-                    f"🧑 *Name*: {user1_profile.get('name', 'Not set')}\n"
-                    f"🎂 *Age*: {user1_profile.get('age', 'Not set')}\n"
-                    f"👤 *Gender*: {user1_profile.get('gender', 'Not set')}\n"
-                    f"📍 *Location*: {user1_profile.get('location', 'Not set')}\n\n"
-                    "Use /help for more options."
-                ) if has_premium_feature(user2, "partner_details") else (
-                    "✅ *Connected!* Start chatting now! 🗣️\n\n"
-                    "🔒 *Partner Details*: Upgrade to *Premium* to view your partner’s profile!\n"
-                    "Unlock with /premium.\n\n"
-                    "Use /help for more options."
-                )
-                try:
-                    await safe_send_message(user1, user1_message, context)
-                    await safe_send_message(user2, user2_message, context)
-                    if has_premium_feature(user1, "vaulted_chats"):
-                        chat_histories[user1] = []
-                    if has_premium_feature(user2, "vaulted_chats"):
-                        chat_histories[user2] = []
-                except Exception as e:
-                    logger.error(f"Failed to send match messages to {user1} or {user2}: {e}")
-                    # Unpair users if both messages fail
-                    user_pairs.pop(user1, None)
-                    user_pairs.pop(user2, None)
-                    context.bot_data["chat_start_times"].pop(chat_key, None)
-                    waiting_users.extend([user1, user2])
-                    continue
+            if not can_match(user1, user2):
+                i += 2
+                continue
+            # Retrieve user data and validate
+            user1_data = get_user(user1)
+            user2_data = get_user(user2)
+            if user1_data is None or user2_data is None:
+                logger.error(f"Failed to retrieve user data: user1={user1} ({user1_data}), user2={user2} ({user2_data})")
+                waiting_users[:] = [u for u in waiting_users if u not in (user1, user2)]
+                i += 2
+                continue
+            waiting_users.remove(user1)
+            waiting_users.remove(user2)
+            user_pairs[user1] = user2
+            user_pairs[user2] = user1
+            # Set chat start time
+            chat_key = tuple(sorted([user1, user2]))
+            context.bot_data.setdefault("chat_start_times", {})[chat_key] = int(time.time())
+            logger.info(f"Matched users {user1} and {user2}, started chat timer")
+            user1_profile = user1_data.get("profile", {})
+            user2_profile = user2_data.get("profile", {})
+            user1_past = user1_profile.get("past_partners", [])
+            user2_past = user2_profile.get("past_partners", [])
+            if user2 not in user1_past:
+                user1_past.append(user2)
+            if user1 not in user2_past:
+                user2_past.append(user1)
+            user1_profile["past_partners"] = user1_past[-5:]
+            user2_profile["past_partners"] = user2_past[-5:]
+            update_user(user1, {
+                "profile": user1_profile,
+                "consent": user1_data.get("consent", False),
+                "verified": user1_data.get("verified", False),
+                "premium_expiry": user1_data.get("premium_expiry"),
+                "premium_features": user1_data.get("premium_features", {}),
+                "created_at": user1_data.get("created_at", int(time.time()))
+            })
+            update_user(user2, {
+                "profile": user2_profile,
+                "consent": user2_data.get("consent", False),
+                "verified": user2_data.get("verified", False),
+                "premium_expiry": user2_data.get("premium_expiry"),
+                "premium_features": user2_data.get("premium_features", {}),
+                "created_at": user2_data.get("created_at", int(time.time()))
+            })
+            # Build messages with escaped MarkdownV2 characters
+            user1_message = (
+                "✅ *Connected\\!* Start chatting now\\! 🗣️\n\n"
+                f"👤 *Partner Details*:\n"
+                f"🧑 *Name*: {escape_markdownv2(user2_profile.get('name', 'Not set'))}\n"
+                f"🎂 *Age*: {escape_markdownv2(user2_profile.get('age', 'Not set'))}\n"
+                f"👤 *Gender*: {escape_markdownv2(user2_profile.get('gender', 'Not set'))}\n"
+                f"📍 *Location*: {escape_markdownv2(user2_profile.get('location', 'Not set'))}\n\n"
+                "Use /help for more options\\."
+            ) if has_premium_feature(user1, "partner_details") else (
+                "✅ *Connected\\!* Start chatting now\\! 🗣️\n\n"
+                "🔒 *Partner Details*: Upgrade to *Premium* to view your partner’s profile\\!\n"
+                "Unlock with /premium\\.\n\n"
+                "Use /help for more options\\."
+            )
+            user2_message = (
+                "✅ *Connected\\!* Start chatting now\\! 🗣️\n\n"
+                f"👤 *Partner Details*:\n"
+                f"🧑 *Name*: {escape_markdownv2(user1_profile.get('name', 'Not set'))}\n"
+                f"🎂 *Age*: {escape_markdownv2(user1_profile.get('age', 'Not set'))}\n"
+                f"👤 *Gender*: {escape_markdownv2(user1_profile.get('gender', 'Not set'))}\n"
+                f"📍 *Location*: {escape_markdownv2(user1_profile.get('location', 'Not set'))}\n\n"
+                "Use /help for more options\\."
+            ) if has_premium_feature(user2, "partner_details") else (
+                "✅ *Connected\\!* Start chatting now\\! 🗣️\n\n"
+                "🔒 *Partner Details*: Upgrade to *Premium* to view your partner’s profile\\!\n"
+                "Unlock with /premium\\.\n\n"
+                "Use /help for more options\\."
+            )
+            try:
+                await safe_send_message(user1, user1_message, context, parse_mode=ParseMode.MARKDOWN_V2)
+                await safe_send_message(user2, user2_message, context, parse_mode=ParseMode.MARKDOWN_V2)
+                if has_premium_feature(user1, "vaulted_chats"):
+                    chat_histories[user1] = []
+                if has_premium_feature(user2, "vaulted_chats"):
+                    chat_histories[user2] = []
+                return
+            except Exception as e:
+                logger.error(f"Failed to send match messages to {user1} or {user2}: {e}")
+                user_pairs.pop(user1, None)
+                user_pairs.pop(user2, None)
+                context.bot_data["chat_start_times"].pop(chat_key, None)
+                waiting_users.extend([user1, user2])
                 return
             i += 2
 
