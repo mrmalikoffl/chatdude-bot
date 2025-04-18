@@ -382,18 +382,34 @@ async def safe_send_message(chat_id: int, text: str, context: ContextTypes.DEFAU
     except telegram.error.TelegramError as e:
         logger.error(f"Failed to send message to chat {chat_id}: {e}")
 
-async def send_channel_notification(context: ContextTypes.DEFAULT_TYPE, message: str):
-    """Send a notification to the configured channel."""
+async def send_channel_notification(context: ContextTypes.DEFAULT_TYPE, message: str) -> None:
     try:
-        await safe_send_message(
-            NOTIFICATION_CHANNEL_ID,
-            escape_markdown_v2(message),
-            context,
-            parse_mode="MarkdownV2"
+        if not message or message.strip() == "":
+            message = "⚠️ An error occurred, but no details were provided."
+        # Escape special characters for MarkdownV2
+        escaped_message = "".join(
+            f"\\{char}" if char in MARKDOWNV2_SPECIAL_CHARS else char
+            for char in message
         )
-        logger.info(f"Sent notification to channel {NOTIFICATION_CHANNEL_ID}: {message[:50]}...")
+        await context.bot.send_message(
+            chat_id=NOTIFICATION_CHANNEL_ID,
+            text=escaped_message,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        logger.info(f"Sent channel notification: {escaped_message}")
     except telegram.error.TelegramError as e:
-        logger.error(f"Failed to send notification to channel {NOTIFICATION_CHANNEL_ID}: {e}")
+        logger.error(f"Failed to send channel notification: {e}")
+        # Fallback: Send without Markdown
+        await context.bot.send_message(
+            chat_id=NOTIFICATION_CHANNEL_ID,
+            text="⚠️ Error sending notification: " + str(e)
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error in send_channel_notification: {e}")
+        await context.bot.send_message(
+            chat_id=NOTIFICATION_CHANNEL_ID,
+            text="⚠️ Unexpected error: " + str(e)
+        )
 
 @restrict_access
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
