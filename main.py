@@ -337,12 +337,30 @@ def delete_user(user_id: int):
         raise
 
 def escape_markdown_v2(text):
-    """Escape special characters for Telegram MarkdownV2."""
+    """Escape special characters for Telegram MarkdownV2, preserving formatting markers."""
     if not isinstance(text, str):
         return str(text)
-    for char in MARKDOWNV2_SPECIAL_CHARS:
-        text = text.replace(char, f"\\{char}")
-    return text
+    
+    # Split the text into bolded (*text*) and non-bolded sections
+    parts = re.split(r'(\*[^\*]+\*)', text)
+    escaped_parts = []
+    
+    for part in parts:
+        if part.startswith('*') and part.endswith('*'):
+            # This is a bold section (e.g., *Name*)
+            inner_text = part[1:-1]  # Extract text between *...*
+            # Escape special characters within the bolded text, but not the * markers
+            for char in MARKDOWNV2_SPECIAL_CHARS:
+                if char != '*':  # Preserve the * used for bold
+                    inner_text = inner_text.replace(char, f"\\{char}")
+            escaped_parts.append(f"*{inner_text}*")
+        else:
+            # This is a non-bold section, escape all special characters
+            for char in MARKDOWNV2_SPECIAL_CHARS:
+                part = part.replace(char, f"\\{char}")
+            escaped_parts.append(part)
+    
+    return "".join(escaped_parts)
 
 async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = "MarkdownV2", **kwargs) -> None:
     try:
