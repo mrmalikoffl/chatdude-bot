@@ -84,6 +84,9 @@ NAME, AGE, GENDER, LOCATION, CONSENT, VERIFICATION, TAGS = range(7)
 # Emoji list for verification
 VERIFICATION_EMOJIS = ['😊', '😢', '😡', '😎', '😍', '😉', '😜', '😴']
 
+# Flag to track shutdown state
+_shutdown_initiated = False
+
 # MongoDB client and database
 mongo_client = None
 db = None
