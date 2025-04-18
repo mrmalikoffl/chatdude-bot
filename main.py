@@ -362,43 +362,66 @@ def escape_markdown_v2(text):
     
     return "".join(escaped_parts)
 
-async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = "MarkdownV2", **kwargs) -> None:
+async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = "MarkdownV2", **kwargs) -> telegram.Message:
     try:
         if parse_mode == "MarkdownV2":
             text = escape_markdown_v2(text)
         if update.callback_query and not kwargs.get("reply_markup"):
-            await update.callback_query.message.edit_text(text, parse_mode=parse_mode, **kwargs)
+            sent_message = await update.callback_query.message.edit_text(text, parse_mode=parse_mode, **kwargs)
         elif update.message:
-            await update.message.reply_text(text, parse_mode=parse_mode, **kwargs)
+            sent_message = await update.message.reply_text(text, parse_mode=parse_mode, **kwargs)
         else:
-            await update.callback_query.message.reply_text(text, parse_mode=parse_mode, **kwargs)
-        logger.info(f"Sent reply to user {update.effective_user.id}: {text[:50]}...")
+            sent_message = await update.callback_query.message.reply_text(text, parse_mode=parse_mode, **kwargs)
+        
+        if sent_message is None:
+            raise telegram.error.TelegramError(f"Failed to send reply to user {update.effective_user.id}: Telegram API returned None")
+        logger.info(f"Sent reply to user {update.effective_user.id}: {text[:50]}... (Message ID: {sent_message.message_id})")
+        return sent_message
     except telegram.error.BadRequest as bre:
         logger.warning(f"MarkdownV2 parsing failed: {bre}. Text: {text[:200]}")
         clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', '', text)
-        if update.callback_query and not kwargs.get("reply_markup"):
-            await update.callback_query.message.edit_text(clean_text, parse_mode=None, **kwargs)
-        elif update.message:
-            await update.message.reply_text(clean_text, parse_mode=None, **kwargs)
-        else:
-            await update.callback_query.message.reply_text(clean_text, parse_mode=None, **kwargs)
-        logger.info(f"Sent clean reply to user {update.effective_user.id}: {clean_text[:50]}...")
+        try:
+            if update.callback_query and not kwargs.get("reply_markup"):
+                sent_message = await update.callback_query.message.edit_text(clean_text, parse_mode=None, **kwargs)
+            elif update.message:
+                sent_message = await update.message.reply_text(clean_text, parse_mode=None, **kwargs)
+            else:
+                sent_message = await update.callback_query.message.reply_text(clean_text, parse_mode=None, **kwargs)
+            if sent_message is None:
+                raise telegram.error.TelegramError(f"Failed to send clean reply to user {update.effective_user.id}: Telegram API returned None")
+            logger.info(f"Sent clean reply to user {update.effective_user.id}: {clean_text[:50]}... (Message ID: {sent_message.message_id})")
+            return sent_message
+        except telegram.error.TelegramError as e:
+            logger.error(f"Failed to send clean reply to user {update.effective_user.id}: {e}")
+            raise
     except telegram.error.TelegramError as e:
         logger.error(f"Failed to send reply to user {update.effective_user.id}: {e}")
+        raise
 
-async def safe_send_message(chat_id: int, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = "MarkdownV2", **kwargs):
+async def safe_send_message(chat_id: int, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = "MarkdownV2", **kwargs) -> telegram.Message:
     try:
         if parse_mode == "MarkdownV2":
             text = escape_markdown_v2(text)
-        await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, **kwargs)
-        logger.info(f"Sent message to chat {chat_id}: {text[:50]}...")
+        sent_message = await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, **kwargs)
+        if sent_message is None:
+            raise telegram.error.TelegramError(f"Failed to send message to chat {chat_id}: Telegram API returned None")
+        logger.info(f"Sent message to chat {chat_id}: {text[:50]}... (Message ID: {sent_message.message_id})")
+        return sent_message
     except telegram.error.BadRequest as e:
         logger.warning(f"MarkdownV2 parsing failed for chat {chat_id}: {e}")
         clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', '', text)
-        await context.bot.send_message(chat_id=chat_id, text=clean_text, parse_mode=None, **kwargs)
-        logger.info(f"Sent clean message to chat {chat_id}: {clean_text[:50]}...")
+        try:
+            sent_message = await context.bot.send_message(chat_id=chat_id, text=clean_text, parse_mode=None, **kwargs)
+            if sent_message is None:
+                raise telegram.error.TelegramError(f"Failed to send clean message to chat {chat_id}: Telegram API returned None")
+            logger.info(f"Sent clean message to chat {chat_id}: {clean_text[:50]}... (Message ID: {sent_message.message_id})")
+            return sent_message
+        except telegram.error.TelegramError as e:
+            logger.error(f"Failed to send clean message to chat {chat_id}: {e}")
+            raise
     except telegram.error.TelegramError as e:
         logger.error(f"Failed to send message to chat {chat_id}: {e}")
+        raise
 
 async def send_channel_notification(context: ContextTypes.DEFAULT_TYPE, message: str) -> None:
     try:
