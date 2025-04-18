@@ -81,6 +81,9 @@ INACTIVITY_TIMEOUT = 600  # 10 minutes
 # Conversation states
 NAME, AGE, GENDER, LOCATION, CONSENT, VERIFICATION, TAGS = range(7)
 
+# Define Telegram MarkdownV2 special characters that need escaping
+MARKDOWNV2_SPECIAL_CHARS = r"""_*[]()~`>#+-=|{}.!'"""
+
 # Emoji list for verification
 VERIFICATION_EMOJIS = ['😊', '😢', '😡', '😎', '😍', '😉', '😜', '😴']
 
@@ -332,11 +335,13 @@ def delete_user(user_id: int):
         logger.error(f"Unexpected error deleting user {user_id}: {e}")
         raise
 
-def escape_markdown_v2(text: str) -> str:
+def escape_markdownv2(text):
+    """Escape special characters for Telegram MarkdownV2."""
     if not isinstance(text, str):
-        return str(text) if text is not None else ""
-    special_chars = r'_[]()~`>#+-=|{}.!'
-    return re.sub(r'([{}])'.format(re.escape(special_chars)), r'\\\1', str(text))
+        return str(text)
+    for char in MARKDOWNV2_SPECIAL_CHARS:
+        text = text.replace(char, f"\\{char}")
+    return text
 
 async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = "MarkdownV2", **kwargs) -> None:
     try:
@@ -2894,7 +2899,7 @@ def main() -> None:
         try:
             application.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
             application.job_queue.run_repeating(process_queued_operations, interval=60, first=10)
-            application.job_queue.run_repeating(match_users, interval=10, first=5)
+            application.job_queue.run_repeating(match_users, interval=30, first=5)
             logger.info("Scheduled job queue tasks")
         except NameError as e:
             logger.error(f"Job queue function not defined: {e}")
