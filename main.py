@@ -96,20 +96,18 @@ db = None
 operation_queue = Queue()
 
 def init_mongodb(max_retries=3, retry_delay=5):
-    """Initialize MongoDB connection with retries."""
     uri = os.getenv("MONGODB_URI")
     db_name = os.getenv("MONGO_DB_NAME", "talk2anyone")
     if not uri:
         logger.error("MONGODB_URI not set")
         raise EnvironmentError("MONGODB_URI not set")
-    
+
     for attempt in range(max_retries):
         try:
-            logger.info(f"Connecting to MongoDB (attempt {attempt + 1}/{max_retries})")
+            logger.info(f"Connecting to MongoDB with URI: {uri} (attempt {attempt + 1}/{max_retries})")
             client = MongoClient(uri, serverSelectionTimeoutMS=5000)
             client.admin.command("ping")
             db = client[db_name]
-            # Create indexes
             db.users.create_index("user_id", unique=True)
             db.reports.create_index("reported_id")
             db.keyword_violations.create_index("user_id")
@@ -126,6 +124,9 @@ def init_mongodb(max_retries=3, retry_delay=5):
     raise Exception("MongoDB connection failed")
 
 def get_db_collection(collection_name):
+    if db is None:
+        logger.error("Database connection not initialized")
+        raise Exception("Database connection not initialized")
     return db[collection_name]
 
 async def process_queued_operations(context: ContextTypes.DEFAULT_TYPE) -> None:
