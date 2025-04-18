@@ -13,6 +13,7 @@ import logging
 import asyncio
 import os
 import time
+import signal
 from datetime import datetime, timedelta
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, OperationFailure
