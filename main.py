@@ -2807,15 +2807,39 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.error(f"Error fetching bot statistics: {e}", exc_info=True)
         await safe_reply(update, "😔 Error retrieving statistics 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
-async def shutdown(application):
-    logger.info("Received shutdown signal, stopping bot...")
+async def shutdown(application: Application) -> None:
+    """Gracefully shut down the Telegram bot."""
+    logger.info("Initiating bot shutdown...")
     try:
+        if application.job_queue:
+            logger.info("Stopping job queue and canceling tasks...")
+            # Cancel all scheduled message deletion jobs
+            deletion_jobs = application.bot_data.get("message_deletion_jobs", {})
+            for job_id, job in deletion_jobs.items():
+                job.schedule_removal()
+                logger.debug(f"Canceled message deletion job {job_id}")
+            application.bot_data["message_deletion_jobs"] = {}
+            # Stop the job queue
+            application.job_queue.stop()
         if application.running:
+            logger.info("Stopping application...")
             await application.stop()
+        logger.info("Shutting down application...")
         await application.shutdown()
+        logger.info("Bot shut down successfully")
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
-    logger.info("Bot shut down successfully")
+
+def handle_shutdown(loop: asyncio.AbstractEventLoop, application: Application) -> None:
+    """Handle shutdown signals (SIGTERM, SIGINT)."""
+    logger.info("Received shutdown signal")
+    tasks = [task for task in asyncio.all_tasks(loop) if task is not asyncio.current_task()]
+    for task in tasks:
+        task.cancel()
+    loop.run_until_complete(loop.create_task(shutdown(application)))
+    loop.run_until_complete(loop.shutdown_asyncgens())
+    loop.close()
+    logger.info("Event loop closed")
 
 async def main() -> None:
     """Initialize and run the Telegram bot."""
@@ -2841,10 +2865,10 @@ async def main() -> None:
         },
         fallbacks=[CommandHandler("start", start)],
         allow_reentry=True,
-        per_message=False,  # Avoid PTBUserWarning
+        per_message=False,
     )
 
-    # Add handlers
+    # Add handlers (unchanged)
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("stop", restrict_access(stop)))
     application.add_handler(CommandHandler("next", restrict_access(next_chat)))
@@ -2862,7 +2886,7 @@ async def main() -> None:
     application.add_handler(CommandHandler("report", restrict_access(report)))
     application.add_handler(CommandHandler("deleteprofile", restrict_access(delete_profile)))
 
-    # Add admin command handlers
+    # Add admin command handlers (unchanged)
     application.add_handler(CommandHandler("admin", admin_access))
     application.add_handler(CommandHandler("admin_userslist", admin_userslist))
     application.add_handler(CommandHandler("admin_premiumuserslist", admin_premiumuserslist))
@@ -2878,17 +2902,11 @@ async def main() -> None:
     application.add_handler(CommandHandler("admin_stats", admin_stats))
     application.add_handler(CommandHandler("admin_broadcast", admin_broadcast))
 
-    # Handle all callback queries (buttons)
+    # Handle callback queries and payments (unchanged)
     application.add_handler(CallbackQueryHandler(button))
-
-    # Handle payments
     application.add_handler(PreCheckoutQueryHandler(pre_checkout))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-
-    # Handle regular messages
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-
-    # Add error handler
     application.add_error_handler(error_handler)
 
     # Schedule job queue tasks
@@ -2907,24 +2925,42 @@ async def main() -> None:
         logger.error("Failed to initialize job queue")
         raise RuntimeError("Failed to initialize job queue")
 
-    logger.info("Starting bot...")
+    # Initialize application
+    logger.info("Initializing application...")
+    await application.initialize()
+    logger.info("Application initialized")
+
+    # Set up signal handlers
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(
+            sig,
+            lambda: handle_shutdown(loop, application)
+        )
+
+    # Run polling
     try:
-        logger.info("Initializing application...")
-        await application.initialize()
-        logger.info("Application initialized")
+        logger.info("Starting polling...")
         await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    except asyncio.CancelledError:
+        logger.info("Polling cancelled, shutting down...")
     except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
+        logger.error(f"Error during polling: {e}")
         raise
     finally:
-        logger.info("Initiating shutdown...")
         await shutdown(application)
 
 if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
     try:
-        asyncio.run(main())
+        loop.run_until_complete(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Error running bot: {e}")
         raise
+    finally:
+        if not loop.is_closed():
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+            logger.info("Event loop closed in main")
