@@ -2830,11 +2830,10 @@ async def main() -> None:
         },
         fallbacks=[CommandHandler("start", start)],
         allow_reentry=True,
-        # Explicitly set per_message=True to address PTBUserWarning
         per_message=True,
     )
 
-    # Add handlers with restrict_access
+    # Add handlers
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("stop", restrict_access(stop)))
     application.add_handler(CommandHandler("next", restrict_access(next_chat)))
@@ -2897,25 +2896,35 @@ async def main() -> None:
         logger.error("Failed to initialize job queue")
         raise RuntimeError("Failed to initialize job queue")
 
+    # Define shutdown function
+    async def shutdown():
+        logger.info("Received shutdown signal, stopping bot...")
+        if application.job_queue:
+            application.job_queue.stop()
+        await application.stop()
+        await application.shutdown()
+        logger.info("Bot shut down successfully")
+
+    # Register signal handlers
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown()))
+
     logger.info("Starting bot...")
     try:
+        await application.initialize()  # Explicitly initialize
         await application.run_polling(allowed_updates=Update.ALL_TYPES)
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
         raise
+    finally:
+        await shutdown()  # Ensure shutdown is called
 
 if __name__ == "__main__":
     try:
-        # Get the current event loop or create a new one if none exists
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If the loop is already running, create a new task
-            loop.create_task(main())
-        else:
-            # Run the main function in the loop
-            loop.run_until_complete(main())
-    except RuntimeError as e:
-        # Handle case where no loop exists or other loop-related errors
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(main())
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Error running bot: {e}")
+        raise
