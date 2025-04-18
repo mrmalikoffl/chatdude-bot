@@ -2809,11 +2809,12 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def shutdown(application):
     logger.info("Received shutdown signal, stopping bot...")
-    if application.job_queue:
-        await application.job_queue.stop()
-    if application.running:  # Check if application is running
-        await application.stop()
-    await application.shutdown()
+    try:
+        if application.running:
+            await application.stop()
+        await application.shutdown()
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
     logger.info("Bot shut down successfully")
 
 async def main() -> None:
@@ -2840,7 +2841,7 @@ async def main() -> None:
         },
         fallbacks=[CommandHandler("start", start)],
         allow_reentry=True,
-        per_message=False,  # Changed to False to avoid PTBUserWarning
+        per_message=False,  # Avoid PTBUserWarning
     )
 
     # Add handlers
