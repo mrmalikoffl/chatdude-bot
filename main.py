@@ -2807,6 +2807,15 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.error(f"Error fetching bot statistics: {e}", exc_info=True)
         await safe_reply(update, "😔 Error retrieving statistics 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
+async def shutdown(application):
+    logger.info("Received shutdown signal, stopping bot...")
+    if application.job_queue:
+        await application.job_queue.stop()
+    if application.running:  # Check if application is running
+        await application.stop()
+    await application.shutdown()
+    logger.info("Bot shut down successfully")
+
 async def main() -> None:
     """Initialize and run the Telegram bot."""
     token = os.getenv("TOKEN")
@@ -2831,7 +2840,7 @@ async def main() -> None:
         },
         fallbacks=[CommandHandler("start", start)],
         allow_reentry=True,
-        per_message=True,
+        per_message=False,  # Changed to False to avoid PTBUserWarning
     )
 
     # Add handlers
@@ -2897,29 +2906,18 @@ async def main() -> None:
         logger.error("Failed to initialize job queue")
         raise RuntimeError("Failed to initialize job queue")
 
-    # Define shutdown function
-    async def shutdown():
-        logger.info("Received shutdown signal, stopping bot...")
-        if application.job_queue:
-            application.job_queue.stop()
-        await application.stop()
-        await application.shutdown()
-        logger.info("Bot shut down successfully")
-
-    # Register signal handlers
-    loop = asyncio.get_event_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown()))
-
     logger.info("Starting bot...")
     try:
-        await application.initialize()  # Explicitly initialize
+        logger.info("Initializing application...")
+        await application.initialize()
+        logger.info("Application initialized")
         await application.run_polling(allowed_updates=Update.ALL_TYPES)
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
         raise
     finally:
-        await shutdown()  # Ensure shutdown is called
+        logger.info("Initiating shutdown...")
+        await shutdown(application)
 
 if __name__ == "__main__":
     try:
