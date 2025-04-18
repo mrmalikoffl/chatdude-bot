@@ -2811,80 +2811,16 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.error(f"Error fetching bot statistics: {e}", exc_info=True)
         await safe_reply(update, "😔 Error retrieving statistics 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
-async def close_mongo_client() -> None:
-    """Close the MongoDB client connection."""
-    global mongo_client
-    if mongo_client:
-        try:
-            mongo_client.close()
-            logger.info("MongoDB client closed")
-        except Exception as e:
-            logger.error(f"Error closing MongoDB client: {e}", exc_info=True)
-        mongo_client = None
-
-async def shutdown(application: Application) -> None:
-    """Gracefully shut down the Telegram bot."""
-    global _shutdown_initiated
-    if _shutdown_initiated:
-        logger.info("Shutdown already in progress, skipping...")
-        return
-    _shutdown_initiated = True
-    logger.info("Initiating bot shutdown...")
-    try:
-        # Cancel all running tasks
-        current_task = asyncio.current_task()
-        tasks = [task for task in asyncio.all_tasks() if task is not current_task]
-        for task in tasks:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                logger.debug(f"Task {task.get_name()} cancelled")
-        # Stop updater
-        if application.updater and application.updater.running:
-            logger.info("Stopping updater...")
-            try:
-                await application.updater.stop()
-            except Exception as e:
-                logger.error(f"Error stopping updater: {e}", exc_info=True)
-        # Stop job queue
-        if application.job_queue:
-            logger.info("Stopping job queue and canceling tasks...")
-            deletion_jobs = application.bot_data.get("message_deletion_jobs", {})
-            for job_id, job in deletion_jobs.items():
-                job.schedule_removal()
-                logger.debug(f"Canceled message deletion job {job_id}")
-            application.bot_data["message_deletion_jobs"] = {}
-            application.job_queue.stop()
-        # Stop application
-        if application.running:
-            logger.info("Stopping application...")
-            try:
-                await application.stop()
-            except Exception as e:
-                logger.error(f"Error stopping application: {e}", exc_info=True)
-        logger.info("Shutting down application...")
-        try:
-            await application.shutdown()
-        except Exception as e:
-            logger.error(f"Error shutting down application: {e}", exc_info=True)
-        await close_mongo_client()
-        logger.info("Bot shut down successfully")
-    except Exception as e:
-        logger.error(f"Error during shutdown: {e}", exc_info=True)
-    finally:
-        _shutdown_initiated = False
-
-async def main() -> None:
+def main() -> None:
     """Initialize and run the Telegram bot."""
     token = os.getenv("TOKEN")
     if not token:
         logger.error("TOKEN not set")
         raise EnvironmentError("TOKEN not set")
-
     # Build Application
     application = Application.builder().token(token).build()
-
+    
+    
     # Define ConversationHandler for user setup
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -2895,13 +2831,12 @@ async def main() -> None:
             AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_age)],
             GENDER: [CallbackQueryHandler(set_gender, pattern="^gender_")],
             LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_location)],
-            TAGS: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_tags)],
+            TAGS: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_tags)]
         },
         fallbacks=[CommandHandler("start", start)],
-        allow_reentry=True,
-        per_message=False,
+        allow_reentry=True
     )
-
+    
     # Add handlers (unchanged)
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("stop", restrict_access(stop)))
@@ -2919,8 +2854,8 @@ async def main() -> None:
     application.add_handler(CommandHandler("settings", restrict_access(settings)))
     application.add_handler(CommandHandler("report", restrict_access(report)))
     application.add_handler(CommandHandler("deleteprofile", restrict_access(delete_profile)))
-
-    # Add admin command handlers (unchanged)
+    
+    # Add admin command handlers
     application.add_handler(CommandHandler("admin", admin_access))
     application.add_handler(CommandHandler("admin_userslist", admin_userslist))
     application.add_handler(CommandHandler("admin_premiumuserslist", admin_premiumuserslist))
@@ -2935,93 +2870,42 @@ async def main() -> None:
     application.add_handler(CommandHandler("admin_clear_reports", admin_clear_reports))
     application.add_handler(CommandHandler("admin_stats", admin_stats))
     application.add_handler(CommandHandler("admin_broadcast", admin_broadcast))
-
-    # Handle callback queries and payments (unchanged)
+    
+    # Handle all callback queries (buttons)
     application.add_handler(CallbackQueryHandler(button))
+    
+    # Handle payments
     application.add_handler(PreCheckoutQueryHandler(pre_checkout))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+    
+    # Handle regular messages
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    
+    # Add error handler
     application.add_error_handler(error_handler)
-
-    # Schedule job queue tasks
+    
+     # Schedule recurring jobs
     if application.job_queue:
         try:
-            application.job_queue.run_repeating(cleanup_in_memory, interval=600, first=10)
-            application.job_queue.run_repeating(process_queued_operations, interval=120, first=10)
-            application.job_queue.run_repeating(match_users, interval=60, first=5)
-            application.job_queue.run_repeating(cleanup_rematch_requests, interval=7200, first=60)
-            application.job_queue.run_repeating(cleanup_personal_chat_requests, interval=7200, first=60)
+            application.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
+            application.job_queue.run_repeating(process_queued_operations, interval=60, first=10)
+            application.job_queue.run_repeating(match_users, interval=10, first=5)
             logger.info("Scheduled job queue tasks")
         except NameError as e:
-            logger.error(f"Job queue function not defined: {e}", exc_info=True)
+            logger.error(f"Job queue function not defined: {e}")
             raise
     else:
         logger.error("Failed to initialize job queue")
         raise RuntimeError("Failed to initialize job queue")
-
-    # Initialize application
-    logger.info("Initializing application...")
+    
+    logger.info("Starting bot...")
     try:
-        await application.initialize()
-        logger.info("Application initialized")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
     except Exception as e:
-        logger.error(f"Failed to initialize application: {e}", exc_info=True)
+        logger.error(f"Failed to start bot: {e}")
         raise
-
-    # Run polling
-    try:
-        logger.info("Starting polling...")
-        await application.run_polling(allowed_updates=Update.ALL_TYPES, stop_signals=[])
-    except asyncio.CancelledError:
-        logger.info("Polling cancelled, shutting down...")
-    except Exception as e:
-        logger.error(f"Error during polling: {e}", exc_info=True)
-        raise
-    finally:
-        await shutdown(application)
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    application = None
+    main() 
 
-    def handle_shutdown(signum, frame):
-        """Handle shutdown signals (SIGTERM, SIGINT)."""
-        global application
-        logger.info(f"Received signal {signum}")
-        if application:
-            # Cancel all tasks immediately
-            tasks = [task for task in asyncio.all_tasks(loop) if task is not asyncio.current_task()]
-            for task in tasks:
-                task.cancel()
-            # Schedule shutdown
-            loop.create_task(shutdown(application))
-            # Force loop to stop after brief delay to ensure shutdown starts
-            loop.call_later(1.0, loop.stop)
-
-    try:
-        # Build application synchronously
-        token = os.getenv("TOKEN")
-        if not token:
-            logger.error("TOKEN not set")
-            raise EnvironmentError("TOKEN not set")
-        application = Application.builder().token(token).build()
-
-        # Set up signal handlers
-        signal.signal(signal.SIGTERM, handle_shutdown)
-        signal.signal(signal.SIGINT, handle_shutdown)
-
-        # Run main
-        loop.run_until_complete(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot stopped by user or signal")
-    except Exception as e:
-        logger.error(f"Error running bot: {e}", exc_info=True)
-        raise
-    finally:
-        if application:
-            loop.run_until_complete(shutdown(application))
-        if not loop.is_closed():
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.close()
-            logger.info("Event loop closed")
 
