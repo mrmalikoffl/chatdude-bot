@@ -335,7 +335,7 @@ def delete_user(user_id: int):
         logger.error(f"Unexpected error deleting user {user_id}: {e}")
         raise
 
-def escape_markdownv2(text):
+def escape_markdown_v2(text):
     """Escape special characters for Telegram MarkdownV2."""
     if not isinstance(text, str):
         return str(text)
