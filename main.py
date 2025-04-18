@@ -2824,14 +2824,24 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 def main() -> None:
     """Initialize and run the Telegram bot."""
+    global db  # Ensure db is accessible globally
+    # Initialize MongoDB
+    try:
+        db = init_mongodb()
+        logger.info("MongoDB initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize MongoDB: {e}")
+        raise EnvironmentError("Cannot start bot without MongoDB connection")
+
+    # Get Telegram bot token
     token = os.getenv("TOKEN")
     if not token:
         logger.error("TOKEN not set")
         raise EnvironmentError("TOKEN not set")
+
     # Build Application
     application = Application.builder().token(token).build()
-    
-    
+
     # Define ConversationHandler for user setup
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -2847,8 +2857,8 @@ def main() -> None:
         fallbacks=[CommandHandler("start", start)],
         allow_reentry=True
     )
-    
-    # Add handlers (unchanged)
+
+    # Add handlers
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("stop", restrict_access(stop)))
     application.add_handler(CommandHandler("next", restrict_access(next_chat)))
@@ -2865,7 +2875,7 @@ def main() -> None:
     application.add_handler(CommandHandler("settings", restrict_access(settings)))
     application.add_handler(CommandHandler("report", restrict_access(report)))
     application.add_handler(CommandHandler("deleteprofile", restrict_access(delete_profile)))
-    
+
     # Add admin command handlers
     application.add_handler(CommandHandler("admin", admin_access))
     application.add_handler(CommandHandler("admin_userslist", admin_userslist))
@@ -2881,21 +2891,21 @@ def main() -> None:
     application.add_handler(CommandHandler("admin_clear_reports", admin_clear_reports))
     application.add_handler(CommandHandler("admin_stats", admin_stats))
     application.add_handler(CommandHandler("admin_broadcast", admin_broadcast))
-    
+
     # Handle all callback queries (buttons)
     application.add_handler(CallbackQueryHandler(button))
-    
+
     # Handle payments
     application.add_handler(PreCheckoutQueryHandler(pre_checkout))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-    
+
     # Handle regular messages
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    
+
     # Add error handler
     application.add_error_handler(error_handler)
-    
-     # Schedule recurring jobs
+
+    # Schedule recurring jobs
     if application.job_queue:
         try:
             application.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
@@ -2908,7 +2918,7 @@ def main() -> None:
     else:
         logger.error("Failed to initialize job queue")
         raise RuntimeError("Failed to initialize job queue")
-    
+
     logger.info("Starting bot...")
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES)
@@ -2917,6 +2927,6 @@ def main() -> None:
         raise
 
 if __name__ == "__main__":
-    main() 
+    main()
 
 
