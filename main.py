@@ -940,76 +940,93 @@ async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle successful payment and grant premium features."""
     user_id = update.effective_user.id
     payment = update.message.successful_payment
-    if payment.currency != "XTR":
-        return
-    payload = payment.invoice_payload
+    invoice_payload = payment.invoice_payload
     current_time = int(time.time())
-    feature_map = {
-        "flare_messages": (7 * 24 * 3600, "✨ *Flare Messages* activated for 7 days!", "Flare Messages", 100),
-        "instant_rematch": (None, "🔄 *Instant Rematch* unlocked! Use /instant to reconnect.", "Instant Rematch", 100),
-        "shine_profile": (24 * 3600, "🌟 *Shine Profile* activated for 24 hours!", "Shine Profile", 250),
-        "mood_match": (30 * 24 * 3600, "😊 *Mood Match* activated for 30 days!", "Mood Match", 250),
-        "partner_details": (30 * 24 * 3600, "👤 *Partner Details* unlocked for 30 days!", "Partner Details", 500),
-        "vaulted_chats": (None, "📜 *Vaulted Chats* unlocked forever!", "Vaulted Chats", 500),
-        "premium_pass": (30 * 24 * 3600, "🎉 *Premium Pass* activated! Enjoy all features for 30 days + 5 Instant Rematches!", "Premium Pass", 1000),
-    }
+    
     user = get_user(user_id)
     features = user.get("premium_features", {})
-    premium_expiry = user.get("premium_expiry")
-    profile = user.get("profile", {})
-    for feature, (duration, message, feature_name, stars) in feature_map.items():
-        if payload.startswith(feature):
-            if feature == "premium_pass":
-                new_expiry = max(premium_expiry or current_time, current_time + 30 * 24 * 3600)
-                features.update({
-                    "shine_profile": current_time + 30 * 24 * 3600,
-                    "mood_match": current_time + 30 * 24 * 3600,
-                    "partner_details": current_time + 30 * 24 * 3600,
-                    "vaulted_chats": True,
-                    "flare_messages": current_time + 30 * 24 * 3600,
-                    "instant_rematch_count": features.get("instant_rematch_count", 0) + 5
-                })
-                premium_expiry = new_expiry
-            else:
-                if feature == "instant_rematch":
-                    features["instant_rematch_count"] = features.get("instant_rematch_count", 0) + 1
-                elif feature == "vaulted_chats":
-                    features["vaulted_chats"] = True
-                else:
-                    features[feature] = current_time + duration
-                if duration and (not premium_expiry or premium_expiry < current_time + duration):
-                    premium_expiry = current_time + duration
-            if not update_user(user_id, {
-                "premium_expiry": premium_expiry,
-                "premium_features": features,
-                "profile": profile,
-                "consent": user.get("consent", False),
-                "verified": user.get("verified", False),
-                "created_at": user.get("created_at", int(time.time()))
-            }):
-                await safe_reply(update, "❌ Error processing your purchase. Please contact support.", context)
-                return
-            await safe_reply(update, message, context)
-            expiry_date = (
-                datetime.fromtimestamp(current_time + duration).strftime("%Y-%m-%d %H:%M:%S")
-                if duration else "No expiry"
+    
+    # Determine purchased product
+    if invoice_payload == "premium_monthly":
+        expiry = current_time + 30 * 24 * 3600  # 30 days
+        features.update({
+            "premium_expiry": expiry,
+            "instant_rematch": expiry,
+            "instant_rematch_count": 5,  # Example: 5 instant rematches
+            "vaulted_chats": expiry,
+            "partner_details": expiry,
+            "flare": expiry
+        })
+    elif invoice_payload == "premium_3months":
+        expiry = current_time + 90 * 24 * 3600  # 90 days
+        features.update({
+            "premium_expiry": expiry,
+            "instant_rematch": expiry,
+            "instant_rematch_count": 15,  # Example: 15 instant rematches
+            "vaulted_chats": expiry,
+            "partner_details": expiry,
+            "flare": expiry
+        })
+    elif invoice_payload == "instant_rematch":
+        features["instant_rematch_count"] = features.get("instant_rematch_count", 0) + 3  # Add 3 instant rematches
+        features["instant_rematch"] = current_time + 30 * 24 * 3600  # 30 days
+    elif invoice_payload == "partner_details":
+        features["partner_details"] = current_time + 30 * 24 * 3600  # 30 days
+    elif invoice_payload == "vaulted_chats":
+        features["vaulted_chats"] = current_time + 30 * 24 * 3600  # 30 days
+    elif invoice_payload == "flare":
+        features["flare"] = current_time + 30 * 24 * 3600  # 30 days
+    else:
+        logger.warning(f"Unknown invoice payload: {invoice_payload} for user {user_id}")
+        await safe_reply(update, "⚠️ Payment received, but product is unrecognized. Contact support.", context)
+        return
+    
+    # Update user with new premium features
+    update_user(user_id, {"premium_features": features})
+    
+    # Notify user
+    await safe_reply(update, "🎉 Payment successful! Your premium features have been activated. Use /premium to check details.", context)
+    
+    # Check for pending rematch requests
+    rematch_requests = context.bot_data.get("rematch_requests", {})
+    if user_id in rematch_requests:
+        requester_id = rematch_requests[user_id]["requester_id"]
+        requester_data = get_user(requester_id)
+        if requester_data and has_premium_feature(user_id, "partner_details"):
+            # Resend rematch request with details
+            user_profile = requester_data.get("profile", {})
+            request_message = (
+                f"🔄 *Rematch Request* 🔄\n\n"
+                f"A user wants to reconnect with you!\n"
+                f"🧑 *Name*: {user_profile.get('name', 'Anonymous')}\n"
+                f"🎂 *Age*: {user_profile.get('age', 'Not set')}\n"
+                f"👤 *Gender*: {user_profile.get('gender', 'Not set')}\n"
+                f"📍 *Location*: {user_profile.get('location', 'Not set')}\n\n"
+                f"Would you like to chat again?"
             )
-            notification_message = (
-                "🌟 *New Premium Purchase* 🌟\n\n"
-                f"👤 *User ID*: {user_id}\n"
-                f"🧑 *Name*: {profile.get('name', 'Not set')}\n"
-                f"🎂 *Age*: {profile.get('age', 'Not set')}\n"
-                f"👤 *Gender*: {profile.get('gender', 'Not set')}\n"
-                f"📍 *Location*: {profile.get('location', 'Not set')}\n"
-                f"✨ *Feature*: {feature_name}\n"
-                f"💰 *Cost*: {stars} Stars\n"
-                f"📅 *Expiry*: {expiry_date}\n"
-                f"🕒 *Purchased*: {datetime.fromtimestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-            await send_channel_notification(context, notification_message)
-            break
+            keyboard = [
+                [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{requester_id}"),
+                 InlineKeyboardButton("❌ Decline", callback_data="rematch_decline")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=escape_markdown_v2(request_message),
+                    parse_mode="MarkdownV2",
+                    reply_markup=reply_markup
+                )
+                await safe_send_message(requester_id, "📩 Your rematch request was resent with details.", context)
+                rematch_requests.pop(user_id, None)
+            except TelegramError as e:
+                logger.error(f"Failed to resend rematch request to {user_id}: {e}")
+                await safe_send_message(requester_id, "❌ Failed to resend rematch request. The user may be offline.", context)
+    
+    logger.info(f"Processed payment for user {user_id}: {invoice_payload}")
+    
 @restrict_access
 async def shine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -1031,103 +1048,111 @@ async def shine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 @restrict_access
 async def instant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Attempt an instant rematch with a previous partner using premium feature."""
     user_id = update.effective_user.id
     if is_banned(user_id):
         user = get_user(user_id)
         ban_msg = (
-            "🚫 You are permanently banned. Contact support to appeal."
+            "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
             if user["ban_type"] == "permanent"
-            else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
+            else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
         )
         await safe_reply(update, ban_msg, context)
         return
     if not has_premium_feature(user_id, "instant_rematch"):
-        await safe_reply(update, "🔄 *Instant Rematch* is a premium feature. Buy it with /premium!", context, parse_mode=ParseMode.MARKDOWN_V2)
-        return
-    user = get_user(user_id)
-    features = user.get("premium_features", {})
-    rematch_count = features.get("instant_rematch_count", 0)
-    if rematch_count <= 0:
-        await safe_reply(update, "🔄 You need an *Instant Rematch*! Buy one with /premium!", context, parse_mode=ParseMode.MARKDOWN_V2)
-        return
-    partners = user.get("profile", {}).get("past_partners", [])
-    if not partners:
-        await safe_reply(update, "❌ No past partners to rematch with.", context, parse_mode=ParseMode.MARKDOWN_V2)
-        return
-    partner_id = partners[-1]
-    partner_data = get_user(partner_id)
-    if not partner_data:
-        await safe_reply(update, "❌ Your previous partner is no longer available.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "❌ You need Premium to use instant rematch. Use /premium to upgrade.", context)
         return
     if user_id in user_pairs:
-        await safe_reply(update, "❓ You're already in a chat. Use /stop to end it first.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.", context)
         return
-    if partner_id in user_pairs:
-        await safe_reply(update, "❌ Your previous partner is currently in another chat.", context, parse_mode=ParseMode.MARKDOWN_V2)
+    user = get_user(user_id)
+    past_partners = user.get("past_partners", [])
+    if not past_partners:
+        await safe_reply(update, "😔 You haven't chatted with anyone yet. Use /next to start a chat.", context)
         return
-    if partner_id in waiting_users:
-        waiting_users.remove(partner_id)
-        user_pairs[user_id] = partner_id
-        user_pairs[partner_id] = user_id
-        features["instant_rematch_count"] = rematch_count - 1
-        update_user(user_id, {
-            "premium_features": features,
-            "premium_expiry": user.get("premium_expiry"),
-            "profile": user.get("profile", {}),
-            "consent": user.get("consent", False),
-            "verified": user.get("verified", False),
-            "created_at": user.get("created_at", int(time.time())),
-            "ban_type": user.get("ban_type"),
-            "ban_expiry": user.get("ban_expiry")
-        })
-        await safe_reply(update, "🔄 *Instantly reconnected!* Start chatting! 🗣️", context, parse_mode=ParseMode.MARKDOWN_V2)
-        await safe_send_message(partner_id, "🔄 *Instantly reconnected!* Start chatting! 🗣️", context)
-        if has_premium_feature(user_id, "vaulted_chats"):
-            chat_histories[user_id] = chat_histories.get(user_id, [])
-        if has_premium_feature(partner_id, "vaulted_chats"):
-            chat_histories[partner_id] = chat_histories.get(partner_id, [])
-        logger.info(f"Instant rematch: user {user_id} with {partner_id}")
-        notification_message = (
-            f"🔄 *Instant Rematch* 🔄\n\n"
-            f"👤 *User ID*: {user_id}\n"
-            f"🤝 *Partner ID*: {partner_id}\n"
-            f"🕒 *Rematched At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-        await send_channel_notification(context, notification_message)
+    query = update.callback_query
+    if query:
+        data = query.data
+        if data.startswith("rematch_request_"):
+            partner_id = int(data.split("_")[-1])
+            if is_banned(user_id):
+                await safe_reply(update, "🚫 You are banned and cannot send rematch requests 🔒.", context)
+                return
+            user = get_user(user_id)
+            if user_id in user_pairs:
+                await safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.", context)
+                return
+            partner_data = get_user(partner_id)
+            if not partner_data:
+                await safe_reply(update, "❌ This user is no longer available 😓.", context)
+                return
+            if partner_id in user_pairs:
+                await safe_reply(update, "❌ This user is currently in another chat 💬.", context)
+                return
+            # Decrement instant_rematch_count
+            features = user.get("premium_features", {})
+            features["instant_rematch_count"] = max(0, features.get("instant_rematch_count", 0) - 1)
+            update_user(user_id, {"premium_features": features})
+            # Prepare the keyboard with Accept and Decline buttons
+            keyboard = [
+                [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{user_id}"),
+                 InlineKeyboardButton("❌ Decline", callback_data="rematch_decline")]
+            ]
+            # Check if the recipient has the partner_details premium feature
+            if has_premium_feature(partner_id, "partner_details"):
+                user_profile = user.get("profile", {})
+                request_message = (
+                    f"🔄 *Instant Rematch Request* 🔄\n\n"
+                    f"A premium user wants to reconnect with you!\n"
+                    f"🧑 *Name*: {user_profile.get('name', 'Anonymous')}\n"
+                    f"🎂 *Age*: {user_profile.get('age', 'Not set')}\n"
+                    f"👤 *Gender*: {user_profile.get('gender', 'Not set')}\n"
+                    f"📍 *Location*: {user_profile.get('location', 'Not set')}\n\n"
+                    f"Would you like to chat again?"
+                )
+            else:
+                request_message = (
+                    f"🔄 *Instant Rematch Request* 🔄\n\n"
+                    f"A premium user wants to reconnect with you!\n"
+                    f"💎 Upgrade to Premium to view their profile details.\n\n"
+                    f"You can accept to start chatting or decline the request."
+                )
+                # Add Upgrade button for non-premium users
+                keyboard.insert(0, [InlineKeyboardButton("💎 Upgrade to Premium", callback_data="premium_menu")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            try:
+                message = await context.bot.send_message(
+                    chat_id=partner_id,
+                    text=escape_markdown_v2(request_message),
+                    parse_mode="MarkdownV2",
+                    reply_markup=reply_markup
+                )
+                await safe_reply(update, "📩 Instant rematch request sent. Waiting for their response...", context)
+                context.bot_data["rematch_requests"] = context.bot_data.get("rematch_requests", {})
+                context.bot_data["rematch_requests"][partner_id] = {
+                    "requester_id": user_id,
+                    "timestamp": int(time.time()),
+                    "message_id": message.message_id
+                }
+            except TelegramError as e:
+                await safe_reply(update, "❌ Unable to reach this user. They may be offline.", context)
+            return
+    # Show list of past partners
+    keyboard = []
+    for partner_id in past_partners[:10]:  # Limit to 10 for UX
+        partner_data = get_user(partner_id)
+        if not partner_data:
+            continue
+        partner_name = partner_data.get("profile", {}).get("name", "Anonymous")
+        keyboard.append([InlineKeyboardButton(
+            f"🔄 Rematch with {partner_name}",
+            callback_data=f"rematch_request_{partner_id}"
+        )])
+    if not keyboard:
+        await safe_reply(update, "😔 No eligible past partners found. Use /next to start a new chat.", context)
         return
-    keyboard = [
-        [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{user_id}"),
-         InlineKeyboardButton("❌ Decline", callback_data="rematch_decline")]
-    ]
+    keyboard.append([InlineKeyboardButton("🔙 Back to Help", callback_data="help_menu")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    user_profile = user.get("profile", {})
-    request_message = (
-        f"🔄 *Rematch Request* 🔄\n\n"
-        f"A user wants to reconnect with you!\n"
-        f"🧑 *Name*: {user_profile.get('name', 'Anonymous')}\n"
-        f"🎂 *Age*: {user_profile.get('age', 'Not set')}\n"
-        f"👤 *Gender*: {user_profile.get('gender', 'Not set')}\n"
-        f"📍 *Location*: {user_profile.get('location', 'Not set')}\n\n"
-        f"Would you like to chat again?"
-    )
-    try:
-        message = await context.bot.send_message(
-            chat_id=partner_id,
-            text=request_message,  # Removed escape_markdown_v2 since it's applied in safe_reply
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=reply_markup
-        )
-        await safe_reply(update, "📩 Rematch request sent to your previous partner. Waiting for their response...", context, parse_mode=ParseMode.MARKDOWN_V2)
-        context.bot_data["rematch_requests"] = context.bot_data.get("rematch_requests", {})
-        context.bot_data["rematch_requests"][partner_id] = {
-            "requester_id": user_id,
-            "timestamp": int(time.time()),
-            "message_id": message.message_id
-        }
-    except telegram.error.TelegramError as e:
-        await safe_reply(update, "❌ Unable to reach your previous partner. They may be offline.", context, parse_mode=ParseMode.MARKDOWN_V2)
-        logger.warning(f"Failed to send rematch request to {partner_id}: {e}")
+    await safe_reply(update, "🔄 *Select a past partner to instantly rematch:*", context, reply_markup=reply_markup)
 
 @restrict_access
 async def mood(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1573,21 +1598,33 @@ async def button(update: Update, context: ContextTypes) -> None:
         if partner_id in user_pairs:
             await safe_reply(update, "❌ This user is currently in another chat 💬.", context)
             return
+        # Prepare the keyboard with Accept and Decline buttons
         keyboard = [
             [InlineKeyboardButton("✅ Accept", callback_data=f"rematch_accept_{user_id}"),
              InlineKeyboardButton("❌ Decline", callback_data="rematch_decline")]
         ]
+        # Check if the recipient has the partner_details premium feature
+        if has_premium_feature(partner_id, "partner_details"):
+            user_profile = user.get("profile", {})
+            request_message = (
+                f"🔄 *Rematch Request* 🔄\n\n"
+                f"A user wants to reconnect with you!\n"
+                f"🧑 *Name*: {user_profile.get('name', 'Anonymous')}\n"
+                f"🎂 *Age*: {user_profile.get('age', 'Not set')}\n"
+                f"👤 *Gender*: {user_profile.get('gender', 'Not set')}\n"
+                f"📍 *Location*: {user_profile.get('location', 'Not set')}\n\n"
+                f"Would you like to chat again?"
+            )
+        else:
+            request_message = (
+                f"🔄 *Rematch Request* 🔄\n\n"
+                f"A user wants to reconnect with you!\n"
+                f"💎 Upgrade to Premium to view their profile details.\n\n"
+                f"You can accept to start chatting or decline the request."
+            )
+            # Add Upgrade button for non-premium users
+            keyboard.insert(0, [InlineKeyboardButton("💎 Upgrade to Premium", callback_data="premium_menu")])
         reply_markup = InlineKeyboardMarkup(keyboard)
-        user_profile = user.get("profile", {})
-        request_message = (
-            f"🔄 *Rematch Request* 🔄\n\n"
-            f"A user wants to reconnect with you!\n"
-            f"🧑 *Name*: {user_profile.get('name', 'Anonymous')}\n"
-            f"🎂 *Age*: {user_profile.get('age', 'Not set')}\n"
-            f"👤 *Gender*: {user_profile.get('gender', 'Not set')}\n"
-            f"📍 *Location*: {user_profile.get('location', 'Not set')}\n\n"
-            f"Would you like to chat again?"
-        )
         try:
             message = await context.bot.send_message(
                 chat_id=partner_id,
@@ -1905,6 +1942,20 @@ def is_safe_message(message: str) -> tuple[bool, str]:
         if re.search(pattern, message_lower, re.IGNORECASE):
             return False, "Contains inappropriate content"
     return True, ""
+
+async def cleanup_rematch_requests(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remove expired rematch requests from bot_data."""
+    try:
+        current_time = int(time.time())
+        rematch_requests = context.bot_data.get("rematch_requests", {})
+        expired = [partner_id for partner_id, data in rematch_requests.items()
+                   if current_time - data["timestamp"] > 24 * 3600]  # 24 hours
+        for partner_id in expired:
+            rematch_requests.pop(partner_id, None)
+            logger.info(f"Removed expired rematch request for partner {partner_id}")
+        context.bot_data["rematch_requests"] = rematch_requests
+    except Exception as e:
+        logger.error(f"Error cleaning up rematch requests: {e}")
 
 async def issue_keyword_violation(user_id: int, message: str, reason: str, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
@@ -2672,7 +2723,6 @@ def main() -> None:
     # Build Application
     application = Application.builder().token(token).build()
     
-    
     # Define ConversationHandler for user setup
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -2735,12 +2785,13 @@ def main() -> None:
     # Add error handler
     application.add_error_handler(error_handler)
     
-     # Schedule recurring jobs
+    # Schedule recurring jobs
     if application.job_queue:
         try:
             application.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
             application.job_queue.run_repeating(process_queued_operations, interval=60, first=10)
             application.job_queue.run_repeating(match_users, interval=10, first=5)
+            application.job_queue.run_repeating(cleanup_rematch_requests, interval=3600, first=60)  # Added for rematch request cleanup
             logger.info("Scheduled job queue tasks")
         except NameError as e:
             logger.error(f"Job queue function not defined: {e}")
