@@ -2877,7 +2877,7 @@ def main() -> None:
     # Add error handler
     application.add_error_handler(error_handler)
     
-    if application.job_queue:
+if application.job_queue:
     try:
         application.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
         application.job_queue.run_repeating(process_queued_operations, interval=60, first=10)
