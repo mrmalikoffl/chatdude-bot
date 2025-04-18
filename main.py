@@ -2830,6 +2830,8 @@ async def main() -> None:
         },
         fallbacks=[CommandHandler("start", start)],
         allow_reentry=True,
+        # Explicitly set per_message=True to address PTBUserWarning
+        per_message=True,
     )
 
     # Add handlers with restrict_access
@@ -2903,4 +2905,17 @@ async def main() -> None:
         raise
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        # Get the current event loop or create a new one if none exists
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If the loop is already running, create a new task
+            loop.create_task(main())
+        else:
+            # Run the main function in the loop
+            loop.run_until_complete(main())
+    except RuntimeError as e:
+        # Handle case where no loop exists or other loop-related errors
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(main())
