@@ -2805,15 +2805,16 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.error(f"Error fetching bot statistics: {e}", exc_info=True)
         await safe_reply(update, "😔 Error retrieving statistics 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
-def main() -> None:
+async def main() -> None:
     """Initialize and run the Telegram bot."""
     token = os.getenv("TOKEN")
     if not token:
         logger.error("TOKEN not set")
         raise EnvironmentError("TOKEN not set")
+
     # Build Application
     application = Application.builder().token(token).build()
-    
+
     # Define ConversationHandler for user setup
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -2824,12 +2825,12 @@ def main() -> None:
             AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_age)],
             GENDER: [CallbackQueryHandler(set_gender, pattern="^gender_")],
             LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_location)],
-            TAGS: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_tags)]
+            TAGS: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_tags)],
         },
         fallbacks=[CommandHandler("start", start)],
-        allow_reentry=True
+        allow_reentry=True,
     )
-    
+
     # Add handlers with restrict_access
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("stop", restrict_access(stop)))
@@ -2847,7 +2848,7 @@ def main() -> None:
     application.add_handler(CommandHandler("settings", restrict_access(settings)))
     application.add_handler(CommandHandler("report", restrict_access(report)))
     application.add_handler(CommandHandler("deleteprofile", restrict_access(delete_profile)))
-    
+
     # Add admin command handlers
     application.add_handler(CommandHandler("admin", admin_access))
     application.add_handler(CommandHandler("admin_userslist", admin_userslist))
@@ -2863,41 +2864,42 @@ def main() -> None:
     application.add_handler(CommandHandler("admin_clear_reports", admin_clear_reports))
     application.add_handler(CommandHandler("admin_stats", admin_stats))
     application.add_handler(CommandHandler("admin_broadcast", admin_broadcast))
-    
+
     # Handle all callback queries (buttons)
     application.add_handler(CallbackQueryHandler(button))
-    
+
     # Handle payments
     application.add_handler(PreCheckoutQueryHandler(pre_checkout))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-    
+
     # Handle regular messages
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    
+
     # Add error handler
     application.add_error_handler(error_handler)
-    
-if application.job_queue:
-    try:
-        application.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
-        application.job_queue.run_repeating(process_queued_operations, interval=60, first=10)
-        application.job_queue.run_repeating(match_users, interval=10, first=5)
-        application.job_queue.run_repeating(cleanup_rematch_requests, interval=3600, first=60)
-        application.job_queue.run_repeating(cleanup_personal_chat_requests, interval=3600, first=60)
-        logger.info("Scheduled job queue tasks")
-    except NameError as e:
-        logger.error(f"Job queue function not defined: {e}")
-        raise
-else:
-    logger.error("Failed to initialize job queue")
-    raise RuntimeError("Failed to initialize job queue")
-    
+
+    # Schedule job queue tasks
+    if application.job_queue:
+        try:
+            application.job_queue.run_repeating(cleanup_in_memory, interval=300, first=10)
+            application.job_queue.run_repeating(process_queued_operations, interval=60, first=10)
+            application.job_queue.run_repeating(match_users, interval=10, first=5)
+            application.job_queue.run_repeating(cleanup_rematch_requests, interval=3600, first=60)
+            application.job_queue.run_repeating(cleanup_personal_chat_requests, interval=3600, first=60)
+            logger.info("Scheduled job queue tasks")
+        except NameError as e:
+            logger.error(f"Job queue function not defined: {e}")
+            raise
+    else:
+        logger.error("Failed to initialize job queue")
+        raise RuntimeError("Failed to initialize job queue")
+
     logger.info("Starting bot...")
     try:
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        await application.run_polling(allowed_updates=Update.ALL_TYPES)
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
         raise
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
