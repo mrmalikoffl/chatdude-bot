@@ -419,14 +419,17 @@ async def notify_user(user_id: int, message: str, context: ContextTypes.DEFAULT_
         if not message or message.strip() == "":
             message = "⚠️ An error occurred, but no details were provided 🌑."
         
-        user_data = get_user_with_cache(user_id)
+        user_data = get_user_with_cache(user_id) or {}
         chat_id = user_data.get("chat_id")
         if not chat_id:
             logger.warning(f"Cannot notify user {user_id}: No chat_id found")
-            await send_channel_notification(
-                context,
-                f"⚠️ Failed to notify user {user_id}: No chat_id found 🌑"
-            )
+            admin_key = (user_id, "missing_chat_id")
+            if admin_key not in admin_notification_cache:
+                admin_notification_cache[admin_key] = True
+                await send_channel_notification(
+                    context,
+                    f"⚠️ Failed to notify user {user_id}: No chat_id found 🌑"
+                )
             return
         
         logger.debug(f"Preparing notification for user {user_id}: {message[:200]}")
@@ -438,7 +441,48 @@ async def notify_user(user_id: int, message: str, context: ContextTypes.DEFAULT_
             parse_mode=ParseMode.MARKDOWN_V2
         )
         logger.info(f"Sent notification to user {user_id}: {message[:50]}...")
-    # ... (error handling as before)
+    except telegram.error.TelegramError as e:
+        logger.error(f"Failed to send notification to user {user_id}: {e}")
+        fallback_message = f"⚠️ Error sending notification: {escape_markdown_v2(str(e))} 🌑"
+        try:
+            await safe_bot_send_message(
+                context.bot,
+                chat_id=chat_id,
+                text=fallback_message,
+                context=context,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            logger.info(f"Sent fallback notification to user {user_id}: {fallback_message[:50]}...")
+        except telegram.error.TelegramError as e2:
+            logger.error(f"Failed to send fallback notification to user {user_id}: {e2}")
+            admin_key = (user_id, f"fallback_error_{str(e2)}")
+            if admin_key not in admin_notification_cache:
+                admin_notification_cache[admin_key] = True
+                await send_channel_notification(
+                    context,
+                    f"⚠️ Failed to send fallback notification to user {user_id}: {escape_markdown_v2(str(e2))} 🌑"
+                )
+    except Exception as e:
+        logger.error(f"Unexpected error in notify_user for user {user_id}: {e}")
+        fallback_message = f"⚠️ Unexpected error: {escape_markdown_v2(str(e))} 🌑"
+        try:
+            await safe_bot_send_message(
+                context.bot,
+                chat_id=chat_id,
+                text=fallback_message,
+                context=context,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            logger.info(f"Sent fallback notification to user {user_id}: {fallback_message[:50]}...")
+        except telegram.error.TelegramError as e2:
+            logger.error(f"Failed to send fallback notification to user {user_id}: {e2}")
+            admin_key = (user_id, f"unexpected_error_{str(e2)}")
+            if admin_key not in admin_notification_cache:
+                admin_notification_cache[admin_key] = True
+                await send_channel_notification(
+                    context,
+                    f"⚠️ Failed to send fallback notification to user {user_id}: {escape_markdown_v2(str(e2))} 🌑"
+                )
 
 async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = ParseMode.MARKDOWN, **kwargs) -> telegram.Message:
     original_text = text
