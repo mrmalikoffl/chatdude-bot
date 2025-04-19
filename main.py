@@ -191,7 +191,7 @@ def restrict_access(handler):
             return await handler(update, context, *args, **kwargs)
         
         # Check profile completeness, consent, and verification
-        user = get_user_with_cache_with_cache(user_id)
+        user = get_user_with_cache(user_id)
         if not user.get("consent", False) or not user.get("verified", False):
             await update.message.reply_text("⚠️ Please complete your profile setup with /start, including consent and verification.")
             return
@@ -270,6 +270,7 @@ def get_user_cached(user_id: int) -> dict:
 
 def get_user_with_cache(user_id: int) -> dict:
     return get_user_cached(user_id)
+
 
 def update_user(user_id: int, data: dict) -> bool:
     retries = 3
@@ -815,8 +816,8 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
             if not can_match(user1, user2):
                 i += 2
                 continue
-            user1_data = get_user_with_cache_with_cache(user1)
-            user2_data = get_user_with_cache_with_cache(user2)
+            user1_data = get_user_with_cache(user1)
+            user2_data = get_user_with_cache(user2)
             if user1_data is None or user2_data is None:
                 logger.error(f"Failed to retrieve user data: user1={user1} ({user1_data}), user2={user2} ({user2_data})")
                 waiting_users[:] = [u for u in waiting_users if u not in (user1, user2)]
@@ -905,8 +906,8 @@ def can_match(user1: int, user2: int) -> bool:
         logger.info(f"Cannot match {user1} and {user2}: one or both users are banned")
         return False
     
-    user1_data = get_user_with_cache_with_cache(user1)
-    user2_data = get_user_with_cache_with_cache(user2)
+    user1_data = get_user_with_cache(user1)
+    user2_data = get_user_with_cache(user2)
     profile1 = user1_data.get("profile", {})
     profile2 = user2_data.get("profile", {})
     
@@ -952,7 +953,7 @@ def can_match(user1: int, user2: int) -> bool:
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user_with_cache_with_cache(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
         await safe_reply(update, ban_msg, context)
@@ -976,7 +977,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user_with_cache_with_cache(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
         await safe_reply(update, ban_msg, context)
