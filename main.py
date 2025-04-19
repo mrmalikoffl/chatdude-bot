@@ -341,19 +341,14 @@ def escape_markdown_v2(text):
     if not isinstance(text, str):
         text = str(text)
     
-    # Define MarkdownV2 special characters
     MARKDOWNV2_SPECIAL_CHARS = r'_*[]()~`>#+\-=|{}.!'
-    
-    # Regex to match MarkdownV2 formatting: *bold*, _italic_, ```code```, [text](url)
     formatting_pattern = r'(\*[^\*]+\*|_[^_]+_|```[^`]+```|\[[^\]]+\]\([^\)]+\))'
     
     def escape_non_formatting(text_part):
-        """Escape special characters in non-formatting text."""
         for char in MARKDOWNV2_SPECIAL_CHARS:
             text_part = text_part.replace(char, f'\\{char}')
         return text_part
     
-    # Split text into formatting and non-formatting parts
     parts = re.split(formatting_pattern, text)
     escaped_parts = []
     
@@ -393,8 +388,7 @@ def escape_markdown_v2(text):
     return ''.join(escaped_parts)
 
 async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = "MarkdownV2", **kwargs) -> telegram.Message:
-    """Safely reply to a message, handling MarkdownV2 parsing errors."""
-    original_text = text  # Store original text for retry
+    original_text = text
     try:
         if parse_mode == "MarkdownV2":
             text = escape_markdown_v2(text)
@@ -412,7 +406,6 @@ async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TY
         return sent_message
     except telegram.error.BadRequest as bre:
         logger.warning(f"MarkdownV2 parsing failed: {bre}. Text: {text[:200]}")
-        # Retry with freshly escaped original text
         try:
             escaped_text = escape_markdown_v2(original_text)
             logger.debug(f"Retrying with escaped text: {escaped_text[:200]}")
@@ -428,7 +421,6 @@ async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TY
             return sent_message
         except telegram.error.BadRequest as bre2:
             logger.warning(f"Escaped MarkdownV2 parsing failed: {bre2}. Falling back to plain text.")
-            # Final fallback to plain text
             clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', '', original_text)
             logger.debug(f"Falling back to plain text: {clean_text[:200]}")
             try:
@@ -450,10 +442,10 @@ async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TY
         raise
 
 async def safe_send_message(chat_id: int, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = "MarkdownV2", **kwargs) -> telegram.Message:
-    """Safely send a message to a chat, handling MarkdownV2 parsing errors."""
     try:
         if parse_mode == "MarkdownV2":
             text = escape_markdown_v2(text)
+        logger.debug(f"Sending message to chat {chat_id} with parse_mode={parse_mode}: {text[:200]}")
         sent_message = await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, **kwargs)
         if sent_message is None:
             raise telegram.error.TelegramError(f"Failed to send message to chat {chat_id}: Telegram API returned None")
@@ -461,9 +453,9 @@ async def safe_send_message(chat_id: int, text: str, context: ContextTypes.DEFAU
         return sent_message
     except telegram.error.BadRequest as e:
         logger.warning(f"MarkdownV2 parsing failed for chat {chat_id}: {e}. Text: {text[:200]}")
-        # Retry with escaped MarkdownV2
         try:
             escaped_text = escape_markdown_v2(text)
+            logger.debug(f"Retrying with escaped text: {escaped_text[:200]}")
             sent_message = await context.bot.send_message(chat_id=chat_id, text=escaped_text, parse_mode=ParseMode.MARKDOWN_V2, **kwargs)
             if sent_message is None:
                 raise telegram.error.TelegramError(f"Failed to send escaped message to chat {chat_id}: Telegram API returned None")
@@ -471,8 +463,8 @@ async def safe_send_message(chat_id: int, text: str, context: ContextTypes.DEFAU
             return sent_message
         except telegram.error.BadRequest as e2:
             logger.warning(f"Escaped MarkdownV2 parsing failed: {e2}. Falling back to plain text.")
-            # Final fallback to plain text
             clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', '', text)
+            logger.debug(f"Falling back to plain text: {clean_text[:200]}")
             try:
                 sent_message = await context.bot.send_message(chat_id=chat_id, text=clean_text, parse_mode=None, **kwargs)
                 if sent_message is None:
@@ -2421,11 +2413,66 @@ async def admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except (IndexError, ValueError):
         await safe_reply(update, "⚠️ Usage: /admin_delete <user_id> 📋.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
+
+async def admin_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Grant admin access and display commands"""
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        logger.info(f"Unauthorized access attempt by user_id={user_id}")
+        return
+    access_text = (
+        "🌟 *Admin Commands* 🌟\n\n"
+        "🚀 *User Management*\n"
+        "• /admin_userslist \\- List all users 📋\n"
+        "• /admin_premiumuserslist \\- List premium users 💎\n"
+        "• /admin_info \\<user_id\\> \\- View user details 🕵️\n"
+        "• /admin_delete \\<user_id\\> \\- Delete a user’s data 🗑️\n"
+        "• /admin_premium \\<user_id\\> \\<days\\> \\- Grant premium status 🎁\n"
+        "• /admin_revoke_premium \\<user_id\\> \\- Revoke premium status ❌\n"
+        "━━━━━━━━━━━━━━\n\n"
+        "🛡️ *Ban Management*\n"
+        "• /admin_ban \\<user_id\\> \\<days/permanent\\> \\- Ban a user 🚫\n"
+        "• /admin_unban \\<user_id\\> \\- Unban a user 🔓\n"
+        "• /admin_violations \\- List recent keyword violations ⚠️\n"
+        "━━━━━━━━━━━━━━\n\n"
+        "📊 *Reports & Stats*\n"
+        "• /admin_reports \\- List reported users 🚨\n"
+        "• /admin_clear_reports \\<user_id\\> \\- Clear reports 🧹\n"
+        "• /admin_stats \\- View bot statistics 📈\n"
+        "━━━━━━━━━━━━━━\n\n"
+        "📢 *Broadcast*\n"
+        "• /admin_broadcast \\<message\\> \\- Send message to all users 📣\n"
+    )
+    logger.debug(f"Prepared admin_access text: {access_text}")
+    await safe_reply(update, access_text, context, parse_mode=ParseMode.MARKDOWN_V2)
+
+async def admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Delete a user's data"""
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        return
+    try:
+        target_id = int(context.args[0])
+        delete_user(target_id)
+        reply_text = f"🗑️ User *{target_id}* data deleted successfully 🌟\\."
+        await safe_reply(update, reply_text, context, parse_mode=ParseMode.MARKDOWN_V2)
+        logger.info(f"Admin {user_id} deleted user {target_id}.")
+        notification_message = (
+            f"🗑️ *User Deleted* 🗑️\n\n"
+            f"👤 *User ID*: {target_id}\n"
+            f"🕒 *Deleted At*: {datetime.now().strftime('%Y\\-%m\\-%d %H\\:%M\\:%S')}"
+        )
+        await send_channel_notification(context, notification_message, parse_mode=ParseMode.MARKDOWN_V2)
+    except (IndexError, ValueError):
+        await safe_reply(update, "⚠️ Usage: /admin_delete \\<user_id\\> 📋\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
+
 async def admin_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Grant premium status to a user, including Ultra Premium features for durations >= 180 days."""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     try:
         target_id = int(context.args[0])
@@ -2436,11 +2483,10 @@ async def admin_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.debug(f"Calculated premium_expiry for user {target_id}: {expiry} ({datetime.fromtimestamp(expiry).strftime('%Y-%m-%d %H:%M:%S')})")
         user = get_user(target_id)
         if not user:
-            await safe_reply(update, "😕 User not found 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
+            await safe_reply(update, "😕 User not found 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
             return
         logger.debug(f"User {target_id} before admin_premium: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
         features = user.get("premium_features", {})
-        # Scale instant_rematch_count based on duration, matching purchased plans
         instant_rematch_count = {1: 3, 7: 5, 30: 10, 180: 30, 365: 60}.get(min(days, 365), 10)
         features.update({
             "flare_messages": expiry,
@@ -2452,7 +2498,6 @@ async def admin_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "vaulted_chats": expiry,
             "flare": expiry
         })
-        # Grant personal_chat for Ultra Premium (6 months or more)
         if days >= 180:
             features["personal_chat"] = expiry
         update_user(target_id, {
@@ -2466,35 +2511,36 @@ async def admin_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "created_at": user.get("created_at", int(time.time()))
         })
         updated_user = get_user(target_id)
-        expiry_date = datetime.fromtimestamp(updated_user.get('premium_expiry', 0)).strftime('%Y-%m-%d %H:%M:%S') if updated_user.get('premium_expiry') else 'None'
+        expiry_date = datetime.fromtimestamp(updated_user.get('premium_expiry', 0)).strftime('%Y\\-%m\\-%d %H\\:%M\\:%S') if updated_user.get('premium_expiry') else 'None'
         logger.debug(f"User {target_id} after admin_premium: premium_expiry={updated_user.get('premium_expiry')} ({expiry_date}), premium_features={updated_user.get('premium_features')}")
         plan_name = "Ultra Premium" if days >= 180 else "Premium"
-        await safe_reply(update, f"🎁 {plan_name} granted to user *{target_id}* for *{days}* days 🌟.", context, parse_mode=ParseMode.MARKDOWN_V2)
-        await safe_send_message(target_id, f"🎉 You've been granted {plan_name} status for {days} days!", context)
+        reply_text = f"🎁 {plan_name} granted to user *{target_id}* for *{days}* days 🌟\\."
+        await safe_reply(update, reply_text, context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_send_message(target_id, f"🎉 You've been granted {plan_name} status for {days} days\\!", context, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"Admin {user_id} granted {plan_name} to {target_id} for {days} days.")
         notification_message = (
             f"🎁 *{plan_name} Granted* 🎁\n\n"
             f"👤 *User ID*: {target_id}\n"
             f"📅 *Days*: {days}\n"
             f"🕒 *Expiry*: {expiry_date}\n"
-            f"🕒 *Granted At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"🕒 *Granted At*: {datetime.now().strftime('%Y\\-%m\\-%d %H\\:%M\\:%S')}"
         )
-        await send_channel_notification(context, notification_message)
+        await send_channel_notification(context, notification_message, parse_mode=ParseMode.MARKDOWN_V2)
     except (IndexError, ValueError) as e:
         logger.error(f"Error in admin_premium for user {target_id}: {e}")
-        await safe_reply(update, "⚠️ Usage: /admin_premium <user_id> <days> 📋.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "⚠️ Usage: /admin_premium \\<user_id\\> \\<days\\> 📋\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_revoke_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Revoke premium status from a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context)
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     try:
         target_id = int(context.args[0])
         user = get_user(target_id)
         if not user:
-            await safe_reply(update, "😕 User not found 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
+            await safe_reply(update, "😕 User not found 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
             return
         logger.debug(f"User {target_id} before revoke_premium: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
         update_user(target_id, {
@@ -2507,32 +2553,33 @@ async def admin_revoke_premium(update: Update, context: ContextTypes.DEFAULT_TYP
             "ban_expiry": user.get("ban_expiry"),
             "created_at": user.get("created_at", int(time.time()))
         })
-        await safe_reply(update, f"❌ Premium status revoked for user *{target_id}* 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
-        await safe_send_message(target_id, "😔 Your Premium status has been revoked.", context)
+        reply_text = f"❌ Premium status revoked for user *{target_id}* 🌑\\."
+        await safe_reply(update, reply_text, context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_send_message(target_id, "😔 Your Premium status has been revoked\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         updated_user = get_user(target_id)
         logger.info(f"Admin {user_id} revoked premium for {target_id}.")
         logger.debug(f"User {target_id} after revoke_premium: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
         notification_message = (
             f"❌ *Premium Revoked* ❌\n\n"
             f"👤 *User ID*: {target_id}\n"
-            f"🕒 *Revoked At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"🕒 *Revoked At*: {datetime.now().strftime('%Y\\-%m\\-%d %H\\:%M\\:%S')}"
         )
-        await send_channel_notification(context, notification_message)
+        await send_channel_notification(context, notification_message, parse_mode=ParseMode.MARKDOWN_V2)
     except (IndexError, ValueError):
-        await safe_reply(update, "⚠️ Usage: /admin_revoke_premium <user_id> 📋.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "⚠️ Usage: /admin_revoke_premium \\<user_id\\> 📋\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ban a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context)
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     try:
         target_id = int(context.args[0])
         ban_type = context.args[1].lower()
         user = get_user(target_id)
         if not user:
-            await safe_reply(update, "😕 User not found 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
+            await safe_reply(update, "😕 User not found 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
             return
         logger.debug(f"User {target_id} before admin_ban: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
         if ban_type == "permanent":
@@ -2572,11 +2619,12 @@ async def admin_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             del user_pairs[target_id]
             if partner_id in user_pairs:
                 del user_pairs[partner_id]
-            await safe_send_message(partner_id, "😔 Your partner has left the chat.", context)
+            await safe_send_message(partner_id, "😔 Your partner has left the chat\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         if target_id in waiting_users:
             waiting_users.remove(target_id)
-        await safe_reply(update, f"🚫 User *{target_id}* has been {ban_type} banned 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
-        await safe_send_message(target_id, f"🚫 You have been {ban_type} banned from Talk2Anyone.", context)
+        reply_text = f"🚫 User *{target_id}* has been {ban_type} banned 🌑\\."
+        await safe_reply(update, reply_text, context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_send_message(target_id, f"🚫 You have been {ban_type} banned from Talk2Anyone\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         updated_user = get_user(target_id)
         logger.info(f"Admin {user_id} banned user {target_id} ({ban_type}).")
         logger.debug(f"User {target_id} after admin_ban: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
@@ -2584,24 +2632,24 @@ async def admin_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"🚨 *User Banned* 🚨\n\n"
             f"👤 *User ID*: {target_id}\n"
             f"📅 *Ban Type*: {ban_type.capitalize()}\n"
-            f"🕒 *Ban Expiry*: {'No expiry' if ban_type == 'permanent' else datetime.fromtimestamp(ban_expiry).strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"🕒 *Banned At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"🕒 *Ban Expiry*: {'No expiry' if ban_type == 'permanent' else datetime.fromtimestamp(ban_expiry).strftime('%Y\\-%m\\-%d %H\\:%M\\:%S')}\n"
+            f"🕒 *Banned At*: {datetime.now().strftime('%Y\\-%m\\-%d %H\\:%M\\:%S')}"
         )
-        await send_channel_notification(context, notification_message)
+        await send_channel_notification(context, notification_message, parse_mode=ParseMode.MARKDOWN_V2)
     except (IndexError, ValueError):
-        await safe_reply(update, "⚠️ Usage: /admin_ban <user_id> <days/permanent> 📋.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "⚠️ Usage: /admin_ban \\<user_id\\> \\<days/permanent\\> 📋\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Unban a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context)
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     try:
         target_id = int(context.args[0])
         user = get_user(target_id)
         if not user:
-            await safe_reply(update, "😕 User not found 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
+            await safe_reply(update, "😕 User not found 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
             return
         logger.debug(f"User {target_id} before admin_unban: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
         update_user(target_id, {
@@ -2616,44 +2664,45 @@ async def admin_unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         })
         violations = get_db_collection("keyword_violations")
         violations.delete_one({"user_id": target_id})
-        await safe_reply(update, f"🔓 User *{target_id}* has been unbanned 🌟.", context, parse_mode=ParseMode.MARKDOWN_V2)
-        await safe_send_message(target_id, "🎉 You have been unbanned. Use /start to begin.", context)
+        reply_text = f"🔓 User *{target_id}* has been unbanned 🌟\\."
+        await safe_reply(update, reply_text, context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_send_message(target_id, "🎉 You have been unbanned\\. Use /start to begin\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         updated_user = get_user(target_id)
         logger.info(f"Admin {user_id} unbanned user {target_id}.")
         logger.debug(f"User {target_id} after admin_unban: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
         notification_message = (
             f"✅ *User Unbanned* ✅\n\n"
             f"👤 *User ID*: {target_id}\n"
-            f"🕒 *Unbanned At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"🕒 *Unbanned At*: {datetime.now().strftime('%Y\\-%m\\-%d %H\\:%M\\:%S')}"
         )
-        await send_channel_notification(context, notification_message)
+        await send_channel_notification(context, notification_message, parse_mode=ParseMode.MARKDOWN_V2)
     except (IndexError, ValueError):
-        await safe_reply(update, "⚠️ Usage: /admin_unban <user_id> 📋.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "⚠️ Usage: /admin_unban \\<user_id\\> 📋\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_violations(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List recent keyword violations"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context)
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     try:
         violations = get_db_collection("keyword_violations")
         cursor = violations.find().sort("last_violation", -1).limit(10)
         violations_list = list(cursor)
         if not violations_list:
-            await safe_reply(update, "✅ No recent keyword violations 🌟.", context, parse_mode=ParseMode.MARKDOWN_V2)
+            await safe_reply(update, "✅ No recent keyword violations 🌟\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
             return
         violation_text = "⚠️ *Recent Keyword Violations* ⚠️\n\n"
         for v in violations_list:
             user_id = v["user_id"]
             count = v.get("count", 0)
-            keyword = v.get("keyword", "N/A")
-            last_violation = datetime.fromtimestamp(v["last_violation"]).strftime('%Y-%m-%d %H:%M') if v.get("last_violation") else "Unknown"
+            keyword = escape_markdown_v2(v.get("keyword", "N/A"))
+            last_violation = datetime.fromtimestamp(v["last_violation"]).strftime('%Y\\-%m\\-%d %H\\:%M') if v.get("last_violation") else "Unknown"
             ban_type = v.get("ban_type")
             ban_expiry = v.get("ban_expiry")
             ban_status = (
                 "Permanent 🔒" if ban_type == "permanent" else
-                f"Temporary until {datetime.fromtimestamp(ban_expiry).strftime('%Y-%m-%d %H:%M')} ⏰"
+                f"Temporary until {datetime.fromtimestamp(ban_expiry).strftime('%Y\\-%m\\-%d %H\\:%M')} ⏰"
                 if ban_type == "temporary" and ban_expiry else "None ✅"
             )
             violation_text += (
@@ -2664,23 +2713,24 @@ async def admin_violations(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 f"🚫 Ban: *{ban_status}*\n"
                 "━━━━━━━━━━━━━━\n"
             )
+        logger.debug(f"Prepared admin_violations text: {violation_text}")
         await safe_reply(update, violation_text, context, parse_mode=ParseMode.MARKDOWN_V2)
     except Exception as e:
         logger.error(f"Error fetching violations: {e}")
-        await safe_reply(update, "😔 Error fetching violations 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "😔 Error fetching violations 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_userslist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List all users for authorized admins"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context)
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     try:
         users = get_db_collection("users")
         users_list = list(users.find().sort("user_id", 1))
         logger.debug(f"Raw database users: {len(users_list)} users")
         if not users_list:
-            await safe_reply(update, "😕 No users found 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
+            await safe_reply(update, "😕 No users found 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
             logger.info(f"Admin {user_id} requested users list: no users found.")
             return
         message = "📋 *All Users List* \\(Sorted by ID\\) 📋\n\n"
@@ -2691,7 +2741,7 @@ async def admin_userslist(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             premium_features = user.get("premium_features", {})
             created_at = user.get("created_at", int(time.time()))
             created_date = (
-                datetime.fromtimestamp(created_at).strftime("%Y-%m-%d")
+                datetime.fromtimestamp(created_at).strftime("%Y\\-%m\\-%d")
                 if created_at and isinstance(created_at, (int, float))
                 else "Unknown"
             )
@@ -2722,25 +2772,26 @@ async def admin_userslist(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 logger.debug(f"Sent partial users list for admin {user_id}, users so far: {user_count}")
         if message.strip():
             message += f"📊 *Total Users*: {user_count}\n"
-            await safe_reply(update, message, context, parse_mode=ParseMode.MARKDOWN_V2)
+        logger.debug(f"Prepared admin_userslist text: {message}")
+        await safe_reply(update, message, context, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"Admin {user_id} requested users list with {user_count} users")
         logger.debug(f"Users list sent with {user_count} users.")
     except Exception as e:
         logger.error(f"Error fetching users list for admin {user_id}: {e}", exc_info=True)
-        await safe_reply(update, "😔 Error retrieving users list 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
-        
+        await safe_reply(update, "😔 Error retrieving users list 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
+
 async def admin_premiumuserslist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List premium users"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context)
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     try:
         current_time = int(time.time())
         users = get_db_collection("users")
         premium_users = list(users.find({"premium_expiry": {"$gt": current_time}}).sort("premium_expiry", -1))
         if not premium_users:
-            await safe_reply(update, "😕 No premium users found 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
+            await safe_reply(update, "😕 No premium users found 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
             return
         message = "💎 *Premium Users List* \\(Sorted by Expiry\\) 💎\n\n"
         user_count = 0
@@ -2749,7 +2800,7 @@ async def admin_premiumuserslist(update: Update, context: ContextTypes.DEFAULT_T
             premium_expiry = user.get("premium_expiry")
             profile = user.get("profile", {})
             expiry_date = (
-                datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
+                datetime.fromtimestamp(premium_expiry).strftime("%Y\\-%m\\-%d")
                 if premium_expiry and isinstance(premium_expiry, (int, float)) and premium_expiry > current_time
                 else "No expiry set"
             )
@@ -2770,70 +2821,72 @@ async def admin_premiumuserslist(update: Update, context: ContextTypes.DEFAULT_T
                 message = ""
         if message:
             message += f"📊 *Total Premium Users*: {user_count}\n"
-            await safe_reply(update, message, context, parse_mode=ParseMode.MARKDOWN_V2)
+        logger.debug(f"Prepared admin_premiumuserslist text: {message}")
+        await safe_reply(update, message, context, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"Admin {user_id} requested premium users list with {user_count} users")
     except Exception as e:
         logger.error(f"Error fetching premium users list: {e}")
-        await safe_reply(update, "😔 Error retrieving premium users list 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "😔 Error retrieving premium users list 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Display detailed user information"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context)
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     try:
         target_id = int(context.args[0])
         user = get_user(target_id)
         if not user:
-            await safe_reply(update, "😕 User not found 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
+            await safe_reply(update, "😕 User not found 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
             return
         profile = user.get("profile", {})
         consent = "Yes ✅" if user.get("consent") else "No ❌"
         verified = "Yes ✅" if user.get("verified") else "No ❌"
         premium = user.get("premium_expiry")
-        premium_status = f"Until {datetime.fromtimestamp(premium).strftime('%Y-%m-%d %H:%M:%S')} ⏰" if premium and premium > time.time() else "None 🌑"
+        premium_status = f"Until {datetime.fromtimestamp(premium).strftime('%Y\\-%m\\-%d %H\\:%M\\:%S')} ⏰" if premium and premium > time.time() else "None 🌑"
         ban_status = user.get("ban_type")
         if ban_status == "permanent":
             ban_info = "Permanent 🔒"
         elif ban_status == "temporary" and user.get("ban_expiry") > time.time():
-            ban_info = f"Until {datetime.fromtimestamp(user.get('ban_expiry')).strftime('%Y-%m-%d %H:%M:%S')} ⏰"
+            ban_info = f"Until {datetime.fromtimestamp(user.get('ban_expiry')).strftime('%Y\\-%m\\-%d %H\\:%M\\:%S')} ⏰"
         else:
             ban_info = "None ✅"
-        created_at = datetime.fromtimestamp(user.get("created_at", int(time.time()))).strftime("%Y-%m-%d %H:%M:%S")
+        created_at = datetime.fromtimestamp(user.get("created_at", int(time.time()))).strftime("%Y\\-%m\\-%d %H\\:%M\\:%S")
         features = ", ".join([k for k, v in user.get("premium_features", {}).items() if v is True or (isinstance(v, int) and v > time.time())]) or "None"
         violations = get_db_collection("keyword_violations").find_one({"user_id": target_id})
         violations_count = violations.get("count", 0) if violations else 0
         violation_status = (
             "Permanent 🔒" if violations and violations.get("ban_type") == "permanent" else
-            f"Temporary until {datetime.fromtimestamp(violations['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰"
+            f"Temporary until {datetime.fromtimestamp(violations['ban_expiry']).strftime('%Y\\-%m\\-%d %H\\:%M')} ⏰"
             if violations and violations.get("ban_type") == "temporary" and violations.get("ban_expiry") else
             f"{violations_count} warnings ⚠️" if violations_count > 0 else "None ✅"
         )
         message = (
             f"🕵️ *User Info: {target_id}* 🕵️\n\n"
-            f"🧑 *Name*: {profile.get('name', 'Not set')}\n"
-            f"🎂 *Age*: {profile.get('age', 'Not set')}\n"
-            f"👤 *Gender*: {profile.get('gender', 'Not set')}\n"
-            f"📍 *Location*: {profile.get('location', 'Not set')}\n"
-            f"🏷️ *Tags*: {', '.join(profile.get('tags', [])) or 'None'}\n"
+            f"🧑 *Name*: {escape_markdown_v2(profile.get('name', 'Not set'))}\n"
+            f"🎂 *Age*: {escape_markdown_v2(str(profile.get('age', 'Not set')))}\n"
+            f"👤 *Gender*: {escape_markdown_v2(profile.get('gender', 'Not set'))}\n"
+            f"📍 *Location*: {escape_markdown_v2(profile.get('location', 'Not set'))}\n"
+            f"🏷️ *Tags*: {escape_markdown_v2(', '.join(profile.get('tags', [])) or 'None')}\n"
             f"🤝 *Consent*: {consent}\n"
             f"✅ *Verified*: {verified}\n"
             f"💎 *Premium*: {premium_status}\n"
-            f"✨ *Features*: {features}\n"
+            f"✨ *Features*: {escape_markdown_v2(features)}\n"
             f"🚫 *Ban*: {ban_info}\n"
             f"⚠️ *Keyword Violations*: {violation_status}\n"
             f"📅 *Joined*: {created_at}"
         )
+        logger.debug(f"Prepared admin_info text: {message}")
         await safe_reply(update, message, context, parse_mode=ParseMode.MARKDOWN_V2)
     except (IndexError, ValueError):
-        await safe_reply(update, "⚠️ Usage: /admin_info <user_id> 📋.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "⚠️ Usage: /admin_info \\<user_id\\> 📋\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_reports(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List reported users"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context)
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     try:
         reports = get_db_collection("reports")
@@ -2844,78 +2897,81 @@ async def admin_reports(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         ]
         reports_list = list(reports.aggregate(pipeline))
         if not reports_list:
-            await safe_reply(update, "✅ No reports found 🌟.", context, parse_mode=ParseMode.MARKDOWN_V2)
+            await safe_reply(update, "✅ No reports found 🌟\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
             return
         message = "🚨 *Reported Users* \\(Top 20\\) 🚨\n\n"
         for report in reports_list:
             reported_id = report["_id"]
             count = report["count"]
-            message += f"👤 {reported_id} | Reports: *{count}*\n"
+            message += f"👤 {reported_id} \\| Reports: *{count}*\n"
+        logger.debug(f"Prepared admin_reports text: {message}")
         await safe_reply(update, message, context, parse_mode=ParseMode.MARKDOWN_V2)
     except Exception as e:
         logger.error(f"Failed to list reports: {e}")
-        await safe_reply(update, "😔 Error retrieving reports 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "😔 Error retrieving reports 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_clear_reports(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clear reports for a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context)
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     try:
         target_id = int(context.args[0])
         reports = get_db_collection("reports")
         reports.delete_many({"reported_id": target_id})
-        await safe_reply(update, f"🧹 Reports cleared for user *{target_id}* 🌟.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        reply_text = f"🧹 Reports cleared for user *{target_id}* 🌟\\."
+        await safe_reply(update, reply_text, context, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"Admin {user_id} cleared reports for {target_id}.")
         notification_message = (
             f"🧹 *Reports Cleared* 🧹\n\n"
             f"👤 *User ID*: {target_id}\n"
-            f"🕒 *Cleared At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"🕒 *Cleared At*: {datetime.now().strftime('%Y\\-%m\\-%d %H\\:%M\\:%S')}"
         )
-        await send_channel_notification(context, notification_message)
+        await send_channel_notification(context, notification_message, parse_mode=ParseMode.MARKDOWN_V2)
     except (IndexError, ValueError):
-        await safe_reply(update, "⚠️ Usage: /admin_clear_reports <user_id> 📋.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "⚠️ Usage: /admin_clear_reports \\<user_id\\> 📋\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Broadcast a message to all users"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context)
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     if not context.args:
-        await safe_reply(update, "⚠️ Usage: /admin_broadcast <message> 📋.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "⚠️ Usage: /admin_broadcast \\<message\\> 📋\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
-    message = "📣 *Announcement*: " + " ".join(context.args)
+    message = "📣 *Announcement*: " + escape_markdown_v2(" ".join(context.args))
     try:
         users = get_db_collection("users")
         users_list = users.find({"consent": True})
         sent_count = 0
         for user in users_list:
             try:
-                await safe_send_message(user["user_id"], message, context)
+                await safe_send_message(user["user_id"], message, context, parse_mode=ParseMode.MARKDOWN_V2)
                 sent_count += 1
                 time.sleep(0.05)  # Avoid rate limits
             except Exception as e:
                 logger.warning(f"Failed to send broadcast to {user['user_id']}: {e}")
-        await safe_reply(update, f"📢 Broadcast sent to *{sent_count}* users 🌟.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        reply_text = f"📢 Broadcast sent to *{sent_count}* users 🌟\\."
+        await safe_reply(update, reply_text, context, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"Admin {user_id} sent broadcast to {sent_count} users.")
         notification_message = (
             f"📢 *Broadcast Sent* 📢\n\n"
             f"📩 *Message*: {message}\n"
             f"👥 *Sent to*: {sent_count} users\n"
-            f"🕒 *Sent At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"🕒 *Sent At*: {datetime.now().strftime('%Y\\-%m\\-%d %H\\:%M\\:%S')}"
         )
-        await send_channel_notification(context, notification_message)
+        await send_channel_notification(context, notification_message, parse_mode=ParseMode.MARKDOWN_V2)
     except Exception as e:
         logger.error(f"Failed to send broadcast: {e}")
-        await safe_reply(update, "😔 Error sending broadcast 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "😔 Error sending broadcast 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Display bot statistics"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context)
+        await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     try:
         users = get_db_collection("users")
@@ -2927,7 +2983,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "$or": [{"ban_expiry": {"$gt": current_time}}, {"ban_type": "permanent"}]
         })
         active_users = len(set(user_pairs.keys()).union(waiting_users))
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now().strftime("%Y\\-%m\\-%d %H\\:%M\\:%S")
         stats_message = (
             "📈 *Bot Statistics* 📈\n\n"
             f"👥 *Total Users*: *{total_users}*\n"
@@ -2937,12 +2993,12 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "━━━━━━━━━━━━━━\n"
             f"🕒 *Updated*: {timestamp}"
         )
+        logger.debug(f"Prepared admin_stats text: {stats_message}")
         await safe_reply(update, stats_message, context, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"Admin {user_id} requested bot statistics: total={total_users}, premium={premium_users}, active={active_users}, banned={banned_users}")
     except Exception as e:
         logger.error(f"Error fetching bot statistics: {e}", exc_info=True)
-        await safe_reply(update, "😔 Error retrieving statistics 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
-
+        await safe_reply(update, "😔 Error retrieving statistics 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 def main() -> None:
     """Initialize and run the Telegram bot."""
     global db  # Ensure db is accessible globally
