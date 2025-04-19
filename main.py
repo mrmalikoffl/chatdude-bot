@@ -2362,7 +2362,7 @@ async def set_tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     return ConversationHandler.END
 
-def admin_access(update: Update, context: CallbackContext) -> None:
+def admin_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Grant admin access and display commands"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -2394,7 +2394,7 @@ def admin_access(update: Update, context: CallbackContext) -> None:
     )
     safe_reply(update, access_text)
 
-def admin_delete(update: Update, context: CallbackContext) -> None:
+def admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Delete a user's data"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -2408,7 +2408,7 @@ def admin_delete(update: Update, context: CallbackContext) -> None:
     except (IndexError, ValueError):
         safe_reply(update, " ⚠️ Usage: /admin_delete <user_id> 📋 .")
 
-def admin_premium(update: Update, context: CallbackContext) -> None:
+def admin_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Grant premium status to a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -2455,7 +2455,7 @@ def admin_premium(update: Update, context: CallbackContext) -> None:
         logger.error(f"Error in admin_premium for user {target_id}: {e}")
         safe_reply(update, " ⚠️ Usage: /admin_premium <user_id> <days> 📋 .")
 
-def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
+def admin_revoke_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Revoke premium status from a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -2486,7 +2486,7 @@ def admin_revoke_premium(update: Update, context: CallbackContext) -> None:
     except (IndexError, ValueError):
         safe_reply(update, " ⚠️ Usage: /admin_revoke_premium <user_id> 📋 .")
 
-def admin_ban(update: Update, context: CallbackContext) -> None:
+def admin_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ban a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -2548,7 +2548,7 @@ def admin_ban(update: Update, context: CallbackContext) -> None:
     except (IndexError, ValueError):
         safe_reply(update, " ⚠️ Usage: /admin_ban <user_id> <days/permanent> 📋 .")
 
-def admin_unban(update: Update, context: CallbackContext) -> None:
+def admin_unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Unban a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -2581,7 +2581,7 @@ def admin_unban(update: Update, context: CallbackContext) -> None:
     except (IndexError, ValueError):
         safe_reply(update, " ⚠️ Usage: /admin_unban <user_id> 📋 .")
 
-def admin_violations(update: Update, context: CallbackContext) -> None:
+def admin_violations(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List recent keyword violations"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -2620,7 +2620,7 @@ def admin_violations(update: Update, context: CallbackContext) -> None:
         logger.error(f"Error fetching violations: {e}")
         safe_reply(update, " 😔 Error fetching violations 🌑 .")
 
-def admin_userslist(update: Update, context: CallbackContext) -> None:
+def admin_userslist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List all users for authorized admins"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -2689,7 +2689,7 @@ def admin_userslist(update: Update, context: CallbackContext) -> None:
         logger.error(f"Error fetching users list for admin {user_id}: {e}", exc_info=True)
         safe_reply(update, " 😔 Error retrieving users list 🌑 .")
 
-def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
+def admin_premiumuserslist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, " 🔒 Unauthorized 🌑 .")
@@ -2738,7 +2738,7 @@ def admin_premiumuserslist(update: Update, context: CallbackContext) -> None:
         logger.error(f"Error fetching premium users list: {e}")
         safe_reply(update, " 😔 Error retrieving premium users list 🌑 .")
 
-def admin_info(update: Update, context: CallbackContext) -> None:
+def admin_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Display detailed user information"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -2791,7 +2791,7 @@ def admin_info(update: Update, context: CallbackContext) -> None:
     except (IndexError, ValueError):
         safe_reply(update, " ⚠️ Usage: /admin_info <user_id> 📋 .")
 
-def admin_reports(update: Update, context: CallbackContext) -> None:
+def admin_reports(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List reported users"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -2818,7 +2818,7 @@ def admin_reports(update: Update, context: CallbackContext) -> None:
         logger.error(f"Failed to list reports: {e}")
         safe_reply(update, " 😔 Error retrieving reports 🌑 .")
 
-def admin_clear_reports(update: Update, context: CallbackContext) -> None:
+def admin_clear_reports(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clear reports for a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -2833,7 +2833,7 @@ def admin_clear_reports(update: Update, context: CallbackContext) -> None:
     except (IndexError, ValueError):
         safe_reply(update, " ⚠️ Usage: /admin_clear_reports <user_id> 📋 .")
 
-def admin_broadcast(update: Update, context: CallbackContext) -> None:
+def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Broadcast a message to all users"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -2859,7 +2859,7 @@ def admin_broadcast(update: Update, context: CallbackContext) -> None:
         logger.error(f"Failed to send broadcast: {e}")
         safe_reply(update, " 😔 Error sending broadcast 🌑 .")
 
-def admin_stats(update: Update, context: CallbackContext) -> None:
+def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         safe_reply(update, "🔒 Unauthorized 🌑.")
