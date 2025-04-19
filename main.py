@@ -2186,6 +2186,10 @@ async def issue_keyword_violation(user_id: int, message: str, reason: str, conte
         logger.error(f"Failed to issue keyword violation for user {user_id}: {e}")
         operation_queue.put(("issue_keyword_violation", (user_id, message, reason, context)))
 
+def is_admin(user_id: int) -> bool:
+    """Check if a user is in the admin list."""
+    return user_id in ADMIN_IDS
+
 def is_banned(user_id: int) -> bool:
     user = get_user(user_id)
     ban_type = user.get("ban_type")
