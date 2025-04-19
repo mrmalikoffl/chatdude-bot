@@ -1269,7 +1269,7 @@ async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     
     if not check_rate_limit(user_id):
-        await safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
     
     if user_id in user_pairs:
