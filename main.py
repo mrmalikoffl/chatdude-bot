@@ -220,8 +220,8 @@ async def cleanup_in_memory(context: ContextTypes.DEFAULT_TYPE) -> None:
         if current_time - last_activity > INACTIVITY_TIMEOUT:
             partner_id = user_pairs.get(user_id)
             if partner_id:
-                await safe_send_message(user_id, "🛑 Chat ended due to inactivity.", context, parse_mode=ParseMode.MARKDOWN_V2)
-                await safe_send_message(partner_id, "🛑 Chat ended due to inactivity.", context, parse_mode=ParseMode.MARKDOWN_V2)
+                await safe_bot_send_message(user_id, "🛑 Chat ended due to inactivity.", context, parse_mode=ParseMode.MARKDOWN_V2)
+                await safe_bot_send_message(partner_id, "🛑 Chat ended due to inactivity.", context, parse_mode=ParseMode.MARKDOWN_V2)
                 remove_pair(user_id, partner_id)
                 chat_histories.pop(user_id, None)
                 chat_histories.pop(partner_id, None)
@@ -232,7 +232,7 @@ async def cleanup_in_memory(context: ContextTypes.DEFAULT_TYPE) -> None:
             last_activity = user_activities.get(user_id, {}).get("last_activity", 0)
             if current_time - last_activity > INACTIVITY_TIMEOUT:
                 waiting_users.remove(user_id)
-                await safe_send_message(user_id, "🛑 Removed from waiting list due to inactivity.", context, parse_mode=ParseMode.MARKDOWN_V2)
+                await safe_bot_send_message(user_id, "🛑 Removed from waiting list due to inactivity.", context, parse_mode=ParseMode.MARKDOWN_V2)
                 chat_histories.pop(user_id, None)
     
     logger.info(f"Cleanup complete. user_pairs: {len(user_pairs)}, waiting_users: {len(waiting_users)}")
@@ -885,8 +885,8 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
                 "Use /help for more options\\."
             )
             try:
-                await safe_send_message(context, user1, user1_message, parse_mode="MarkdownV2")
-                await safe_send_message(context, user2, user2_message, parse_mode="MarkdownV2")
+                await safe_bot_send_message(context, user1, user1_message, parse_mode="MarkdownV2")
+                await safe_bot_send_message(context, user2, user2_message, parse_mode="MarkdownV2")
                 if has_premium_feature(user1, "vaulted_chats"):
                     chat_histories[user1] = []
                 if has_premium_feature(user2, "vaulted_chats"):
@@ -965,7 +965,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
         remove_pair(user_id, partner_id)
-        await safe_send_message(context, partner_id, "👋 Your partner has left the chat. Use /start to find a new one.")
+        await safe_bot_send_message(context, partner_id, "👋 Your partner has left the chat. Use /start to find a new one.")
         await safe_reply(update, "👋 Chat ended. Use /start to begin a new chat.", context)
         if user_id in chat_histories and not has_premium_feature(user_id, "vaulted_chats"):
             del chat_histories[user_id]
@@ -988,7 +988,7 @@ async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
         remove_pair(user_id, partner_id)
-        await safe_send_message(context, partner_id, "🔌 Your chat partner disconnected.")
+        await safe_bot_send_message(context, partner_id, "🔌 Your chat partner disconnected.")
     if user_id not in waiting_users:
         if has_premium_feature(user_id, "shine_profile"):
             waiting_users.insert(0, user_id)
@@ -1245,7 +1245,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
             user_pairs[user_id] = requester_id
             user_pairs[requester_id] = user_id
             await safe_reply(update, "🔄 *Reconnected!* Start chatting! 🗣️", context)
-            await safe_send_message(requester_id, "🔄 *Reconnected!* Start chatting! 🗣️", context)
+            await safe_bot_send_message(requester_id, "🔄 *Reconnected!* Start chatting! 🗣️", context)
             context.bot_data.get("rematch_requests", {}).pop(user_id, None)
             if has_premium_feature(user_id, "vaulted_chats"):
                 chat_histories[user_id] = chat_histories.get(user_id, [])
@@ -1332,7 +1332,7 @@ async def instant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.bot_data["chat_start_times"] = context.bot_data.get("chat_start_times", {})
     context.bot_data["chat_start_times"][chat_key] = int(time.time())
     await safe_reply(update, "🔄 *Reconnected!* Start chatting! 🗣️", context)
-    await safe_send_message(partner_id, "🔄 *Reconnected!* Start chatting! 🗣️", context)
+    await safe_bot_send_message(partner_id, "🔄 *Reconnected!* Start chatting! 🗣️", context)
     if has_premium_feature(user_id, "vaulted_chats"):
         chat_histories[user_id] = chat_histories.get(user_id, [])
     if has_premium_feature(partner_id, "vaulted_chats"):
@@ -1647,7 +1647,7 @@ async def button(update: Update, context: ContextTypes) -> None:
             f"Use /next to start a new chat in the bot."
         )
         await safe_reply(update, personal_message, context)
-        await safe_send_message(requester_id, (
+        await safe_bot_send_message(requester_id, (
             f"🌟 *Personal Chat Started* 🌟\n\n"
             f"Your bot chat has ended. You can now chat personally with your partner!\n"
             f"👤 Open their Telegram chat: [Click here](tg://user?id={user_id})\n"
@@ -1666,7 +1666,7 @@ async def button(update: Update, context: ContextTypes) -> None:
         requester_data = context.bot_data.get("personal_chat_requests", {}).get(user_id, {})
         requester_id = requester_data.get("requester_id")
         if requester_id:
-            await safe_send_message(requester_id, "❌ Your personal chat request was declined 😔. You can continue chatting here.", context)
+            await safe_bot_send_message(requester_id, "❌ Your personal chat request was declined 😔. You can continue chatting here.", context)
         context.bot_data.get("personal_chat_requests", {}).pop(user_id, None)
         return
     
@@ -1806,7 +1806,7 @@ async def button(update: Update, context: ContextTypes) -> None:
         user_pairs[user_id] = requester_id
         user_pairs[requester_id] = user_id
         await safe_reply(update, "🔄 *Reconnected!* Start chatting! 🗣️", context)
-        await safe_send_message(requester_id, "🔄 *Reconnected!* Start chatting! 🗣️", context)
+        await safe_bot_send_message(requester_id, "🔄 *Reconnected!* Start chatting! 🗣️", context)
         if has_premium_feature(user_id, "vaulted_chats"):
             chat_histories[user_id] = chat_histories.get(user_id, [])
         if has_premium_feature(requester_id, "vaulted_chats"):
@@ -1817,7 +1817,7 @@ async def button(update: Update, context: ContextTypes) -> None:
         requester_data = context.bot_data.get("rematch_requests", {}).get(user_id, {})
         requester_id = requester_data.get("requester_id")
         if requester_id:
-            await safe_send_message(requester_id, "❌ Your rematch request was declined 😔.", context)
+            await safe_bot_send_message(requester_id, "❌ Your rematch request was declined 😔.", context)
         context.bot_data.get("rematch_requests", {}).pop(user_id, None)
     elif data.startswith("emoji_"):
         await verify_emoji(update, context)
@@ -1978,7 +1978,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 }},
                 upsert=True
             )
-            await safe_send_message(partner_id,
+            await safe_bot_send_message(partner_id,
                 "🚫 *Temporary Ban* 🚫\n"
                 f"You've been banned for 24 hours due to multiple reports 📢. "
                 "Contact support if you believe this is an error.", context)
@@ -2014,7 +2014,7 @@ async def delete_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         del user_pairs[user_id]
         if partner_id in user_pairs:
             del user_pairs[partner_id]
-        await safe_send_message(partner_id, "👋 Your partner has left the chat. Use /start to find a new one.", context)
+        await safe_bot_send_message(partner_id, "👋 Your partner has left the chat. Use /start to find a new one.", context)
     
     # Remove from waiting list
     if user_id in waiting_users:
@@ -2089,7 +2089,7 @@ async def message_handler(update: Update, context: ContextTypes) -> None:
     formatted_message = message
     if has_premium_feature(user_id, "flare"):  # Updated to use "flare"
         formatted_message = f"✨ {message} ✨"
-    await safe_send_message(partner_id, formatted_message, context)
+    await safe_bot_send_message(partner_id, formatted_message, context)
     if user_id in chat_histories:
         chat_histories[user_id].append(f"You: {message}")
     if partner_id in chat_histories:
@@ -2155,10 +2155,10 @@ async def issue_keyword_violation(user_id: int, message: str, reason: str, conte
                 f"You've been banned{' for 24 hours' if ban_type == 'temporary' else ''} due to inappropriate content. "
                 "Contact support if you believe this is an error."
             )
-            await safe_send_message(user_id, ban_message, context)
+            await safe_bot_send_message(user_id, ban_message, context)
             if user_id in user_pairs:
                 partner_id = user_pairs[user_id]
-                await safe_send_message(partner_id, "👋 Your partner has left the chat. Use /start to find a new one.", context)
+                await safe_bot_send_message(partner_id, "👋 Your partner has left the chat. Use /start to find a new one.", context)
                 remove_pair(user_id, partner_id)
             if user_id in waiting_users:
                 waiting_users.remove(user_id)
@@ -2268,7 +2268,7 @@ async def cleanup_personal_chat_requests(context: ContextTypes.DEFAULT_TYPE) -> 
                    if current_time - data["timestamp"] > 24 * 3600]  # 24 hours
         for partner_id in expired:
             requester_id = personal_chat_requests[partner_id]["requester_id"]
-            await safe_send_message(requester_id, "⏰ Your personal chat request expired without a response.", context)
+            await safe_bot_send_message(requester_id, "⏰ Your personal chat request expired without a response.", context)
             personal_chat_requests.pop(partner_id, None)
             logger.info(f"Removed expired personal chat request for partner {partner_id}")
         context.bot_data["personal_chat_requests"] = personal_chat_requests
