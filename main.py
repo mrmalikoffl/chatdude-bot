@@ -80,6 +80,7 @@ message_timestamps = defaultdict(list)
 chat_histories = {}
 INACTIVITY_TIMEOUT = 600  # 10 minutes
 notification_cache = TTLCache(maxsize=1000, ttl=300)  # 5-minute cooldown
+user_pairs_lock = threading.Lock()  # Lock for user_pairs (fixes the error)
 
 # Conversation states
 NAME, AGE, GENDER, LOCATION, CONSENT, VERIFICATION, TAGS = range(7)
