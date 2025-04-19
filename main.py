@@ -407,6 +407,7 @@ async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TY
     except telegram.error.BadRequest as bre:
         logger.warning(f"MarkdownV2 parsing failed: {bre}. Text: {text[:200]}")
         try:
+            # Retry with original text to avoid over-escaping
             escaped_text = escape_markdown_v2(original_text)
             logger.debug(f"Retrying with escaped text: {escaped_text[:200]}")
             if update.callback_query and not kwargs.get("reply_markup"):
@@ -2448,7 +2449,6 @@ async def admin_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await safe_reply(update, access_text, context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Delete a user's data"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
@@ -2469,7 +2469,6 @@ async def admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(update, "⚠️ Usage: /admin_delete \\<user_id\\> 📋\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Grant premium status to a user, including Ultra Premium features for durations >= 180 days."""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
@@ -2531,7 +2530,6 @@ async def admin_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update, "⚠️ Usage: /admin_premium \\<user_id\\> \\<days\\> 📋\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_revoke_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Revoke premium status from a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
@@ -2569,7 +2567,6 @@ async def admin_revoke_premium(update: Update, context: ContextTypes.DEFAULT_TYP
         await safe_reply(update, "⚠️ Usage: /admin_revoke_premium \\<user_id\\> 📋\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Ban a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
@@ -2640,7 +2637,6 @@ async def admin_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await safe_reply(update, "⚠️ Usage: /admin_ban \\<user_id\\> \\<days/permanent\\> 📋\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Unban a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
@@ -2650,7 +2646,6 @@ async def admin_unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         user = get_user(target_id)
         if not user:
             await safe_reply(update, "😕 User not found 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
-            return
         logger.debug(f"User {target_id} before admin_unban: premium_expiry={user.get('premium_expiry')}, premium_features={user.get('premium_features')}")
         update_user(target_id, {
             "ban_type": None,
@@ -2829,7 +2824,6 @@ async def admin_premiumuserslist(update: Update, context: ContextTypes.DEFAULT_T
         await safe_reply(update, "😔 Error retrieving premium users list 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Display detailed user information"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
@@ -2911,7 +2905,6 @@ async def admin_reports(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update, "😔 Error retrieving reports 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_clear_reports(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Clear reports for a user"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
