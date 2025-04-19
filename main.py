@@ -605,7 +605,7 @@ async def send_channel_notification(context: ContextTypes.DEFAULT_TYPE, message:
 @restrict_access
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
-    chat_id = update.effective_chat.id  # Explicitly get chat_id
+    chat_id = update.effective_chat.id
     logger.info(f"Received /start command from user {user_id} with chat_id {chat_id}")
     
     # Save chat_id immediately
@@ -613,7 +613,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         user_data = get_user_with_cache(user_id) or {}
         user_data["chat_id"] = chat_id
         user_data["created_at"] = user_data.get("created_at", int(time.time()))
-        result = db.collection("users").update_one(
+        result = get_db_collection("users").update_one(  # Fixed: db["users"] instead of db.collection("users")
             {"user_id": user_id},
             {"$set": user_data},
             upsert=True
@@ -628,9 +628,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 context,
                 f"⚠️ Failed to save chat_id for user {user_id}: {escape_markdown_v2(str(e))} 🌑"
             )
+        error_message = escape_markdown_v2("An error occurred while setting up your profile. Please try again later or contact support! 😓")
         await safe_reply(
             update,
-            "⚠️ An error occurred while setting up your profile. Please try again later or contact support! 😓",
+            f"⚠️ {error_message}",
             context,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -638,31 +639,49 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     if is_banned(user_id):
         user = get_user_with_cache(user_id)
+        ban_type = user.get("ban_type", "permanent")
+        ban_expiry = user.get("ban_expiry")
         ban_msg = (
-            "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
-            if user["ban_type"] == "permanent"
-            else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
+            "🚫 You are permanently banned 🔒\\. Contact support to appeal 📧\\."
+            if ban_type == "permanent"
+            else f"🚫 You are banned until {datetime.fromtimestamp(ban_expiry).strftime('%Y-%m-%d %H:%M')} ⏰\\."
         )
-        await safe_reply(update, ban_msg, context, parse_mode=ParseMode.MARKDOWN_V2)  # Added parse_mode for consistency
+        await safe_reply(update, ban_msg, context, parse_mode=ParseMode.MARKDOWN_V2)
         return ConversationHandler.END
     
     if not check_rate_limit(user_id):
-        await safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again ⏰.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(
+            update,
+            f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again ⏰\\.",
+            context,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
         return ConversationHandler.END
     
     if user_id in user_pairs:
-        await safe_reply(update, "💬 You're already in a chat 😔. Use /next to switch or /stop to end.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(
+            update,
+            "💬 You're already in a chat 😔\\. Use /next to switch or /stop to end\\.",
+            context,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
         return ConversationHandler.END
     
     if user_id in waiting_users:
-        await safe_reply(update, "🔍 You're already waiting for a chat partner... Please wait!", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(
+            update,
+            "🔍 You're already waiting for a chat partner\\.\\.\\. Please wait\\!",
+            context,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
         return ConversationHandler.END
     
     user = get_user_with_cache(user_id)
     current_state = user.get("setup_state")
     if current_state is not None:
         context.user_data["state"] = current_state
-        await safe_reply(update, f"Continuing setup. Please provide the requested information for {current_state}.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        message = escape_markdown_v2(f"Continuing setup. Please provide the requested information for {current_state}.")
+        await safe_reply(update, message, context, parse_mode=ParseMode.MARKDOWN_V2)
         return current_state
     
     if not user.get("consent"):
@@ -689,7 +708,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             f"📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
             "ℹ️ Awaiting consent"
         ))
-        update_user(user_id, {"setup_state": CONSENT})
+        update_user(user_id, {"setup_state": CONSENT})  # Ensure update_user also uses db["users"]
         context.user_data["state"] = CONSENT
         return CONSENT
     
@@ -701,7 +720,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         random.shuffle(all_emojis)
         keyboard = [[InlineKeyboardButton(emoji, callback_data=f"emoji_{emoji}") for emoji in all_emojis]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await safe_reply(update, f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{correct_emoji}*", context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+        message = f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{escape_markdown_v2(correct_emoji)}*"
+        await safe_reply(update, message, context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
         update_user(user_id, {"setup_state": VERIFICATION})
         context.user_data["state"] = VERIFICATION
         return VERIFICATION
@@ -710,15 +730,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     required_fields = ["name", "age", "gender", "location"]
     missing_fields = [field for field in required_fields if not profile.get(field)]
     if missing_fields:
-        await safe_reply(update, "✨ Let’s set up your profile\\! Please enter your name:", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(
+            update,
+            "✨ Let’s set up your profile\\! Please enter your name:",
+            context,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
         update_user(user_id, {"setup_state": NAME})
         context.user_data["state"] = NAME
         return NAME
     
-    await safe_reply(update, "🎉 Your profile is ready! Use `/next` to find a chat partner and start connecting! 🚀", context, parse_mode=ParseMode.MARKDOWN_V2)
+    await safe_reply(
+        update,
+        "🎉 Your profile is ready! Use `/next` to find a chat partner and start connecting! 🚀",
+        context,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
     update_user(user_id, {"setup_state": None})
     context.user_data["state"] = None
-    return ConversationHandler.END
+    return ConversationHandler.END       
 
 async def consent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -739,7 +769,7 @@ async def consent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if not success:
                 await safe_reply(update, "⚠️ Failed to update consent. Please try again.", context)
                 return ConversationHandler.END
-            await safe_reply(update, "✅ Thank you for agreeing! Let’s verify your profile.", context)
+            await safe_reply(updae, "✅ Thank you for agreeing! Let’s verify your profile.", context)
             correct_emoji = random.choice(VERIFICATION_EMOJIS)
             context.user_data["correct_emoji"] = correct_emoji
             other_emojis = random.sample([e for e in VERIFICATION_EMOJIS if e != correct_emoji], 3)
