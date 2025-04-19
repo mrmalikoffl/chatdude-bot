@@ -2254,12 +2254,16 @@ def has_premium_feature(user_id: int, feature: str) -> bool:
     return expiry > current_time
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle errors during update processing."""
     logger.error(f"Update {update} caused error: {context.error}")
+    # Reply to user if applicable
     if update and (update.message or update.callback_query):
         await safe_reply(update, "❌ An error occurred 😔. Please try again or contact support.", context)
+    # Prepare notification message with escaped error
+    error_str = str(context.error)[:100]  # Truncate to avoid length issues
     notification_message = (
         f"⚠️ *Bot Error* ⚠️\n\n"
-        f"📜 *Error*: {str(context.error)[:100]}\n"
+        f"📜 *Error*: {escape_markdown_v2(error_str)}\n"
         f"🕒 *Occurred At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
     await send_channel_notification(context, notification_message)
