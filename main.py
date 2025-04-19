@@ -341,13 +341,12 @@ import re
 def escape_markdown_v2(text):
     """Escape special characters for Telegram MarkdownV2, preserving formatting markers."""
     if not isinstance(text, str):
-        return str(text)
+        text = str(text)
     
-    # Define all MarkdownV2 special characters that need escaping
+    # Define all MarkdownV2 special characters
     MARKDOWNV2_SPECIAL_CHARS = r'_*[]()~`>#+\-=|{}.!'
     
-    # Regex to match MarkdownV2 formatting constructs (bold, italic, code, links, etc.)
-    # Captures *bold*, _italic_, ```code```, [text](link)
+    # Regex to match MarkdownV2 formatting: *bold*, _italic_, ```code```, [text](url)
     formatting_pattern = r'(\*[^\*]+\*|_[^_]+_|```[^`]+```|\[[^\]]+\]\([^\)]+\))'
     
     # Split text into formatting and non-formatting parts
@@ -356,42 +355,39 @@ def escape_markdown_v2(text):
     
     for part in parts:
         if re.match(formatting_pattern, part):
-            # This is a formatting section (e.g., *bold*, _italic_, ```code```, [text](link))
-            # Preserve the formatting markers, escape special characters in content
+            # Handle formatting sections
             if part.startswith('*') and part.endswith('*'):
-                inner_text = part[1:-1]  # Extract text between *...*
+                inner_text = part[1:-1]
                 for char in MARKDOWNV2_SPECIAL_CHARS:
-                    if char != '*':  # Preserve * for bold
+                    if char != '*':
                         inner_text = inner_text.replace(char, f'\\{char}')
                 escaped_parts.append(f'*{inner_text}*')
             elif part.startswith('_') and part.endswith('_'):
-                inner_text = part[1:-1]  # Extract text between _..._
+                inner_text = part[1:-1]
                 for char in MARKDOWNV2_SPECIAL_CHARS:
-                    if char != '_':  # Preserve _ for italic
+                    if char != '_':
                         inner_text = inner_text.replace(char, f'\\{char}')
                 escaped_parts.append(f'_{inner_text}_')
             elif part.startswith('```') and part.endswith('```'):
-                inner_text = part[3:-3]  # Extract text between ```...```
+                inner_text = part[3:-3]
                 for char in MARKDOWNV2_SPECIAL_CHARS:
-                    if char != '`':  # Preserve ` for code
+                    if char != '`':
                         inner_text = inner_text.replace(char, f'\\{char}')
                 escaped_parts.append(f'```{inner_text}```')
             elif part.startswith('[') and ')' in part:
-                # Handle links: [text](url)
                 link_text, url = part[1:].split('](', 1)
-                url = url[:-1]  # Remove closing )
+                url = url[:-1]
                 for char in MARKDOWNV2_SPECIAL_CHARS:
-                    if char not in '[]()':  # Preserve []() for link syntax
+                    if char not in '[]()':
                         link_text = link_text.replace(char, f'\\{char}')
                         url = url.replace(char, f'\\{char}')
                 escaped_parts.append(f'[{link_text}]({url})')
             else:
-                # Fallback: escape all special characters
                 for char in MARKDOWNV2_SPECIAL_CHARS:
                     part = part.replace(char, f'\\{char}')
                 escaped_parts.append(part)
         else:
-            # Non-formatting section, escape all special characters
+            # Escape all special characters in non-formatting sections
             for char in MARKDOWNV2_SPECIAL_CHARS:
                 part = part.replace(char, f'\\{char}')
             escaped_parts.append(part)
@@ -2722,19 +2718,19 @@ async def admin_premiumuserslist(update: Update, context: ContextTypes.DEFAULT_T
             premium_expiry = user.get("premium_expiry")
             profile = user.get("profile", {})
             expiry_date = (
-                datetime.fromtimestamp(premium_expiry).strftime("%Y\\-%m\\-%d")
+                datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
                 if premium_expiry and isinstance(premium_expiry, (int, float)) and premium_expiry > current_time
                 else "No expiry set"
             )
             active_features = [k for k, v in user.get("premium_features", {}).items() if v is True or (isinstance(v, int) and v > current_time)]
             if "instant_rematch_count" in user.get("premium_features", {}) and user["premium_features"]["instant_rematch_count"] > 0:
                 active_features.append(f"instant_rematch_count: {user['premium_features']['instant_rematch_count']}")
-            features_str = escape_markdown_v2(", ".join(active_features) or "None")
+            features_str = ", ".join(active_features) or "None"
             message += (
                 f"👤 *User ID*: {user_id}\n"
                 f"🧑 *Name*: {escape_markdown_v2(profile.get('name', 'Not set'))}\n"
-                f"⏰ *Premium Until*: {escape_markdown_v2(expiry_date)}\n"
-                f"✨ *Features*: {features_str}\n"
+                f"⏰ *Premium Until*: {expiry_date}\n"
+                f"✨ *Features*: {escape_markdown_v2(features_str)}\n"
                 "━━━━━━━━━━━━━━\n"
             )
             user_count += 1
@@ -2744,6 +2740,7 @@ async def admin_premiumuserslist(update: Update, context: ContextTypes.DEFAULT_T
         if message:
             message += f"📊 *Total Premium Users*: {user_count}\n"
             await safe_reply(update, message, context, parse_mode=ParseMode.MARKDOWN_V2)
+        logger.info(f"Admin {user_id} requested premium users list with {user_count} users")
     except Exception as e:
         logger.error(f"Error fetching premium users list: {e}")
         await safe_reply(update, "😔 Error retrieving premium users list 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
