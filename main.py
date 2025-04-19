@@ -742,7 +742,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     await safe_reply(
         update,
-        "🎉 Your profile is ready\\! Use `/next` to find a chat partner and start connecting! 🚀",
+        "🎉 Your profile is ready\\! Use `/next` to find a chat partner and start connecting\\! 🚀",
         context,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -1189,7 +1189,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not chat_id:
         await safe_reply(
             update,
-            "⚠️ We couldn’t find your chat ID. Please use /start to initialize your profile and try again! 😊",
+            "⚠️ We couldn’t find your chat ID. Please use /start to initialize your profile and try again\\! 😊",
             context,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -1247,7 +1247,7 @@ async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not chat_id:
         await safe_reply(
             update,
-            "⚠️ We couldn’t find your chat ID. Please use /start to initialize your profile and try again! 😊",
+            "⚠️ We couldn’t find your chat ID. Please use /start to initialize your profile and try again\\! 😊",
             context,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -1289,7 +1289,7 @@ async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else:
             waiting_users.append(user_id)
     
-    await safe_reply(update, "🔍 Looking for a new chat partner...", context, parse_mode=ParseMode.MARKDOWN_V2)
+    await safe_reply(update, "🔍 Looking for a new chat partner\\.\\.\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
     await match_users(context)
 
 @restrict_access
