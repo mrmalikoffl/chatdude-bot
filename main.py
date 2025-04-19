@@ -246,7 +246,7 @@ def remove_pair(user_id: int, partner_id: int) -> None:
 
 # Database functions
 @lru_cache(maxsize=1000)
-def get_user_with_cache_cached(user_id: int) -> dict:
+def get_user_cached(user_id: int) -> dict:
     logger.info(f"Fetching user {user_id}")
     users = get_db_collection("users")
     user = users.find_one({"user_id": user_id})
@@ -268,8 +268,8 @@ def get_user_with_cache_cached(user_id: int) -> dict:
     logger.debug(f"Returning user {user_id}: {user}")
     return user
 
-def get_user_with_cache_with_cache(user_id: int) -> dict:
-    return get_user_with_cache_cached(user_id)
+def get_user_with_cache(user_id: int) -> dict:
+    return get_user_cached(user_id)
 
 def update_user(user_id: int, data: dict) -> bool:
     retries = 3
