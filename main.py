@@ -1008,23 +1008,36 @@ async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 @restrict_access
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display the help menu with chat commands and options."""
     user_id = update.effective_user.id
     if is_banned(user_id):
         user = get_user(user_id)
-        ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
-                  f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
-        await safe_reply(update, ban_msg, context)
+        ban_msg = (
+            "🚫 You are permanently banned. Contact support to appeal."
+            if user["ban_type"] == "permanent"
+            else f"🚫 You are banned until {escape_markdown_v2(datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M'))}."
+        )
+        logger.debug(f"Prepared ban message for user {user_id}: {ban_msg}")
+        await safe_reply(update, ban_msg, context, parse_mode=ParseMode.MARKDOWN)
         return
     keyboard = [
-        [InlineKeyboardButton("💬 Start Chat", callback_data="start_chat"),
-         InlineKeyboardButton("🔍 Next Partner", callback_data="next_chat")],
-        [InlineKeyboardButton("👋 Stop Chat", callback_data="stop_chat"),
-         InlineKeyboardButton("⚙️ Settings", callback_data="settings_menu")],
-        [InlineKeyboardButton("🌟 Premium", callback_data="premium_menu"),
-         InlineKeyboardButton("📜 History", callback_data="history_menu")],
-        [InlineKeyboardButton("🚨 Report", callback_data="report_user"),
-         InlineKeyboardButton("🔄 Re-Match", callback_data="rematch_partner")],
-        [InlineKeyboardButton("🗑️ Delete Profile", callback_data="delete_profile")]
+        [
+            InlineKeyboardButton("💬 Start Chat", callback_data="start_chat"),
+            InlineKeyboardButton("🔍 Next Partner", callback_data="next_chat"),
+        ],
+        [
+            InlineKeyboardButton("👋 Stop Chat", callback_data="stop_chat"),
+            InlineKeyboardButton("⚙️ Settings", callback_data="settings_menu"),
+        ],
+        [
+            InlineKeyboardButton("🌟 Premium", callback_data="premium_menu"),
+            InlineKeyboardButton("📜 History", callback_data="history_menu"),
+        ],
+        [
+            InlineKeyboardButton("🚨 Report", callback_data="report_user"),
+            InlineKeyboardButton("🔄 Re-Match", callback_data="rematch_partner"),
+        ],
+        [InlineKeyboardButton("🗑️ Delete Profile", callback_data="delete_profile")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     help_text = (
@@ -1059,7 +1072,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "• /admin - View admin tools and commands\n"
         )
     help_text += "\nUse the buttons below to get started! 👇"
-    await safe_reply(update, help_text, context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+    logger.debug(f"Prepared help text for user {user_id}: {help_text[:200]}")
+    await safe_reply(update, help_text, context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
 @restrict_access
 async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
