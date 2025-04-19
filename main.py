@@ -336,31 +336,67 @@ def delete_user(user_id: int):
         logger.error(f"Unexpected error deleting user {user_id}: {e}")
         raise
 
+import re
+
 def escape_markdown_v2(text):
     """Escape special characters for Telegram MarkdownV2, preserving formatting markers."""
     if not isinstance(text, str):
         return str(text)
     
-    # Split the text into bolded (*text*) and non-bolded sections
-    parts = re.split(r'(\*[^\*]+\*)', text)
+    # Define all MarkdownV2 special characters that need escaping
+    MARKDOWNV2_SPECIAL_CHARS = r'_*[]()~`>#+\-=|{}.!'
+    
+    # Regex to match MarkdownV2 formatting constructs (bold, italic, code, links, etc.)
+    # Captures *bold*, _italic_, ```code```, [text](link)
+    formatting_pattern = r'(\*[^\*]+\*|_[^_]+_|```[^`]+```|\[[^\]]+\]\([^\)]+\))'
+    
+    # Split text into formatting and non-formatting parts
+    parts = re.split(formatting_pattern, text)
     escaped_parts = []
     
     for part in parts:
-        if part.startswith('*') and part.endswith('*'):
-            # This is a bold section (e.g., *Name*)
-            inner_text = part[1:-1]  # Extract text between *...*
-            # Escape special characters within the bolded text, but not the * markers
-            for char in MARKDOWNV2_SPECIAL_CHARS:
-                if char != '*':  # Preserve the * used for bold
-                    inner_text = inner_text.replace(char, f"\\{char}")
-            escaped_parts.append(f"*{inner_text}*")
+        if re.match(formatting_pattern, part):
+            # This is a formatting section (e.g., *bold*, _italic_, ```code```, [text](link))
+            # Preserve the formatting markers, escape special characters in content
+            if part.startswith('*') and part.endswith('*'):
+                inner_text = part[1:-1]  # Extract text between *...*
+                for char in MARKDOWNV2_SPECIAL_CHARS:
+                    if char != '*':  # Preserve * for bold
+                        inner_text = inner_text.replace(char, f'\\{char}')
+                escaped_parts.append(f'*{inner_text}*')
+            elif part.startswith('_') and part.endswith('_'):
+                inner_text = part[1:-1]  # Extract text between _..._
+                for char in MARKDOWNV2_SPECIAL_CHARS:
+                    if char != '_':  # Preserve _ for italic
+                        inner_text = inner_text.replace(char, f'\\{char}')
+                escaped_parts.append(f'_{inner_text}_')
+            elif part.startswith('```') and part.endswith('```'):
+                inner_text = part[3:-3]  # Extract text between ```...```
+                for char in MARKDOWNV2_SPECIAL_CHARS:
+                    if char != '`':  # Preserve ` for code
+                        inner_text = inner_text.replace(char, f'\\{char}')
+                escaped_parts.append(f'```{inner_text}```')
+            elif part.startswith('[') and ')' in part:
+                # Handle links: [text](url)
+                link_text, url = part[1:].split('](', 1)
+                url = url[:-1]  # Remove closing )
+                for char in MARKDOWNV2_SPECIAL_CHARS:
+                    if char not in '[]()':  # Preserve []() for link syntax
+                        link_text = link_text.replace(char, f'\\{char}')
+                        url = url.replace(char, f'\\{char}')
+                escaped_parts.append(f'[{link_text}]({url})')
+            else:
+                # Fallback: escape all special characters
+                for char in MARKDOWNV2_SPECIAL_CHARS:
+                    part = part.replace(char, f'\\{char}')
+                escaped_parts.append(part)
         else:
-            # This is a non-bold section, escape all special characters
+            # Non-formatting section, escape all special characters
             for char in MARKDOWNV2_SPECIAL_CHARS:
-                part = part.replace(char, f"\\{char}")
+                part = part.replace(char, f'\\{char}')
             escaped_parts.append(part)
     
-    return "".join(escaped_parts)
+    return ''.join(escaped_parts)
 
 async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = "MarkdownV2", **kwargs) -> telegram.Message:
     try:
@@ -2628,7 +2664,7 @@ async def admin_userslist(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             premium_features = user.get("premium_features", {})
             created_at = user.get("created_at", int(time.time()))
             created_date = (
-                datetime.fromtimestamp(created_at).strftime("%Y-%m-%d")
+                datetime.fromtimestamp(created_at).strftime("%Y\\-%m\\-%d")
                 if created_at and isinstance(created_at, (int, float))
                 else "Unknown"
             )
@@ -2642,14 +2678,14 @@ async def admin_userslist(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             ban_status = user.get("ban_type", "None")
             verified_status = "Yes ✅" if user.get("verified", False) else "No ❌"
-            name = profile.get("name", "Not set")
+            name = escape_markdown_v2(profile.get("name", "Not set"))
             message += (
                 f"👤 *User ID*: {user_id}\n"
                 f"🧑 *Name*: {name}\n"
                 f"📅 *Created*: {created_date}\n"
-                f"💎 *Premium*: {premium_status}\n"
-                f"🚫 *Ban*: {ban_status}\n"
-                f"✅ *Verified*: {verified_status}\n"
+                f"💎 *Premium*: {escape_markdown_v2(premium_status)}\n"
+                f"🚫 *Ban*: {escape_markdown_v2(ban_status)}\n"
+                f"✅ *Verified*: {escape_markdown_v2(verified_status)}\n"
                 "━━━━━━━━━━━━━━\n"
             )
             user_count += 1
@@ -2686,18 +2722,18 @@ async def admin_premiumuserslist(update: Update, context: ContextTypes.DEFAULT_T
             premium_expiry = user.get("premium_expiry")
             profile = user.get("profile", {})
             expiry_date = (
-                datetime.fromtimestamp(premium_expiry).strftime("%Y-%m-%d")
+                datetime.fromtimestamp(premium_expiry).strftime("%Y\\-%m\\-%d")
                 if premium_expiry and isinstance(premium_expiry, (int, float)) and premium_expiry > current_time
                 else "No expiry set"
             )
             active_features = [k for k, v in user.get("premium_features", {}).items() if v is True or (isinstance(v, int) and v > current_time)]
             if "instant_rematch_count" in user.get("premium_features", {}) and user["premium_features"]["instant_rematch_count"] > 0:
                 active_features.append(f"instant_rematch_count: {user['premium_features']['instant_rematch_count']}")
-            features_str = ", ".join(active_features) or "None"
+            features_str = escape_markdown_v2(", ".join(active_features) or "None")
             message += (
                 f"👤 *User ID*: {user_id}\n"
-                f"🧑 *Name*: {profile.get('name', 'Not set')}\n"
-                f"⏰ *Premium Until*: {expiry_date}\n"
+                f"🧑 *Name*: {escape_markdown_v2(profile.get('name', 'Not set'))}\n"
+                f"⏰ *Premium Until*: {escape_markdown_v2(expiry_date)}\n"
                 f"✨ *Features*: {features_str}\n"
                 "━━━━━━━━━━━━━━\n"
             )
@@ -2863,7 +2899,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "$or": [{"ban_expiry": {"$gt": current_time}}, {"ban_type": "permanent"}]
         })
         active_users = len(set(user_pairs.keys()).union(waiting_users))
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now().strftime("%Y\\-%m\\-%d %H\\:%M\\:%S")
         stats_message = (
             "📈 *Bot Statistics* 📈\n\n"
             f"👥 *Total Users*: *{total_users}*\n"
