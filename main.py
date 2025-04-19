@@ -885,8 +885,8 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
                 "Use /help for more options\\."
             )
             try:
-                await safe_bot_send_message(context, user1, user1_message, parse_mode="MarkdownV2")
-                await safe_bot_send_message(context, user2, user2_message, parse_mode="MarkdownV2")
+                await safe_bot_send_message(context.bot, user1, user1_message, parse_mode=ParseMode.MARKDOWN_V2)
+                await safe_bot_send_message(context.bot, user2, user2_message, parse_mode=ParseMode.MARKDOWN_V2)
                 if has_premium_feature(user1, "vaulted_chats"):
                     chat_histories[user1] = []
                 if has_premium_feature(user2, "vaulted_chats"):
