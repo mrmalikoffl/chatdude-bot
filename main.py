@@ -173,7 +173,7 @@ def restrict_access(handler):
         
         # Check ban status
         if is_banned(user_id):
-            user = get_user(user_id)
+            user = get_user_with_cache(user_id)
             ban_msg = (
                 "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
                 if user["ban_type"] == "permanent"
@@ -191,7 +191,7 @@ def restrict_access(handler):
             return await handler(update, context, *args, **kwargs)
         
         # Check profile completeness, consent, and verification
-        user = get_user(user_id)
+        user = get_user_with_cache_with_cache(user_id)
         if not user.get("consent", False) or not user.get("verified", False):
             await update.message.reply_text("⚠️ Please complete your profile setup with /start, including consent and verification.")
             return
@@ -246,7 +246,7 @@ def remove_pair(user_id: int, partner_id: int) -> None:
 
 # Database functions
 @lru_cache(maxsize=1000)
-def get_user_cached(user_id: int) -> dict:
+def get_user_with_cache_cached(user_id: int) -> dict:
     logger.info(f"Fetching user {user_id}")
     users = get_db_collection("users")
     user = users.find_one({"user_id": user_id})
@@ -268,8 +268,8 @@ def get_user_cached(user_id: int) -> dict:
     logger.debug(f"Returning user {user_id}: {user}")
     return user
 
-def get_user_with_cache(user_id: int) -> dict:
-    return get_user_cached(user_id)
+def get_user_with_cache_with_cache(user_id: int) -> dict:
+    return get_user_with_cache_cached(user_id)
 
 def update_user(user_id: int, data: dict) -> bool:
     retries = 3
@@ -504,7 +504,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info(f"Received /start command from user {user_id}")
     
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = (
             "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
             if user["ban_type"] == "permanent"
@@ -525,7 +525,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await safe_reply(update, "🔍 You're already waiting for a chat partner... Please wait!", context)
         return ConversationHandler.END
     
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     current_state = user.get("setup_state")
     if current_state is not None:
         context.user_data["state"] = current_state
@@ -594,7 +594,7 @@ async def consent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     choice = query.data
     if choice == "consent_agree":
         try:
-            user = get_user(user_id)
+            user = get_user_with_cache(user_id)
             success = update_user(user_id, {
                 "consent": True,
                 "consent_time": int(time.time()),
@@ -631,7 +631,7 @@ async def verify_emoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     selected_emoji = query.data.replace("emoji_", "")
     correct_emoji = context.user_data.get("correct_emoji")
     if selected_emoji == correct_emoji:
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         update_user(user_id, {
             "verified": True,
             "profile": user.get("profile", {}),
@@ -656,7 +656,7 @@ async def verify_emoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def set_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     profile = user.get("profile", {})
     name = update.message.text.strip()
     if not 1 <= len(name) <= 50:
@@ -683,7 +683,7 @@ async def set_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def set_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     profile = user.get("profile", {})
     age_text = update.message.text.strip()
     try:
@@ -722,7 +722,7 @@ async def set_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.answer()
     user_id = query.from_user.id
     data = query.data
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     profile = user.get("profile", {})
     if data.startswith("gender_"):
         gender = data.split("_")[1].capitalize()
@@ -748,7 +748,7 @@ async def set_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def set_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     current_state = context.user_data.get("state", user.get("setup_state"))
     if current_state != LOCATION:
         await safe_reply(update, "⚠️ Please complete the previous steps. Use /start to begin.", context)
@@ -815,8 +815,8 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
             if not can_match(user1, user2):
                 i += 2
                 continue
-            user1_data = get_user_with_cache(user1)
-            user2_data = get_user_with_cache(user2)
+            user1_data = get_user_with_cache_with_cache(user1)
+            user2_data = get_user_with_cache_with_cache(user2)
             if user1_data is None or user2_data is None:
                 logger.error(f"Failed to retrieve user data: user1={user1} ({user1_data}), user2={user2} ({user2_data})")
                 waiting_users[:] = [u for u in waiting_users if u not in (user1, user2)]
@@ -905,8 +905,8 @@ def can_match(user1: int, user2: int) -> bool:
         logger.info(f"Cannot match {user1} and {user2}: one or both users are banned")
         return False
     
-    user1_data = get_user_with_cache(user1)
-    user2_data = get_user_with_cache(user2)
+    user1_data = get_user_with_cache_with_cache(user1)
+    user2_data = get_user_with_cache_with_cache(user2)
     profile1 = user1_data.get("profile", {})
     profile2 = user2_data.get("profile", {})
     
@@ -952,7 +952,7 @@ def can_match(user1: int, user2: int) -> bool:
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user_with_cache(user_id)
+        user = get_user_with_cache_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
         await safe_reply(update, ban_msg, context)
@@ -976,7 +976,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user_with_cache(user_id)
+        user = get_user_with_cache_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
         await safe_reply(update, ban_msg, context)
@@ -1001,7 +1001,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """Display the help menu with chat commands and options."""
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = (
             "🚫 You are permanently banned. Contact support to appeal."
             if user["ban_type"] == "permanent"
@@ -1069,7 +1069,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = (
             "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
             if user["ban_type"] == "permanent"
@@ -1186,7 +1186,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     payment = update.message.successful_payment
     payload = payment.invoice_payload
     current_time = int(time.time())
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     features = user.get("premium_features", {})
     expiry_duration = {
         "premium_1day": 1 * 24 * 3600,
@@ -1263,7 +1263,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def shine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
         await safe_reply(update, ban_msg, context)
@@ -1282,7 +1282,7 @@ async def shine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def instant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = (
             "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
             if user["ban_type"] == "permanent"
@@ -1290,7 +1290,7 @@ async def instant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         await safe_reply(update, ban_msg, context)
         return
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     if user_id in user_pairs:
         await safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.", context)
         return
@@ -1306,7 +1306,7 @@ async def instant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not partner_id:
         await safe_reply(update, "❌ You haven't chatted with anyone yet 😔.", context)
         return
-    partner_data = get_user(partner_id)
+    partner_data = get_user_with_cache(partner_id)
     if not partner_data:
         await safe_reply(update, "❌ This user is no longer available 😓.", context)
         return
@@ -1342,7 +1342,7 @@ async def instant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def mood(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
         await safe_reply(update, ban_msg, context)
@@ -1370,7 +1370,7 @@ async def set_mood(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await safe_reply(update, "😊 *Mood Match* is a premium feature. Buy it with /premium!", context)
         return
     choice = query.data
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     profile = user.get("profile", {})
     if choice == "mood_clear":
         profile.pop("mood", None)
@@ -1393,7 +1393,7 @@ async def set_mood(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def vault(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
         await safe_reply(update, ban_msg, context)
@@ -1412,7 +1412,7 @@ async def vault(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned 🔒. Contact support to appeal 📧." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
         await safe_reply(update, ban_msg, context)
@@ -1432,7 +1432,7 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def rematch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned 🔒. Contact support to appeal 📧." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
         await safe_reply(update, ban_msg, context)
@@ -1443,14 +1443,14 @@ async def rematch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not has_premium_feature(user_id, "instant_rematch"):
         await safe_reply(update, "🔄 *Rematch* is a premium feature. Buy it with /premium! 🌟", context)
         return
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     partners = user.get("profile", {}).get("past_partners", [])
     if not partners:
         await safe_reply(update, "❌ No past partners to rematch with 😔.", context)
         return
     keyboard = []
     for partner_id in partners[-5:]:
-        partner_data = get_user(partner_id)
+        partner_data = get_user_with_cache(partner_id)
         if partner_data:
             partner_name = partner_data.get("profile", {}).get("name", "Anonymous")
             keyboard.append([InlineKeyboardButton(f"Reconnect with {partner_name}", callback_data=f"rematch_request_{partner_id}")])
@@ -1464,7 +1464,7 @@ async def rematch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def flare(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = (
             "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
             if user["ban_type"] == "permanent"
@@ -1480,7 +1480,7 @@ async def flare(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def personal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = (
             "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
             if user["ban_type"] == "permanent"
@@ -1511,7 +1511,7 @@ async def personal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
          InlineKeyboardButton("❌ Decline", callback_data="personal_decline")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    user_profile = get_user(user_id).get("profile", {})
+    user_profile = get_user_with_cache(user_id).get("profile", {})
     request_message = (
         f"🌟 *Personal Chat Request* 🌟\n\n"
         f"Your chat partner wants to continue chatting privately on Telegram!\n"
@@ -1580,11 +1580,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if is_banned(user_id):
             await safe_reply(update, "🚫 You are banned and cannot send rematch requests 🔒.", context)
             return
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         if user_id in user_pairs:
             await safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.", context)
             return
-        partner_data = get_user(partner_id)
+        partner_data = get_user_with_cache(partner_id)
         if not partner_data:
             await safe_reply(update, "❌ This user is no longer available 😓.", context)
             return
@@ -1608,7 +1608,7 @@ async def button(update: Update, context: ContextTypes) -> None:
     # Check ban status for all callbacks except consent and verification
     if not data.startswith(("consent_", "emoji_")):
         if is_banned(user_id):
-            user = get_user(user_id)
+            user = get_user_with_cache(user_id)
             ban_msg = (
                 "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
                 if user["ban_type"] == "permanent"
@@ -1623,7 +1623,7 @@ async def button(update: Update, context: ContextTypes) -> None:
         if user_id not in user_pairs or user_pairs[user_id] != requester_id:
             await safe_reply(update, "❓ You are not in a chat with this user 😔.", context)
             return
-        user_features = get_user(user_id).get("premium_features", {})
+        user_features = get_user_with_cache(user_id).get("premium_features", {})
         if not user_features.get("premium_expiry", 0) > int(time.time()):
             await safe_reply(update, "❌ You need an active Premium subscription to accept personal chat.", context)
             return
@@ -1671,7 +1671,7 @@ async def button(update: Update, context: ContextTypes) -> None:
     
     # Existing handlers (unchanged)
     if data in ["set_name", "set_age", "set_gender", "set_location", "set_tags"]:
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         if not is_profile_complete(user):
             await safe_reply(update, "⚠️ Please complete your profile setup with /start before using this feature.", context)
             return
@@ -1739,11 +1739,11 @@ async def button(update: Update, context: ContextTypes) -> None:
         if is_banned(user_id):
             await safe_reply(update, "🚫 You are banned and cannot send rematch requests 🔒.", context)
             return
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         if user_id in user_pairs:
             await safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.", context)
             return
-        partner_data = get_user(partner_id)
+        partner_data = get_user_with_cache(partner_id)
         if not partner_data:
             await safe_reply(update, "❌ This user is no longer available 😓.", context)
             return
@@ -1795,7 +1795,7 @@ async def button(update: Update, context: ContextTypes) -> None:
         if user_id in user_pairs:
             await safe_reply(update, "❓ You're already in a chat 😔. Use /stop to end it first.", context)
             return
-        requester_data = get_user(requester_id)
+        requester_data = get_user_with_cache(requester_id)
         if not requester_data:
             await safe_reply(update, "❌ This user is no longer available 😓.", context)
             return
@@ -1831,12 +1831,12 @@ async def button(update: Update, context: ContextTypes) -> None:
 async def settings(update: Update, context: ContextTypes) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned 🔒. Contact support to appeal 📧." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
         await safe_reply(update, ban_msg, context)
         return
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     profile = user.get("profile", {})
     keyboard = [
         [InlineKeyboardButton("🧑 Change Name", callback_data="set_name"),
@@ -1870,7 +1870,7 @@ async def settings_update_handler(update: Update, context: ContextTypes) -> None
     
     # Apply restrict_access logic
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = (
             "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
             if user["ban_type"] == "permanent"
@@ -1878,7 +1878,7 @@ async def settings_update_handler(update: Update, context: ContextTypes) -> None
         )
         await safe_reply(update, ban_msg, context)
         return
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     if not is_profile_complete(user):
         await safe_reply(update, "⚠️ Please complete your profile setup with /start before using this feature.", context)
         return
@@ -1932,7 +1932,7 @@ async def settings_update_handler(update: Update, context: ContextTypes) -> None
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned 🔒. Contact support to appeal 📧." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
         await safe_reply(update, ban_msg, context)
@@ -1958,12 +1958,12 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             update_user(partner_id, {
                 "ban_type": "temporary",
                 "ban_expiry": ban_expiry,
-                "profile": get_user(partner_id).get("profile", {}),
-                "consent": get_user(partner_id).get("consent", False),
-                "verified": get_user(partner_id).get("verified", False),
-                "premium_expiry": get_user(partner_id).get("premium_expiry"),
-                "premium_features": get_user(partner_id).get("premium_features", {}),
-                "created_at": get_user(partner_id).get("created_at", int(time.time()))
+                "profile": get_user_with_cache(partner_id).get("profile", {}),
+                "consent": get_user_with_cache(partner_id).get("consent", False),
+                "verified": get_user_with_cache(partner_id).get("verified", False),
+                "premium_expiry": get_user_with_cache(partner_id).get("premium_expiry"),
+                "premium_features": get_user_with_cache(partner_id).get("premium_features", {}),
+                "created_at": get_user_with_cache(partner_id).get("created_at", int(time.time()))
             })
             violations = get_db_collection("keyword_violations")
             violations.update_one(
@@ -2050,7 +2050,7 @@ async def message_handler(update: Update, context: ContextTypes) -> None:
     
     # Existing ban check
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = (
             "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
             if user["ban_type"] == "permanent"
@@ -2121,7 +2121,7 @@ async def cleanup_rematch_requests(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def issue_keyword_violation(user_id: int, message: str, reason: str, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         violations = get_db_collection("keyword_violations")
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         violation_count = violations.count_documents({"user_id": user_id}) + 1
         ban_type = None
         ban_expiry = None
@@ -2181,7 +2181,7 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 def is_banned(user_id: int) -> bool:
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     ban_type = user.get("ban_type")
     ban_expiry = user.get("ban_expiry")
     if ban_type == "permanent":
@@ -2219,7 +2219,7 @@ def has_premium_feature(user_id: int, feature: str) -> bool:
     """Check if a user has an active premium feature or is an admin."""
     if is_admin(user_id):
         return True
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     if not user:
         return False
     features = user.get("premium_features", {})
@@ -2290,7 +2290,7 @@ async def schedule_message_deletion(context: ContextTypes.DEFAULT_TYPE, chat_id:
 async def set_tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle user input for setting profile tags."""
     user_id = update.effective_user.id
-    user = get_user(user_id)
+    user = get_user_with_cache(user_id)
     current_state = context.user_data.get("state", user.get("setup_state"))
     
     if current_state != TAGS:
@@ -2418,7 +2418,7 @@ async def admin_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             raise ValueError("Days must be positive")
         expiry = int(time.time()) + days * 24 * 3600
         logger.debug(f"Calculated premium_expiry for user {target_id}: {expiry} ({datetime.fromtimestamp(expiry).strftime('%Y-%m-%d %H:%M:%S')})")
-        user = get_user(target_id)
+        user = get_user_with_cache(target_id)
         if not user:
             await safe_reply(update, "😕 User not found 🌑.", context)
             return
@@ -2447,7 +2447,7 @@ async def admin_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "ban_expiry": user.get("ban_expiry"),
             "created_at": user.get("created_at", int(time.time()))
         })
-        updated_user = get_user(target_id)
+        updated_user = get_user_with_cache(target_id)
         expiry_date = datetime.fromtimestamp(updated_user.get('premium_expiry', 0)).strftime('%Y-%m-%d %H:%M:%S') if updated_user.get('premium_expiry') else 'None'
         logger.debug(f"User {target_id} after admin_premium: premium_expiry={updated_user.get('premium_expiry')} ({expiry_date}), premium_features={updated_user.get('premium_features')}")
         await safe_reply(update, f"🎁 Premium granted to user *{target_id}* for *{days}* days 🌟.", context)
@@ -2465,7 +2465,7 @@ async def admin_revoke_premium(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     try:
         target_id = int(context.args[0])
-        user = get_user(target_id)
+        user = get_user_with_cache(target_id)
         if not user:
             await safe_reply(update, "😕 User not found 🌑.", context)
             return
@@ -2482,7 +2482,7 @@ async def admin_revoke_premium(update: Update, context: ContextTypes.DEFAULT_TYP
         })
         await safe_reply(update, f"❌ Premium status revoked for user *{target_id}* 🌑.", context)
         await safe_bot_send_message(context.bot, target_id, "😔 Your Premium status has been revoked.", context)
-        updated_user = get_user(target_id)
+        updated_user = get_user_with_cache(target_id)
         logger.info(f"Admin {user_id} revoked premium for {target_id}.")
         logger.debug(f"User {target_id} after revoke_premium: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
     except (IndexError, ValueError):
@@ -2497,7 +2497,7 @@ async def admin_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         target_id = int(context.args[0])
         ban_type = context.args[1].lower()
-        user = get_user(target_id)
+        user = get_user_with_cache(target_id)
         if not user:
             await safe_reply(update, "😕 User not found 🌑.", context)
             return
@@ -2544,7 +2544,7 @@ async def admin_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             waiting_users.remove(target_id)
         await safe_reply(update, f"🚫 User *{target_id}* has been {ban_type} banned 🌑.", context)
         await safe_bot_send_message(context.bot, target_id, f"🚫 You have been {ban_type} banned from Talk2Anyone.", context)
-        updated_user = get_user(target_id)
+        updated_user = get_user_with_cache(target_id)
         logger.info(f"Admin {user_id} banned user {target_id} ({ban_type}).")
         logger.debug(f"User {target_id} after admin_ban: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
     except (IndexError, ValueError):
@@ -2558,7 +2558,7 @@ async def admin_unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     try:
         target_id = int(context.args[0])
-        user = get_user(target_id)
+        user = get_user_with_cache(target_id)
         if not user:
             await safe_reply(update, "😕 User not found 🌑.", context)
             return
@@ -2577,7 +2577,7 @@ async def admin_unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         violations.delete_one({"user_id": target_id})
         await safe_reply(update, f"🔓 User *{target_id}* has been unbanned 🌟.", context)
         await safe_bot_send_message(context.bot, target_id, "🎉 You have been unbanned. Use /start to begin.", context)
-        updated_user = get_user(target_id)
+        updated_user = get_user_with_cache(target_id)
         logger.info(f"Admin {user_id} unbanned user {target_id}.")
         logger.debug(f"User {target_id} after admin_unban: premium_expiry={updated_user.get('premium_expiry')}, premium_features={updated_user.get('premium_features')}")
     except (IndexError, ValueError):
@@ -2746,7 +2746,7 @@ async def admin_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     try:
         target_id = int(context.args[0])
-        user = get_user(target_id)
+        user = get_user_with_cache(target_id)
         if not user:
             await safe_reply(update, "😕 User not found 🌑.", context)
             return
