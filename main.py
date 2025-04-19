@@ -742,7 +742,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     await safe_reply(
         update,
-        "🎉 Your profile is ready\\! Use `/next` to find a chat partner and start connecting\\! 🚀",
+        "🎉 Your profile is ready\\! Use /next to find a chat partner and start connecting\\! 🚀",
         context,
         parse_mode=ParseMode.MARKDOWN_V2
     )
