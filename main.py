@@ -1233,7 +1233,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     context,
                     f"⚠️ Failed to notify partner {partner_id} of user {user_id} leaving chat: No chat\\_id found 🌑"
                 )
-        await safe_reply(update, "👋 Chat ended. Use /start to begin a new chat\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "👋 Chat ended\\. Use /start to begin a new chat\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         if user_id in chat_histories and not has_premium_feature(user_id, "vaulted_chats"):
             with chat_histories_lock:
                 del chat_histories[user_id]
