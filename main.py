@@ -1220,7 +1220,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await safe_bot_send_message(
                 context.bot,
                 partner_chat_id,
-                "👋 Your partner has left the chat. Use /start to find a new one.",
+                "👋 Your partner has left the chat\\. Use /start to find a new one\\.",
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
