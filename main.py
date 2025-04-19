@@ -1278,7 +1278,7 @@ async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await safe_bot_send_message(
             context.bot,
             partner_id,
-            "🔌 Your chat partner disconnected.",
+            "🔌 Your chat partner disconnected\\.",
             context,
             parse_mode=ParseMode.MARKDOWN_V2
         )
