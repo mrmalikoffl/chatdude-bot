@@ -28,6 +28,7 @@ from typing import Tuple
 import threading
 from functools import wraps
 from functools import lru_cache
+from cachetools import TTLCache
 
 # Suppress ConversationHandler warning
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram.ext.conversationhandler")
@@ -78,6 +79,7 @@ command_timestamps = {}
 message_timestamps = defaultdict(list)
 chat_histories = {}
 INACTIVITY_TIMEOUT = 600  # 10 minutes
+notification_cache = TTLCache(maxsize=1000, ttl=300)  # 5-minute cooldown
 
 # Conversation states
 NAME, AGE, GENDER, LOCATION, CONSENT, VERIFICATION, TAGS = range(7)
@@ -393,6 +395,82 @@ def escape_markdown_v2(text):
             escaped_parts.append(escape_non_formatting(part))
     
     return ''.join(escaped_parts)
+
+def format_notification(reason: str, action: str = "wait or stop") -> str:
+    """Format a consistent, friendly notification message with emojis."""
+    base_message = f"🌈 *Cannot connect fellows*\\: {escape_markdown_v2(reason)}\n\n"
+    if action == "wait or stop":
+        base_message += "Please wait a moment for a new partner, or use /stop to exit and /next to search again\\! 😊"
+    elif action == "update profile":
+        base_message += "Update your profile with /settings and try /next to search again\\! 📝"
+    return base_message
+
+async def notify_user(user_id: int, message: str, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a notification to a user via Telegram with cooldown."""
+    if (user_id, message) in notification_cache:
+        logger.debug(f"Skipping duplicate notification for user {user_id}: {message[:50]}...")
+        return
+    notification_cache[(user_id, message)] = True
+    
+    try:
+        if not message or message.strip() == "":
+            message = "⚠️ An error occurred, but no details were provided 🌑."
+        
+        user_data = get_user_with_cache(user_id)
+        chat_id = user_data.get("chat_id")
+        if not chat_id:
+            logger.warning(f"Cannot notify user {user_id}: No chat_id found")
+            await send_channel_notification(
+                context,
+                f"⚠️ Failed to notify user {user_id}: No chat_id found 🌑"
+            )
+            return
+        
+        logger.debug(f"Preparing notification for user {user_id}: {message[:200]}")
+        await safe_bot_send_message(
+            context.bot,
+            chat_id=chat_id,
+            text=message,
+            context=context,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        logger.info(f"Sent notification to user {user_id}: {message[:50]}...")
+    except telegram.error.TelegramError as e:
+        logger.error(f"Failed to send notification to user {user_id}: {e}")
+        fallback_message = f"⚠️ Error sending notification: {escape_markdown_v2(str(e))} 🌑"
+        try:
+            await safe_bot_send_message(
+                context.bot,
+                chat_id=chat_id,
+                text=fallback_message,
+                context=context,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            logger.info(f"Sent fallback notification to user {user_id}: {fallback_message[:50]}...")
+        except telegram.error.TelegramError as e2:
+            logger.error(f"Failed to send fallback notification to user {user_id}: {e2}")
+            await send_channel_notification(
+                context,
+                f"⚠️ Failed to send fallback notification to user {user_id}: {escape_markdown_v2(str(e2))} 🌑"
+            )
+    except Exception as e:
+        logger.error(f"Unexpected error in notify_user for user {user_id}: {e}")
+        fallback_message = f"⚠️ Unexpected error: {escape_markdown_v2(str(e))} 🌑"
+        try:
+            await safe_bot_send_message(
+                context.bot,
+                chat_id=chat_id,
+                text=fallback_message,
+                context=context,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            logger.info(f"Sent fallback notification to user {user_id}: {fallback_message[:50]}...")
+        except telegram.error.TelegramError as e2:
+            logger.error(f"Failed to send fallback notification to user {user_id}: {e2}")
+            await send_channel_notification(
+                context,
+                f"⚠️ Failed to send fallback notification to user {user_id}: {escape_markdown_v2(str(e2))} 🌑"
+            )
 
 async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = ParseMode.MARKDOWN, **kwargs) -> telegram.Message:
     original_text = text
@@ -813,7 +891,7 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
             if user1 not in waiting_users or user2 not in waiting_users:
                 i += 1
                 continue
-            if not can_match(user1, user2):
+            if not await can_match(user1, user2, context):  # Changed to await
                 i += 2
                 continue
             user1_data = get_user_with_cache(user1)
@@ -821,6 +899,27 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
             if user1_data is None or user2_data is None:
                 logger.error(f"Failed to retrieve user data: user1={user1} ({user1_data}), user2={user2} ({user2_data})")
                 waiting_users[:] = [u for u in waiting_users if u not in (user1, user2)]
+                if user1_data is None:
+                    await notify_user(user1, format_notification("Your profile data could not be retrieved. Please update it! 😓", action="update profile"), context)
+                if user2_data is None:
+                    await notify_user(user2, format_notification("Your profile data could not be retrieved. Please update it! 😓", action="update profile"), context)
+                i += 2
+                continue
+            user1_chat_id = user1_data.get("chat_id")
+            user2_chat_id = user2_data.get("chat_id")
+            if not user1_chat_id or not user2_chat_id:
+                logger.warning(f"Missing chat_id: user1={user1} (chat_id={user1_chat_id}), user2={user2} (chat_id={user2_chat_id})")
+                waiting_users[:] = [u for u in waiting_users if u not in (user1, user2)]
+                if not user1_chat_id:
+                    await send_channel_notification(
+                        context,
+                        f"⚠️ Failed to notify user {user1}: No chat_id found 🌑"
+                    )
+                if not user2_chat_id:
+                    await send_channel_notification(
+                        context,
+                        f"⚠️ Failed to notify user {user2}: No chat_id found 🌑"
+                    )
                 i += 2
                 continue
             waiting_users.remove(user1)
@@ -885,66 +984,108 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
                 "Use /help for more options\\."
             )
             try:
-                await safe_bot_send_message(context.bot, user1, user1_message, context, parse_mode=ParseMode.MARKDOWN_V2)
-                await safe_bot_send_message(context.bot, user2, user2_message, context, parse_mode=ParseMode.MARKDOWN_V2)
+                await safe_bot_send_message(context.bot, user1_chat_id, user1_message, context, parse_mode=ParseMode.MARKDOWN_V2)
+                await safe_bot_send_message(context.bot, user2_chat_id, user2_message, context, parse_mode=ParseMode.MARKDOWN_V2)
                 if has_premium_feature(user1, "vaulted_chats"):
                     chat_histories[user1] = []
                 if has_premium_feature(user2, "vaulted_chats"):
                     chat_histories[user2] = []
                 return
             except Exception as e:
-                logger.error(f"Failed to send match messages to {user1} or {user2}: {e}")
+                logger.error(f"Failed to send match messages to user1={user1} or user2={user2}: {e}")
                 user_pairs.pop(user1, None)
                 user_pairs.pop(user2, None)
                 context.bot_data["chat_start_times"].pop(chat_key, None)
                 waiting_users.extend([user1, user2])
+                await send_channel_notification(
+                    context,
+                    f"⚠️ Failed to send match messages to user1={user1} or user2={user2}: {escape_markdown_v2(str(e))} 🌑"
+                )
                 return
             i += 2
 
-def can_match(user1: int, user2: int) -> bool:
+async def can_match(user1: int, user2: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Check if two users can be matched based on their profiles, notifying on mismatches."""
+    # Check bans
     if is_banned(user1) or is_banned(user2):
         logger.info(f"Cannot match {user1} and {user2}: one or both users are banned")
+        message = format_notification("One or both users are banned. 😔")
+        await notify_user(user1, message, context)
+        await notify_user(user2, message, context)
         return False
     
+    # Retrieve user data
     user1_data = get_user_with_cache(user1)
     user2_data = get_user_with_cache(user2)
     profile1 = user1_data.get("profile", {})
     profile2 = user2_data.get("profile", {})
     
+    # Check for incomplete profiles
     if not profile1 or not profile2:
-        return True
+        logger.info(f"Cannot match {user1} and {user2}: incomplete profile data")
+        message = format_notification("Profile data is incomplete for one or both users.", action="update profile")
+        await notify_user(user1, message, context)
+        await notify_user(user2, message, context)
+        return True  # Allow match if profiles are incomplete (per original logic)
     
+    # Check tags
     tags1 = set(profile1.get("tags", []))
     tags2 = set(profile2.get("tags", []))
     if tags1 and tags2 and not tags1.intersection(tags2):
         logger.info(f"Cannot match {user1} and {user2}: no common tags")
+        message = format_notification("No common interests with this user. Try adding more tags! 🌟", action="update profile")
+        await notify_user(user1, message, context)
+        await notify_user(user2, message, context)
         return False
     
+    # Check age difference
     age1 = profile1.get("age")
     age2 = profile2.get("age")
     if age1 and age2 and abs(age1 - age2) > 10:
         logger.info(f"Cannot match {user1} and {user2}: age difference too large ({abs(age1 - age2)} years)")
+        message = format_notification(f"Age difference with this user is too large ({abs(age1 - age2)} years). 😅")
+        await notify_user(user1, message, context)
+        await notify_user(user2, message, context)
         return False
     
+    # Check gender preferences
     gender_pref1 = profile1.get("gender_preference")
     gender_pref2 = profile2.get("gender_preference")
     gender1 = profile1.get("gender")
     gender2 = profile2.get("gender")
     if gender_pref1 and gender2 and gender_pref1 != gender2:
         logger.info(f"Cannot match {user1} and {user2}: gender preference mismatch for user1")
+        message = format_notification("This user's gender does not match your preference. 🔍")
+        await notify_user(user1, message, context)
+        message = format_notification("Your gender does not match this user's preference. 🔍")
+        await notify_user(user2, message, context)
         return False
     if gender_pref2 and gender1 and gender_pref2 != gender1:
         logger.info(f"Cannot match {user1} and {user2}: gender preference mismatch for user2")
+        message = format_notification("Your gender does not match this user's preference. 🔍")
+        await notify_user(user1, message, context)
+        message = format_notification("This user's gender does not match your preference. 🔍")
+        await notify_user(user2, message, context)
         return False
     
+    # Check premium mood match
     if has_premium_feature(user1, "mood_match") and has_premium_feature(user2, "mood_match"):
         mood1 = profile1.get("mood")
         mood2 = profile2.get("mood")
         if not mood1 or not mood2:
             logger.info(f"Cannot match {user1} and {user2}: missing mood for mood_match")
+            if not mood1:
+                message = format_notification("Please set your mood to use the mood match feature. 😊", action="update profile")
+                await notify_user(user1, message, context)
+            if not mood2:
+                message = format_notification("Please set your mood to use the mood match feature. 😊", action="update profile")
+                await notify_user(user2, message, context)
             return False
         if mood1 != mood2:
             logger.info(f"Cannot match {user1} and {user2}: mood mismatch ({mood1} vs {mood2})")
+            message = format_notification(f"Mood mismatch with this user (*{escape_markdown_v2(mood1)}* vs *{escape_markdown_v2(mood2)}*). 😕")
+            await notify_user(user1, message, context)
+            await notify_user(user2, message, context)
             return False
     
     return True
