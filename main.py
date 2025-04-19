@@ -243,7 +243,9 @@ def remove_pair(user_id: int, partner_id: int) -> None:
         del user_pairs[partner_id]
     logger.info(f"Removed pair: {user_id} and {partner_id}")
 
-def get_user(user_id: int) -> dict:
+# Database functions
+@lru_cache(maxsize=1000)
+def get_user_cached(user_id: int) -> dict:
     logger.info(f"Fetching user {user_id}")
     users = get_db_collection("users")
     user = users.find_one({"user_id": user_id})
@@ -264,6 +266,9 @@ def get_user(user_id: int) -> dict:
         user = users.find_one({"user_id": user_id})
     logger.debug(f"Returning user {user_id}: {user}")
     return user
+
+def get_user_with_cache(user_id: int) -> dict:
+    return get_user_cached(user_id)
 
 def update_user(user_id: int, data: dict) -> bool:
     retries = 3
@@ -790,15 +795,12 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
     with waiting_users_lock:
         if len(waiting_users) < 2:
             return
-        # Filter out banned users
         valid_users = [u for u in waiting_users if not is_banned(u)]
         if len(valid_users) < 2:
             waiting_users[:] = valid_users
             return
-        # Prioritize premium users with shine_profile
         premium_users = [u for u in valid_users if has_premium_feature(u, "shine_profile")]
         regular_users = [u for u in valid_users if u not in premium_users]
-        # Shuffle to randomize matches
         random.shuffle(premium_users)
         random.shuffle(regular_users)
         users_to_match = premium_users + regular_users
@@ -812,9 +814,8 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
             if not can_match(user1, user2):
                 i += 2
                 continue
-            # Retrieve user data and validate
-            user1_data = get_user(user1)
-            user2_data = get_user(user2)
+            user1_data = get_user_with_cache(user1)
+            user2_data = get_user_with_cache(user2)
             if user1_data is None or user2_data is None:
                 logger.error(f"Failed to retrieve user data: user1={user1} ({user1_data}), user2={user2} ({user2_data})")
                 waiting_users[:] = [u for u in waiting_users if u not in (user1, user2)]
@@ -824,7 +825,6 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
             waiting_users.remove(user2)
             user_pairs[user1] = user2
             user_pairs[user2] = user1
-            # Set chat start time
             chat_key = tuple(sorted([user1, user2]))
             context.bot_data.setdefault("chat_start_times", {})[chat_key] = int(time.time())
             logger.info(f"Matched users {user1} and {user2}, started chat timer")
@@ -854,14 +854,13 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
                 "premium_features": user2_data.get("premium_features", {}),
                 "created_at": user2_data.get("created_at", int(time.time()))
             })
-            # Build messages with escaped MarkdownV2 characters
             user1_message = (
                 "✅ *Connected\\!* Start chatting now\\! 🗣️\n\n"
                 f"👤 *Partner Details*:\n"
-                f"🧑 *Name*: {escape_markdownv2(user2_profile.get('name', 'Not set'))}\n"
-                f"🎂 *Age*: {escape_markdownv2(user2_profile.get('age', 'Not set'))}\n"
-                f"👤 *Gender*: {escape_markdownv2(user2_profile.get('gender', 'Not set'))}\n"
-                f"📍 *Location*: {escape_markdownv2(user2_profile.get('location', 'Not set'))}\n\n"
+                f"🧑 *Name*: {escape_markdown_v2(user2_profile.get('name', 'Not set'))}\n"
+                f"🎂 *Age*: {escape_markdown_v2(str(user2_profile.get('age', 'Not set')))}\n"
+                f"👤 *Gender*: {escape_markdown_v2(user2_profile.get('gender', 'Not set'))}\n"
+                f"📍 *Location*: {escape_markdown_v2(user2_profile.get('location', 'Not set'))}\n\n"
                 "Use /help for more options\\."
             ) if has_premium_feature(user1, "partner_details") else (
                 "✅ *Connected\\!* Start chatting now\\! 🗣️\n\n"
@@ -872,10 +871,10 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
             user2_message = (
                 "✅ *Connected\\!* Start chatting now\\! 🗣️\n\n"
                 f"👤 *Partner Details*:\n"
-                f"🧑 *Name*: {escape_markdownv2(user1_profile.get('name', 'Not set'))}\n"
-                f"🎂 *Age*: {escape_markdownv2(user1_profile.get('age', 'Not set'))}\n"
-                f"👤 *Gender*: {escape_markdownv2(user1_profile.get('gender', 'Not set'))}\n"
-                f"📍 *Location*: {escape_markdownv2(user1_profile.get('location', 'Not set'))}\n\n"
+                f"🧑 *Name*: {escape_markdown_v2(user1_profile.get('name', 'Not set'))}\n"
+                f"🎂 *Age*: {escape_markdown_v2(str(user1_profile.get('age', 'Not set')))}\n"
+                f"👤 *Gender*: {escape_markdown_v2(user1_profile.get('gender', 'Not set'))}\n"
+                f"📍 *Location*: {escape_markdown_v2(user1_profile.get('location', 'Not set'))}\n\n"
                 "Use /help for more options\\."
             ) if has_premium_feature(user2, "partner_details") else (
                 "✅ *Connected\\!* Start chatting now\\! 🗣️\n\n"
@@ -884,8 +883,8 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
                 "Use /help for more options\\."
             )
             try:
-                await safe_send_message(user1, user1_message, context, parse_mode=ParseMode.MARKDOWN_V2)
-                await safe_send_message(user2, user2_message, context, parse_mode=ParseMode.MARKDOWN_V2)
+                await safe_send_message(context, user1, user1_message, parse_mode="MarkdownV2")
+                await safe_send_message(context, user2, user2_message, parse_mode="MarkdownV2")
                 if has_premium_feature(user1, "vaulted_chats"):
                     chat_histories[user1] = []
                 if has_premium_feature(user2, "vaulted_chats"):
@@ -901,36 +900,30 @@ async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
             i += 2
 
 def can_match(user1: int, user2: int) -> bool:
-    """Check if two users can be matched based on profiles and preferences."""
-    # Check bans
     if is_banned(user1) or is_banned(user2):
         logger.info(f"Cannot match {user1} and {user2}: one or both users are banned")
         return False
     
-    user1_data = get_user(user1)
-    user2_data = get_user(user2)
+    user1_data = get_user_with_cache(user1)
+    user2_data = get_user_with_cache(user2)
     profile1 = user1_data.get("profile", {})
     profile2 = user2_data.get("profile", {})
     
-    # Allow matching if either profile is empty
     if not profile1 or not profile2:
         return True
     
-    # Tag matching: require common tags only if both have tags
     tags1 = set(profile1.get("tags", []))
     tags2 = set(profile2.get("tags", []))
     if tags1 and tags2 and not tags1.intersection(tags2):
         logger.info(f"Cannot match {user1} and {user2}: no common tags")
         return False
     
-    # Age difference: max 10 years
     age1 = profile1.get("age")
     age2 = profile2.get("age")
     if age1 and age2 and abs(age1 - age2) > 10:
         logger.info(f"Cannot match {user1} and {user2}: age difference too large ({abs(age1 - age2)} years)")
         return False
     
-    # Gender preferences
     gender_pref1 = profile1.get("gender_preference")
     gender_pref2 = profile2.get("gender_preference")
     gender1 = profile1.get("gender")
@@ -942,7 +935,6 @@ def can_match(user1: int, user2: int) -> bool:
         logger.info(f"Cannot match {user1} and {user2}: gender preference mismatch for user2")
         return False
     
-    # Mood match: require same mood if both have mood_match and both have moods
     if has_premium_feature(user1, "mood_match") and has_premium_feature(user2, "mood_match"):
         mood1 = profile1.get("mood")
         mood2 = profile2.get("mood")
@@ -959,7 +951,7 @@ def can_match(user1: int, user2: int) -> bool:
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
         await safe_reply(update, ban_msg, context)
@@ -970,10 +962,8 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
-        del user_pairs[user_id]
-        if partner_id in user_pairs:
-            del user_pairs[partner_id]
-        await safe_send_message(partner_id, "👋 Your partner has left the chat. Use /start to find a new one.", context)
+        remove_pair(user_id, partner_id)
+        await safe_send_message(context, partner_id, "👋 Your partner has left the chat. Use /start to find a new one.")
         await safe_reply(update, "👋 Chat ended. Use /start to begin a new chat.", context)
         if user_id in chat_histories and not has_premium_feature(user_id, "vaulted_chats"):
             del chat_histories[user_id]
@@ -985,7 +975,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_banned(user_id):
-        user = get_user(user_id)
+        user = get_user_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
         await safe_reply(update, ban_msg, context)
@@ -995,9 +985,8 @@ async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
-        del user_pairs[user_id]
-        del user_pairs[partner_id]
-        await safe_send_message(partner_id, "🔌 Your chat partner disconnected.", context)
+        remove_pair(user_id, partner_id)
+        await safe_send_message(context, partner_id, "🔌 Your chat partner disconnected.")
     if user_id not in waiting_users:
         if has_premium_feature(user_id, "shine_profile"):
             waiting_users.insert(0, user_id)
