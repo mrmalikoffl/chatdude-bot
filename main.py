@@ -225,8 +225,8 @@ async def cleanup_in_memory(context: ContextTypes.DEFAULT_TYPE) -> None:
         if current_time - last_activity > INACTIVITY_TIMEOUT:
             partner_id = user_pairs.get(user_id)
             if partner_id:
-                await safe_bot_send_message(context.bot, user_id, "🛑 Chat ended due to inactivity.", context, parse_mode=ParseMode.MARKDOWN_V2)
-                await safe_bot_send_message(context.bot, partner_id, "🛑 Chat ended due to inactivity.", context, parse_mode=ParseMode.MARKDOWN_V2)
+                await safe_bot_send_message(context.bot, user_id, "🛑 Chat ended due to inactivity\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
+                await safe_bot_send_message(context.bot, partner_id, "🛑 Chat ended due to inactivity\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
                 remove_pair(user_id, partner_id)
                 chat_histories.pop(user_id, None)
                 chat_histories.pop(partner_id, None)
@@ -237,7 +237,7 @@ async def cleanup_in_memory(context: ContextTypes.DEFAULT_TYPE) -> None:
             last_activity = user_activities.get(user_id, {}).get("last_activity", 0)
             if current_time - last_activity > INACTIVITY_TIMEOUT:
                 waiting_users.remove(user_id)
-                await safe_bot_send_message(context.bot, user_id, "🛑 Removed from waiting list due to inactivity.", context, parse_mode=ParseMode.MARKDOWN_V2)
+                await safe_bot_send_message(context.bot, user_id, "🛑 Removed from waiting list due to inactivity\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
                 chat_histories.pop(user_id, None)
     
     logger.info(f"Cleanup complete. user_pairs: {len(user_pairs)}, waiting_users: {len(waiting_users)}")
