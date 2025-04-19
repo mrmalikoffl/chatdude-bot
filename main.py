@@ -359,7 +359,6 @@ def escape_markdown_v2(text):
     
     for part in parts:
         if re.match(formatting_pattern, part):
-            # Handle formatting sections
             if part.startswith('*') and part.endswith('*'):
                 inner_text = part[1:-1]
                 for char in MARKDOWNV2_SPECIAL_CHARS:
@@ -395,9 +394,11 @@ def escape_markdown_v2(text):
 
 async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = "MarkdownV2", **kwargs) -> telegram.Message:
     """Safely reply to a message, handling MarkdownV2 parsing errors."""
+    original_text = text  # Store original text for retry
     try:
         if parse_mode == "MarkdownV2":
             text = escape_markdown_v2(text)
+        logger.debug(f"Sending message with parse_mode={parse_mode}: {text[:200]}")
         if update.callback_query and not kwargs.get("reply_markup"):
             sent_message = await update.callback_query.message.edit_text(text, parse_mode=parse_mode, **kwargs)
         elif update.message:
@@ -411,9 +412,10 @@ async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TY
         return sent_message
     except telegram.error.BadRequest as bre:
         logger.warning(f"MarkdownV2 parsing failed: {bre}. Text: {text[:200]}")
-        # Retry with escaped MarkdownV2
+        # Retry with freshly escaped original text
         try:
-            escaped_text = escape_markdown_v2(text)
+            escaped_text = escape_markdown_v2(original_text)
+            logger.debug(f"Retrying with escaped text: {escaped_text[:200]}")
             if update.callback_query and not kwargs.get("reply_markup"):
                 sent_message = await update.callback_query.message.edit_text(escaped_text, parse_mode=ParseMode.MARKDOWN_V2, **kwargs)
             elif update.message:
@@ -427,7 +429,8 @@ async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TY
         except telegram.error.BadRequest as bre2:
             logger.warning(f"Escaped MarkdownV2 parsing failed: {bre2}. Falling back to plain text.")
             # Final fallback to plain text
-            clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', '', text)
+            clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', '', original_text)
+            logger.debug(f"Falling back to plain text: {clean_text[:200]}")
             try:
                 if update.callback_query and not kwargs.get("reply_markup"):
                     sent_message = await update.callback_query.message.edit_text(clean_text, parse_mode=None, **kwargs)
@@ -2688,7 +2691,7 @@ async def admin_userslist(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             premium_features = user.get("premium_features", {})
             created_at = user.get("created_at", int(time.time()))
             created_date = (
-                datetime.fromtimestamp(created_at).strftime("%Y\\-%m\\-%d")
+                datetime.fromtimestamp(created_at).strftime("%Y-%m-%d")
                 if created_at and isinstance(created_at, (int, float))
                 else "Unknown"
             )
@@ -2725,7 +2728,7 @@ async def admin_userslist(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except Exception as e:
         logger.error(f"Error fetching users list for admin {user_id}: {e}", exc_info=True)
         await safe_reply(update, "😔 Error retrieving users list 🌑.", context, parse_mode=ParseMode.MARKDOWN_V2)
-
+        
 async def admin_premiumuserslist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List premium users"""
     user_id = update.effective_user.id
@@ -2924,7 +2927,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "$or": [{"ban_expiry": {"$gt": current_time}}, {"ban_type": "permanent"}]
         })
         active_users = len(set(user_pairs.keys()).union(waiting_users))
-        timestamp = datetime.now().strftime("%Y\\-%m\\-%d %H\\:%M\\:%S")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         stats_message = (
             "📈 *Bot Statistics* 📈\n\n"
             f"👥 *Total Users*: *{total_users}*\n"
