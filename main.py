@@ -27,6 +27,7 @@ import random
 from typing import Tuple
 import threading
 from functools import wraps
+from functools import lru_cache
 
 # Suppress ConversationHandler warning
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram.ext.conversationhandler")
