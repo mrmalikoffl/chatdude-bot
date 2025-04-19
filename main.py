@@ -2366,59 +2366,6 @@ async def admin_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """Grant admin access and display commands"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context)
-        logger.info(f"Unauthorized access attempt by user_id={user_id}")
-        return
-    access_text = (
-        "🌟 *Admin Commands* 🌟\n\n"
-        "🚀 *User Management*\n"
-        "• /admin_userslist - List all users 📋\n"
-        "• /admin_premiumuserslist - List premium users 💎\n"
-        "• /admin_info <user_id> - View user details 🕵️\n"
-        "• /admin_delete <user_id> - Delete a user’s data 🗑️\n"
-        "• /admin_premium <user_id> <days> - Grant premium status 🎁\n"
-        "• /admin_revoke_premium <user_id> - Revoke premium status ❌\n"
-        "━━━━━━━━━━━━━━\n\n"
-        "🛡️ *Ban Management*\n"
-        "• /admin_ban <user_id> <days/permanent> - Ban a user 🚫\n"
-        "• /admin_unban <user_id> - Unban a user 🔓\n"
-        "• /admin_violations - List recent keyword violations ⚠️\n"
-        "━━━━━━━━━━━━━━\n\n"
-        "📊 *Reports & Stats*\n"
-        "• /admin_reports - List reported users 🚨\n"
-        "• /admin_clear_reports <user_id> - Clear reports 🧹\n"
-        "• /admin_stats - View bot statistics 📈\n"
-        "━━━━━━━━━━━━━━\n\n"
-        "📢 *Broadcast*\n"
-        "• /admin_broadcast <message> - Send message to all users 📣\n"
-    )
-    await safe_reply(update, access_text, context, parse_mode=ParseMode.MARKDOWN_V2)
-
-async def admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Delete a user's data"""
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await safe_reply(update, "🔒 Unauthorized 🌑.", context)
-        return
-    try:
-        target_id = int(context.args[0])
-        delete_user(target_id)
-        await safe_reply(update, f"🗑️ User *{target_id}* data deleted successfully 🌟.", context, parse_mode=ParseMode.MARKDOWN_V2)
-        logger.info(f"Admin {user_id} deleted user {target_id}.")
-        notification_message = (
-            f"🗑️ *User Deleted* 🗑️\n\n"
-            f"👤 *User ID*: {target_id}\n"
-            f"🕒 *Deleted At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-        await send_channel_notification(context, notification_message)
-    except (IndexError, ValueError):
-        await safe_reply(update, "⚠️ Usage: /admin_delete <user_id> 📋.", context, parse_mode=ParseMode.MARKDOWN_V2)
-
-
-async def admin_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Grant admin access and display commands"""
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
         await safe_reply(update, "🔒 Unauthorized 🌑\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"Unauthorized access attempt by user_id={user_id}")
         return
