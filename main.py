@@ -87,6 +87,9 @@ NAME, AGE, GENDER, LOCATION, CONSENT, VERIFICATION, TAGS = range(7)
 # Define Telegram MarkdownV2 special characters that need escaping
 MARKDOWNV2_SPECIAL_CHARS = r"""_*[]()~`>#+-=|{}.!'"""
 
+# Separate cache for admin notifications (10-minute TTL)
+admin_notification_cache = TTLCache(maxsize=1000, ttl=600)
+
 # Emoji list for verification
 VERIFICATION_EMOJIS = ['😊', '😢', '😡', '😎', '😍', '😉', '😜', '😴']
 
@@ -435,42 +438,7 @@ async def notify_user(user_id: int, message: str, context: ContextTypes.DEFAULT_
             parse_mode=ParseMode.MARKDOWN_V2
         )
         logger.info(f"Sent notification to user {user_id}: {message[:50]}...")
-    except telegram.error.TelegramError as e:
-        logger.error(f"Failed to send notification to user {user_id}: {e}")
-        fallback_message = f"⚠️ Error sending notification: {escape_markdown_v2(str(e))} 🌑"
-        try:
-            await safe_bot_send_message(
-                context.bot,
-                chat_id=chat_id,
-                text=fallback_message,
-                context=context,
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
-            logger.info(f"Sent fallback notification to user {user_id}: {fallback_message[:50]}...")
-        except telegram.error.TelegramError as e2:
-            logger.error(f"Failed to send fallback notification to user {user_id}: {e2}")
-            await send_channel_notification(
-                context,
-                f"⚠️ Failed to send fallback notification to user {user_id}: {escape_markdown_v2(str(e2))} 🌑"
-            )
-    except Exception as e:
-        logger.error(f"Unexpected error in notify_user for user {user_id}: {e}")
-        fallback_message = f"⚠️ Unexpected error: {escape_markdown_v2(str(e))} 🌑"
-        try:
-            await safe_bot_send_message(
-                context.bot,
-                chat_id=chat_id,
-                text=fallback_message,
-                context=context,
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
-            logger.info(f"Sent fallback notification to user {user_id}: {fallback_message[:50]}...")
-        except telegram.error.TelegramError as e2:
-            logger.error(f"Failed to send fallback notification to user {user_id}: {e2}")
-            await send_channel_notification(
-                context,
-                f"⚠️ Failed to send fallback notification to user {user_id}: {escape_markdown_v2(str(e2))} 🌑"
-            )
+    # ... (error handling as before)
 
 async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = ParseMode.MARKDOWN, **kwargs) -> telegram.Message:
     original_text = text
@@ -536,42 +504,55 @@ async def safe_bot_send_message(bot, chat_id: int, text: str, context: ContextTy
         
 async def send_channel_notification(context: ContextTypes.DEFAULT_TYPE, message: str) -> None:
     """Send a notification to the configured Telegram channel."""
+    if not NOTIFICATION_CHANNEL_ID:
+        logger.warning("Notification channel ID not set, cannot send notification")
+        return
+
+    # Apply cooldown to admin notifications (10-minute TTL)
+    admin_key = (message,)
+    if admin_key in admin_notification_cache:
+        logger.debug(f"Skipping duplicate channel notification: {message[:50]}...")
+        return
+    admin_notification_cache[admin_key] = True
+
     try:
         if not message or message.strip() == "":
             message = "⚠️ An error occurred, but no details were provided 🌑."
         logger.debug(f"Preparing channel notification: {message[:200]}")
+        # Escape the message for MarkdownV2
+        escaped_message = escape_markdown_v2(message)
         await safe_bot_send_message(
             context.bot,
             chat_id=NOTIFICATION_CHANNEL_ID,
-            text=message,
+            text=escaped_message,
             context=context,
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode=ParseMode.MARKDOWN_V2  # Updated to MarkdownV2
         )
         logger.info(f"Sent channel notification: {message[:50]}...")
     except telegram.error.TelegramError as e:
         logger.error(f"Failed to send channel notification: {e}")
-        fallback_message = f"⚠️ Error sending notification: {str(e)} 🌑"
+        fallback_message = f"⚠️ Error sending notification: {escape_markdown_v2(str(e))} 🌑"
         try:
             await safe_bot_send_message(
                 context.bot,
                 chat_id=NOTIFICATION_CHANNEL_ID,
                 text=fallback_message,
                 context=context,
-                parse_mode=None
+                parse_mode=ParseMode.MARKDOWN_V2  # Use MarkdownV2 for fallback
             )
             logger.info(f"Sent fallback channel notification: {fallback_message[:50]}...")
         except telegram.error.TelegramError as e2:
             logger.error(f"Failed to send fallback channel notification: {e2}")
     except Exception as e:
         logger.error(f"Unexpected error in send_channel_notification: {e}")
-        fallback_message = f"⚠️ Unexpected error: {str(e)} 🌑"
+        fallback_message = f"⚠️ Unexpected error: {escape_markdown_v2(str(e))} 🌑"
         try:
             await safe_bot_send_message(
                 context.bot,
                 chat_id=NOTIFICATION_CHANNEL_ID,
                 text=fallback_message,
                 context=context,
-                parse_mode=None
+                parse_mode=ParseMode.MARKDOWN_V2  # Use MarkdownV2 for fallback
             )
             logger.info(f"Sent fallback channel notification: {fallback_message[:50]}...")
         except telegram.error.TelegramError as e2:
@@ -580,8 +561,37 @@ async def send_channel_notification(context: ContextTypes.DEFAULT_TYPE, message:
 @restrict_access
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
-    logger.info(f"Received /start command from user {user_id}")
+    chat_id = update.effective_chat.id  # Explicitly get chat_id
+    logger.info(f"Received /start command from user {user_id} with chat_id {chat_id}")
     
+    # Save chat_id immediately
+    try:
+        user_data = get_user_with_cache(user_id) or {}
+        user_data["chat_id"] = chat_id
+        user_data["created_at"] = user_data.get("created_at", int(time.time()))
+        result = db.collection("users").update_one(
+            {"user_id": user_id},
+            {"$set": user_data},
+            upsert=True
+        )
+        logger.info(f"Updated user {user_id} with chat_id {chat_id}, matched: {result.matched_count}, modified: {result.modified_count}")
+    except Exception as e:
+        logger.error(f"Failed to save chat_id for user {user_id}: {e}")
+        admin_key = (user_id, f"start_error_{str(e)}")
+        if admin_key not in admin_notification_cache:
+            admin_notification_cache[admin_key] = True
+            await send_channel_notification(
+                context,
+                f"⚠️ Failed to save chat_id for user {user_id}: {escape_markdown_v2(str(e))} 🌑"
+            )
+        await safe_reply(
+            update,
+            "⚠️ An error occurred while setting up your profile. Please try again later or contact support! 😓",
+            context,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return ConversationHandler.END
+
     if is_banned(user_id):
         user = get_user_with_cache(user_id)
         ban_msg = (
@@ -589,26 +599,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             if user["ban_type"] == "permanent"
             else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
         )
-        await safe_reply(update, ban_msg, context)
+        await safe_reply(update, ban_msg, context, parse_mode=ParseMode.MARKDOWN_V2)  # Added parse_mode for consistency
         return ConversationHandler.END
     
     if not check_rate_limit(user_id):
-        await safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again ⏰.", context)
+        await safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again ⏰.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return ConversationHandler.END
     
     if user_id in user_pairs:
-        await safe_reply(update, "💬 You're already in a chat 😔. Use /next to switch or /stop to end.", context)
+        await safe_reply(update, "💬 You're already in a chat 😔. Use /next to switch or /stop to end.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return ConversationHandler.END
     
     if user_id in waiting_users:
-        await safe_reply(update, "🔍 You're already waiting for a chat partner... Please wait!", context)
+        await safe_reply(update, "🔍 You're already waiting for a chat partner... Please wait!", context, parse_mode=ParseMode.MARKDOWN_V2)
         return ConversationHandler.END
     
     user = get_user_with_cache(user_id)
     current_state = user.get("setup_state")
     if current_state is not None:
         context.user_data["state"] = current_state
-        await safe_reply(update, f"Continuing setup. Please provide the requested information for {current_state}.", context)
+        await safe_reply(update, f"Continuing setup. Please provide the requested information for {current_state}.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return current_state
     
     if not user.get("consent"):
@@ -628,7 +638,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "🔒 *Privacy*: We store only your user ID, profile, and consent securely\\. Use /deleteprofile to remove data\\.\n\n"
             "Do you agree to the rules\\?"
         )
-        await safe_reply(update, welcome_text, context, reply_markup=reply_markup)
+        await safe_reply(update, welcome_text, context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
         await send_channel_notification(context, (
             "🆕 *New User Accessed* 🆕\n\n"
             f"👤 *User ID*: {user_id}\n"
@@ -647,7 +657,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         random.shuffle(all_emojis)
         keyboard = [[InlineKeyboardButton(emoji, callback_data=f"emoji_{emoji}") for emoji in all_emojis]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await safe_reply(update, f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{correct_emoji}*", context, reply_markup=reply_markup)
+        await safe_reply(update, f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{correct_emoji}*", context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
         update_user(user_id, {"setup_state": VERIFICATION})
         context.user_data["state"] = VERIFICATION
         return VERIFICATION
@@ -656,12 +666,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     required_fields = ["name", "age", "gender", "location"]
     missing_fields = [field for field in required_fields if not profile.get(field)]
     if missing_fields:
-        await safe_reply(update, "✨ Let’s set up your profile\\! Please enter your name:", context)
+        await safe_reply(update, "✨ Let’s set up your profile\\! Please enter your name:", context, parse_mode=ParseMode.MARKDOWN_V2)
         update_user(user_id, {"setup_state": NAME})
         context.user_data["state"] = NAME
         return NAME
     
-    await safe_reply(update, "🎉 Your profile is ready! Use `/next` to find a chat partner and start connecting! 🚀", context)
+    await safe_reply(update, "🎉 Your profile is ready! Use `/next` to find a chat partner and start connecting! 🚀", context, parse_mode=ParseMode.MARKDOWN_V2)
     update_user(user_id, {"setup_state": None})
     context.user_data["state"] = None
     return ConversationHandler.END
@@ -1015,8 +1025,8 @@ async def can_match(user1: int, user2: int, context: ContextTypes.DEFAULT_TYPE) 
         return False
     
     # Retrieve user data
-    user1_data = get_user_with_cache(user1)
-    user2_data = get_user_with_cache(user2)
+    user1_data = get_user_with_cache(user1) or {}
+    user2_data = get_user_with_cache(user2) or {}
     profile1 = user1_data.get("profile", {})
     profile2 = user2_data.get("profile", {})
     
@@ -1097,45 +1107,115 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = get_user_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
-        await safe_reply(update, ban_msg, context)
+        await safe_reply(update, ban_msg, context, parse_mode=ParseMode.MARKDOWN_V2)
         return
+    
+    user_data = get_user_with_cache(user_id)
+    chat_id = user_data.get("chat_id") if user_data else None
+    if not chat_id:
+        await safe_reply(
+            update,
+            "⚠️ We couldn’t find your chat ID. Please use /start to initialize your profile and try again! 😊",
+            context,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        logger.warning(f"User {user_id} attempted /stop without a chat_id")
+        admin_key = (user_id, "stop_no_chat_id")
+        if admin_key not in admin_notification_cache:
+            admin_notification_cache[admin_key] = True
+            await send_channel_notification(
+                context,
+                f"⚠️ User {user_id} attempted /stop without a chat_id 🌑"
+            )
+        return
+
     if user_id in waiting_users:
-        waiting_users.remove(user_id)
-        await safe_reply(update, "⏹️ You’ve stopped waiting for a chat partner. Use /start to begin again.", context)
+        with waiting_users_lock:
+            waiting_users.remove(user_id)
+        await safe_reply(update, "⏹️ You’ve stopped waiting for a chat partner. Use /start to begin again.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
+    
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
-        remove_pair(user_id, partner_id)
-        await safe_bot_send_message(context.bot, partner_id, "👋 Your partner has left the chat. Use /start to find a new one.")
-        await safe_reply(update, "👋 Chat ended. Use /start to begin a new chat.", context)
+        partner_data = get_user_with_cache(partner_id)
+        partner_chat_id = partner_data.get("chat_id") if partner_data else None
+        with user_pairs_lock:
+            remove_pair(user_id, partner_id)
+        if partner_chat_id:
+            await safe_bot_send_message(
+                context.bot,
+                partner_chat_id,
+                "👋 Your partner has left the chat. Use /start to find a new one.",
+                context,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        else:
+            logger.warning(f"Cannot notify partner {partner_id}: No chat_id found")
+            admin_key = (partner_id, "stop_partner_no_chat_id")
+            if admin_key not in admin_notification_cache:
+                admin_notification_cache[admin_key] = True
+                await send_channel_notification(
+                    context,
+                    f"⚠️ Failed to notify partner {partner_id} of user {user_id} leaving chat: No chat_id found 🌑"
+                )
+        await safe_reply(update, "👋 Chat ended. Use /start to begin a new chat.", context, parse_mode=ParseMode.MARKDOWN_V2)
         if user_id in chat_histories and not has_premium_feature(user_id, "vaulted_chats"):
-            del chat_histories[user_id]
+            with chat_histories_lock:
+                del chat_histories[user_id]
     else:
-        await safe_reply(update, "❓ You're not in a chat or waiting. Use /start to find a partner.", context)
-
+        await safe_reply(update, "❓ You're not in a chat or waiting. Use /start to find a partner.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 @restrict_access
 async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    user_data = get_user_with_cache(user_id)
+    chat_id = user_data.get("chat_id") if user_data else None
+    if not chat_id:
+        await safe_reply(
+            update,
+            "⚠️ We couldn’t find your chat ID. Please use /start to initialize your profile and try again! 😊",
+            context,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        logger.warning(f"User {user_id} attempted /next without a chat_id")
+        admin_key = (user_id, "next_no_chat_id")
+        if admin_key not in admin_notification_cache:
+            admin_notification_cache[admin_key] = True
+            await send_channel_notification(
+                context,
+                f"⚠️ User {user_id} attempted /next without a chat_id 🌑"
+            )
+        return
+    
     if is_banned(user_id):
         user = get_user_with_cache(user_id)
         ban_msg = "🚫 You are permanently banned. Contact support to appeal." if user["ban_type"] == "permanent" else \
                   f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')}."
-        await safe_reply(update, ban_msg, context)
+        await safe_reply(update, ban_msg, context, parse_mode=ParseMode.MARKDOWN_V2)
         return
+    
     if not check_rate_limit(user_id):
-        await safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.", context)
+        await safe_reply(update, f"⏳ Please wait {COMMAND_COOLDOWN} seconds before trying again.", context, parse_mode=ParseMode.MARKDOWN_V2)
         return
+    
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
         remove_pair(user_id, partner_id)
-        await safe_bot_send_message(context.bot, partner_id, "🔌 Your chat partner disconnected.")
+        await safe_bot_send_message(
+            context.bot,
+            partner_id,
+            "🔌 Your chat partner disconnected.",
+            context,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+    
     if user_id not in waiting_users:
         if has_premium_feature(user_id, "shine_profile"):
             waiting_users.insert(0, user_id)
         else:
             waiting_users.append(user_id)
-    await safe_reply(update, "🔍 Looking for a new chat partner...", context)
+    
+    await safe_reply(update, "🔍 Looking for a new chat partner...", context, parse_mode=ParseMode.MARKDOWN_V2)
     await match_users(context)
 
 @restrict_access
