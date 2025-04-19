@@ -1237,7 +1237,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             with chat_histories_lock:
                 del chat_histories[user_id]
     else:
-        await safe_reply(update, "❓ You're not in a chat or waiting. Use /start to find a partner.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "❓ You're not in a chat or waiting\\. Use /start to find a partner\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 @restrict_access
 async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1247,7 +1247,7 @@ async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not chat_id:
         await safe_reply(
             update,
-            "⚠️ We couldn’t find your chat ID. Please use /start to initialize your profile and try again\\! 😊",
+            "⚠️ We couldn’t find your chat ID\\. Please use /start to initialize your profile and try again\\! 😊",
             context,
             parse_mode=ParseMode.MARKDOWN_V2
         )
