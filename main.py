@@ -685,7 +685,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         logger.error(f"Error updating user {user_id}: {e}")
         await safe_reply(
             update,
-            "⚠️ Error saving your chat ID. Please try again or contact support.",
+            "⚠️ Error saving your chat ID\\. Please try again or contact support\\.",
             context,
             parse_mode=ParseMode.MARKDOWN_V2
         )
