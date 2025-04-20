@@ -196,7 +196,7 @@ def restrict_access(handler):
         if not user:
             await safe_reply(
                 update,
-                "⚠️ Your profile was deleted or not found. Please use /start to register.",
+                "⚠️ Your profile was deleted or not found\\. Please use /start to register\\.",
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
@@ -205,7 +205,7 @@ def restrict_access(handler):
         # Ban check
         if is_banned(user_id):
             ban_msg = (
-                "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
+                "🚫 You are permanently banned 🔒\\. Contact support to appeal 📧\\."
                 if user["ban_type"] == "permanent"
                 else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M:%S')} ⏰."
             )
@@ -221,7 +221,7 @@ def restrict_access(handler):
             logger.warning(f"User {user_id} failed consent/verified check: consent={user.get('consent')}, verified={user.get('verified')}")
             await safe_reply(
                 update,
-                "⚠️ Please complete your profile setup with /start.",
+                "⚠️ Please complete your profile setup with /start\\.",
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
@@ -232,7 +232,7 @@ def restrict_access(handler):
             logger.warning(f"User {user_id} profile incomplete: {user.get('profile')}")
             await safe_reply(
                 update,
-                "⚠️ Your profile is incomplete. Use /start to finish setting it up.",
+                "⚠️ Your profile is incomplete\\. Use /start to finish setting it up\\.",
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
