@@ -196,7 +196,7 @@ def restrict_access(handler):
         if not user:
             await safe_reply(
                 update,
-                "⚠️ Your profile was deleted or not found. Please use /start to register.",
+                "⚠️ Your profile was deleted or not found\\. Please use /start to register\\.",
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
@@ -219,7 +219,7 @@ def restrict_access(handler):
         if not user.get("consent", False) or not user.get("verified", False):
             await safe_reply(
                 update,
-                "⚠️ Please complete your profile setup with /start.",
+                "⚠️ Please complete your profile setup with /start\\.",
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
@@ -228,7 +228,7 @@ def restrict_access(handler):
         if not is_profile_complete(user):
             await safe_reply(
                 update,
-                "⚠️ Your profile is incomplete. Use /start to finish setting it up.",
+                "⚠️ Your profile is incomplete\\. Use /start to finish setting it up\\.",
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
