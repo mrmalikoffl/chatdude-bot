@@ -2696,27 +2696,28 @@ async def botinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_banned(user_id):
         user = get_user_with_cache(user_id)
         ban_msg = (
-            "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
+            "🚫 You are permanently banned 🔒\\. Contact support to appeal 📧\\."
             if user["ban_type"] == "permanent"
-            else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M:%S')} ⏰."
+            else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M:%S')} ⏰\\."
         )
         await safe_reply(update, ban_msg, context, parse_mode=ParseMode.MARKDOWN_V2)
         return
 
-    # Format the bot information message
-    info_message = (
-        f"🤖 *{escape_markdown_v2(BOT_INFO['name'])} Info* 🤖\n\n"
-        f"🔧 *Tools Used*: {escape_markdown_v2(BOT_INFO['tools'])}\n"
-        f"👨‍💻 *Created By*: {escape_markdown_v2(BOT_INFO['created_by'])}\n"
-        f"💻 *Language*: {escape_markdown_v2(BOT_INFO['language'])}\n"
-        f"👤 *Owner*: {escape_markdown_v2(BOT_INFO['owner'])}\n"
-        f"📌 *Version*: {escape_markdown_v2(BOT_INFO['version'])}\n"
-        f"📞 *Help & Support*: {escape_markdown_v2(BOT_INFO['support'])}\n"
-    )
-
-    # Send the message
-    await safe_reply(update, info_message, context, parse_mode=ParseMode.MARKDOWN_V2)
-    logger.info(f"Sent /botinfo response to user {user_id}")
+    try:
+        info_message = (
+            f"🤖 *{escape_markdown_v2(BOT_INFO['name'])} Info* 🤖\n\n"
+            f"🔧 *Tools Used*: {escape_markdown_v2(BOT_INFO['tools'])}\n"
+            f"👨‍💻 *Created By*: {escape_markdown_v2(BOT_INFO['created_by'])}\n"
+            f"💻 *Language*: {escape_markdown_v2(BOT_INFO['language'])}\n"
+            f"👤 *Owner*: {escape_markdown_v2(BOT_INFO['owner'])}\n"
+            f"📌 *Version*: {escape_markdown_v2(BOT_INFO['version'])}\n"
+            f"📞 *Help & Support*: {escape_markdown_v2(BOT_INFO['support'])}\n"
+        )
+        await safe_reply(update, info_message, context, parse_mode=ParseMode.MARKDOWN_V2)
+        logger.info(f"Sent /botinfo response to user {user_id}")
+    except Exception as e:
+        logger.error(f"Failed to send /botinfo response to user {user_id}: {str(e)}")
+        await safe_reply(update, "⚠️ Sorry, an error occurred while displaying bot info. Please try again later.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Grant admin access and display commands"""
