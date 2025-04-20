@@ -2090,7 +2090,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     parse_mode=ParseMode.MARKDOWN_V2,
                     reply_markup=reply_markup
                 )
-                await safe_reply(update, "📩 Rematch request sent\\. Waiting for their response\\...", context, parse_mode=ParseMode.MARKDOWN_V2)
+                await safe_reply(update, "📩 Rematch request sent\\. Waiting for their response\\.\\.\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
                 context.bot_data["rematch_requests"] = context.bot_data.get("rematch_requests", {})
                 context.bot_data["rematch_requests"][partner_id] = {
                     "requester_id": user_id,
