@@ -187,24 +187,23 @@ def restrict_access(handler):
     async def wrapper(update: Update, context: ContextTypes, *args, **kwargs):
         user_id = update.effective_user.id
         
-        # Allow /start and /deleteprofile without checks
+        # Allow /start and /deleteprofile
         if handler.__name__ in ["start", "delete_profile"]:
             return await handler(update, context, *args, **kwargs)
         
-        # Check if user exists in database (bypass cache)
+        # Check user existence in database
         user = get_db_collection("users").find_one({"user_id": user_id})
         if not user:
             await safe_reply(
                 update,
-                "⚠️ Your profile was deleted or not found\\. Please use /start to register\\.",
+                "⚠️ Your profile was deleted or not found. Please use /start to register.",
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             return
         
-        # Existing checks
+        # Ban check
         if is_banned(user_id):
-            user = get_user_with_cache(user_id)  # Cache is fine here since we confirmed existence
             ban_msg = (
                 "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
                 if user["ban_type"] == "permanent"
@@ -213,22 +212,27 @@ def restrict_access(handler):
             await safe_reply(update, ban_msg, context, parse_mode=ParseMode.MARKDOWN_V2)
             return
         
+        # Admin commands
         if user_id in ADMIN_IDS and handler.__name__.startswith("admin_"):
             return await handler(update, context, *args, **kwargs)
         
+        # Consent and verification checks
         if not user.get("consent", False) or not user.get("verified", False):
+            logger.warning(f"User {user_id} failed consent/verified check: consent={user.get('consent')}, verified={user.get('verified')}")
             await safe_reply(
                 update,
-                "⚠️ Please complete your profile setup with /start\\.",
+                "⚠️ Please complete your profile setup with /start.",
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             return
         
+        # Profile completeness check
         if not is_profile_complete(user):
+            logger.warning(f"User {user_id} profile incomplete: {user.get('profile')}")
             await safe_reply(
                 update,
-                "⚠️ Your profile is incomplete\\. Use /start to finish setting it up\\.",
+                "⚠️ Your profile is incomplete. Use /start to finish setting it up.",
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
@@ -387,8 +391,9 @@ def delete_user(user_id: int, context: ContextTypes.DEFAULT_TYPE = None):
             context.bot_data.get("rematch_requests", {}).pop(user_id, None)
             context.bot_data.get("personal_chat_requests", {}).pop(user_id, None)
         
-        # Clear LRU cache
-        get_user_cached.cache_clear()  # Clears entire cache; alternatively, clear specific user_id if using cachetools
+        # Clear cache
+        get_user_cached.cache_clear()
+        logger.info(f"Cleared cache for user {user_id}")
         
     except (ConnectionError, OperationFailure) as e:
         logger.error(f"Failed to delete user {user_id}: {e}")
@@ -662,9 +667,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.effective_chat.id
     logger.info(f"Received /start command from user {user_id} with chat_id {chat_id}")
     
-    # Clear cache for this user
-    get_user_cached.cache_clear()  # Or clear specific user_id if using cachetools
-    user = get_user_with_cache(user_id)
+    # Clear cache to ensure fresh data
+    get_user_cached.cache_clear()
     
     # Save chat_id
     try:
@@ -733,6 +737,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         message = escape_markdown_v2(f"Continuing setup. Please provide the requested information for {current_state}.")
         await safe_reply(update, message, context, parse_mode=ParseMode.MARKDOWN_V2)
         return current_state
+
+    if user.get("consent") and user.get("verified") and is_profile_complete(user):
+        profile = user.get("profile", {})
+        profile_text = (
+            f"👤 *Your Profile* 👤\n\n"
+            f"🧑 *Name*: {escape_markdown_v2(profile.get('name', 'Not set'))}\n"
+            f"🎂 *Age*: {escape_markdown_v2(str(profile.get('age', 'Not set')))}\n"
+            f"👤 *Gender*: {escape_markdown_v2(profile.get('gender', 'Not set'))}\n"
+            f"📍 *Location*: {escape_markdown_v2(profile.get('location', 'Not set'))}\n"
+            f"🏷️ *Tags*: {escape_markdown_v2(', '.join(profile.get('tags', [])) or 'None')}\n\n"
+            f"🔍 Use /next to find a chat partner!\n"
+            f"⚙️ Use /settings to update your profile."
+        )
+        await safe_reply(update, profile_text, context, parse_mode=ParseMode.MARKDOWN_V2)
+        return ConversationHandler.END
     
     if not user.get("consent"):
         keyboard = [
@@ -2327,16 +2346,20 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await safe_reply(update, "❌ Error submitting report 😔. Please try again.", context)
 
 
+@restrict_access
 async def delete_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    
-    # Notify partner if in a chat
     partner_id = None
-    if user_id in user_pairs:
-        partner_id = user_pairs[user_id]
-        partner_data = get_user_with_cache(partner_id)
-        partner_chat_id = partner_data.get("chat_id") if partner_data else None
-        if partner_chat_id:
+    
+    try:
+        if user_id in user_pairs:
+            partner_id = user_pairs[user_id]
+            partner_data = get_user_with_cache(partner_id)
+            partner_chat_id = partner_data.get("chat_id") if partner_data else None
+        
+        delete_user(user_id, context)
+        
+        if partner_id and partner_chat_id:
             await safe_bot_send_message(
                 context.bot,
                 partner_chat_id,
@@ -2344,10 +2367,7 @@ async def delete_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
-    
-    # Clear user data
-    try:
-        delete_user(user_id, context)
+        
         context.user_data.clear()
         await safe_reply(
             update,
@@ -2362,6 +2382,7 @@ async def delete_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         await send_channel_notification(context, notification_message)
         logger.info(f"User {user_id} deleted their profile")
+        
     except Exception as e:
         logger.error(f"Error deleting profile for user {user_id}: {e}")
         await safe_reply(
@@ -2370,10 +2391,6 @@ async def delete_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context,
             parse_mode=ParseMode.MARKDOWN_V2
         )
-        # Revert in-memory changes if database deletion fails
-        if partner_id and user_id not in user_pairs:
-            user_pairs[user_id] = partner_id
-            user_pairs[partner_id] = user_id
 
 async def message_handler(update: Update, context: ContextTypes) -> None:
     user_id = update.effective_user.id
@@ -2623,7 +2640,6 @@ async def schedule_message_deletion(context: ContextTypes.DEFAULT_TYPE, chat_id:
     context.bot_data["message_deletion_jobs"][job_id] = job
 
 async def set_tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle user input for setting profile tags."""
     user_id = update.effective_user.id
     user = get_user_with_cache(user_id)
     current_state = context.user_data.get("state", user.get("setup_state"))
@@ -2636,12 +2652,7 @@ async def set_tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     tags_input = update.message.text.strip().lower().split(",")
     tags_input = [tag.strip() for tag in tags_input if tag.strip()]
     
-    # Define allowed tags (adjust as needed)
-    ALLOWED_TAGS = [
-        "gaming", "music", "movies", "sports", "books", "tech", "food", "travel",
-        "art", "fitness", "nature", "photography", "fashion", "coding", "anime"
-    ]
-    
+    ALLOWED_TAGS = ["gaming", "music", "movies", "sports", "books", "tech", "food", "travel", "art", "fitness", "nature", "photography", "fashion", "coding", "anime"]
     invalid_tags = [tag for tag in tags_input if tag not in ALLOWED_TAGS]
     if invalid_tags:
         await safe_reply(
@@ -2657,7 +2668,7 @@ async def set_tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return TAGS
     
     profile["tags"] = tags_input
-    update_user(user_id, {
+    updates = {
         "profile": profile,
         "consent": user.get("consent", False),
         "verified": user.get("verified", False),
@@ -2667,7 +2678,24 @@ async def set_tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "ban_type": user.get("ban_type"),
         "ban_expiry": user.get("ban_expiry"),
         "setup_state": None
-    })
+    }
+    
+    # Update user and clear cache
+    try:
+        update_user(user_id, updates)
+        get_user_cached.cache_clear()
+        logger.info(f"Completed setup for user {user_id} with tags {tags_input}")
+    except Exception as e:
+        logger.error(f"Error completing setup for user {user_id}: {e}")
+        await safe_reply(update, "❌ Error saving your profile. Please try again or contact support.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        return ConversationHandler.END
+    
+    # Verify user document
+    user = get_db_collection("users").find_one({"user_id": user_id})
+    if not (user.get("consent") and user.get("verified") and is_profile_complete(user)):
+        logger.error(f"User {user_id} profile incomplete after setup: {user}")
+        await safe_reply(update, "❌ Profile setup failed. Please use /start to try again.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        return ConversationHandler.END
     
     context.user_data["state"] = None
     await safe_reply(update, f"🏷️ Tags set: {', '.join(tags_input)} 🎉", context, parse_mode=ParseMode.MARKDOWN_V2)
@@ -2675,7 +2703,7 @@ async def set_tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         update,
         (
             "🔍 Your profile is ready! 🎉\n\n"
-            "🚀 Use `/next` to find a chat partner and start connecting!\n"
+            "🚀 Use /next to find a chat partner and start connecting!\n"
             "ℹ️ Sending text messages now won’t start a chat. Use /help for more options."
         ),
         context,
