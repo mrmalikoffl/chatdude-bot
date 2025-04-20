@@ -76,7 +76,7 @@ BOT_INFO = {
     "tools": "Python, python-telegram-bot, MongoDB, Heroku",
     "created_by": "Mr Malik",
     "language": "Python 3.10",
-    "owner": "Malik Infotech",
+    "owner": "Malik Infotech Pvt Ltd",
     "version": "1.0.0",
     "support": "@mrmalik_offl"
 }
