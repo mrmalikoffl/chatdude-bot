@@ -369,9 +369,8 @@ def escape_markdown_v2(text):
     formatting_pattern = r'(\*[^\*]+\*|_[^_]+_|```[^`]+```|\[[^\]]+\]\([^\)]+\))'
     
     def escape_non_formatting(text_part):
-        for char in MARKDOWNV2_SPECIAL_CHARS:
-            text_part = text_part.replace(char, f'\\{char}')
-        return text_part
+        """Escape all special characters in non-formatted text."""
+        return ''.join(f'\\{char}' if char in MARKDOWNV2_SPECIAL_CHARS else char for char in text_part)
     
     parts = re.split(formatting_pattern, text)
     escaped_parts = []
@@ -380,29 +379,21 @@ def escape_markdown_v2(text):
         if re.match(formatting_pattern, part):
             if part.startswith('*') and part.endswith('*'):
                 inner_text = part[1:-1]
-                for char in MARKDOWNV2_SPECIAL_CHARS:
-                    if char != '*':
-                        inner_text = inner_text.replace(char, f'\\{char}')
+                inner_text = escape_non_formatting(inner_text)  # Escape all special chars
                 escaped_parts.append(f'*{inner_text}*')
             elif part.startswith('_') and part.endswith('_'):
                 inner_text = part[1:-1]
-                for char in MARKDOWNV2_SPECIAL_CHARS:
-                    if char != '_':
-                        inner_text = inner_text.replace(char, f'\\{char}')
+                inner_text = escape_non_formatting(inner_text)  # Escape all special chars
                 escaped_parts.append(f'_{inner_text}_')
             elif part.startswith('```') and part.endswith('```'):
                 inner_text = part[3:-3]
-                for char in MARKDOWNV2_SPECIAL_CHARS:
-                    if char != '`':
-                        inner_text = inner_text.replace(char, f'\\{char}')
+                inner_text = escape_non_formatting(inner_text)  # Escape all special chars
                 escaped_parts.append(f'```{inner_text}```')
             elif part.startswith('[') and ')' in part:
                 link_text, url = part[1:].split('](', 1)
                 url = url[:-1]
-                for char in MARKDOWNV2_SPECIAL_CHARS:
-                    if char not in '[]()':
-                        link_text = link_text.replace(char, f'\\{char}')
-                        url = url.replace(char, f'\\{char}')
+                link_text = escape_non_formatting(link_text)  # Escape all special chars
+                url = escape_non_formatting(url)  # Escape all special chars
                 escaped_parts.append(f'[{link_text}]({url})')
             else:
                 escaped_parts.append(escape_non_formatting(part))
@@ -2717,7 +2708,7 @@ async def botinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info(f"Sent /botinfo response to user {user_id}")
     except Exception as e:
         logger.error(f"Failed to send /botinfo response to user {user_id}: {str(e)}")
-        await safe_reply(update, "⚠️ Sorry, an error occurred while displaying bot info. Please try again later.", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "⚠️ Sorry, an error occurred while displaying bot info\\. Please try again later\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def admin_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Grant admin access and display commands"""
