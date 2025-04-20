@@ -2340,7 +2340,7 @@ async def delete_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await safe_bot_send_message(
                 context.bot,
                 partner_chat_id,
-                "👋 Your chat partner has deleted their profile. Use /next to find a new partner.",
+                "👋 Your chat partner has deleted their profile\\. Use /next to find a new partner\\.",
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
@@ -2351,7 +2351,7 @@ async def delete_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data.clear()
         await safe_reply(
             update,
-            "🗑️ Your profile and data have been deleted successfully 🌟. Use /start to set up a new profile.",
+            "🗑️ Your profile and data have been deleted successfully 🌟\\. Use /start to set up a new profile\\.",
             context,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -2366,7 +2366,7 @@ async def delete_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.error(f"Error deleting profile for user {user_id}: {e}")
         await safe_reply(
             update,
-            "❌ Error deleting profile 😔. Please try again or contact support.",
+            "❌ Error deleting profile 😔\\. Please try again or contact support\\.",
             context,
             parse_mode=ParseMode.MARKDOWN_V2
         )
