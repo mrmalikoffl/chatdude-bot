@@ -22,7 +22,7 @@ from telegram.constants import ParseMode
 import re
 from collections import defaultdict
 import warnings
-from telegram.error import TelegramError  # Add this import
+from telegram.error import TelegramError, BadRequest  # Add BadRequest
 import random
 from typing import Tuple
 import threading
@@ -485,7 +485,13 @@ async def notify_user(user_id: int, message: str, context: ContextTypes.DEFAULT_
                     f"⚠️ Failed to send fallback notification to user {user_id}: {escape_markdown_v2(str(e2))} 🌑"
                 )
 
-async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = ParseMode.MARKDOWN, **kwargs) -> telegram.Message:
+async def safe_reply(
+    update: Update,
+    text: str,
+    context: ContextTypes.DEFAULT_TYPE,
+    parse_mode: str = ParseMode.MARKDOWN,
+    **kwargs
+) -> Message:  # Use Message instead of telegram.Message
     original_text = text
     try:
         logger.debug(f"Sending message with parse_mode={parse_mode}: {text[:200]}")
@@ -497,10 +503,10 @@ async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TY
             sent_message = await update.callback_query.message.reply_text(text, parse_mode=parse_mode, **kwargs)
         
         if sent_message is None:
-            raise telegram.error.TelegramError(f"Failed to send reply to user {update.effective_user.id}: Telegram API returned None")
+            raise TelegramError(f"Failed to send reply to user {update.effective_user.id}: Telegram API returned None")
         logger.info(f"Sent reply to user {update.effective_user.id}: {text[:50]}... (Message ID: {sent_message.message_id})")
         return sent_message
-    except telegram.error.BadRequest as bre:
+    except BadRequest as bre:  # Use BadRequest instead of telegram.error.BadRequest
         logger.warning(f"Markdown parsing failed: {bre}. Text: {text[:200]}")
         try:
             clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', '', original_text)
@@ -512,38 +518,45 @@ async def safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TY
             else:
                 sent_message = await update.callback_query.message.reply_text(clean_text, parse_mode=None, **kwargs)
             if sent_message is None:
-                raise telegram.error.TelegramError(f"Failed to send clean reply to user {update.effective_user.id}: Telegram API returned None")
+                raise TelegramError(f"Failed to send clean reply to user {update.effective_user.id}: Telegram API returned None")
             logger.info(f"Sent clean reply to user {update.effective_user.id}: {clean_text[:50]}... (Message ID: {sent_message.message_id})")
             return sent_message
-        except telegram.error.TelegramError as e:
+        except TelegramError as e:
             logger.error(f"Failed to send clean reply to user {update.effective_user.id}: {e}")
             raise
-    except telegram.error.TelegramError as e:
+    except TelegramError as e:
         logger.error(f"Failed to send reply to user {update.effective_user.id}: {e}")
         raise
 
-async def safe_bot_send_message(bot, chat_id: int, text: str, context: ContextTypes.DEFAULT_TYPE, parse_mode: str = ParseMode.MARKDOWN, **kwargs) -> telegram.Message:
+async def safe_bot_send_message(
+    bot,
+    chat_id: int,
+    text: str,
+    context: ContextTypes.DEFAULT_TYPE,
+    parse_mode: str = ParseMode.MARKDOWN,
+    **kwargs
+) -> Message:  # Use Message instead of telegram.Message
     try:
         logger.debug(f"Sending message to chat {chat_id} with parse_mode={parse_mode}: {text[:200]}")
         sent_message = await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, **kwargs)
         if sent_message is None:
-            raise telegram.error.TelegramError(f"Failed to send message to chat {chat_id}: Telegram API returned None")
+            raise TelegramError(f"Failed to send message to chat {chat_id}: Telegram API returned None")
         logger.info(f"Sent message to chat {chat_id}: {text[:50]}... (Message ID: {sent_message.message_id})")
         return sent_message
-    except telegram.error.BadRequest as e:
+    except BadRequest as e:  # Use BadRequest instead of telegram.error.BadRequest
         logger.warning(f"Markdown parsing failed for chat {chat_id}: {e}. Text: {text[:200]}")
         try:
             clean_text = re.sub(r'([_*[\]()~`>#+-|=}{.!])', '', text)
             logger.debug(f"Falling back to plain text: {clean_text[:200]}")
             sent_message = await bot.send_message(chat_id=chat_id, text=clean_text, parse_mode=None, **kwargs)
             if sent_message is None:
-                raise telegram.error.TelegramError(f"Failed to send clean message to chat {chat_id}: Telegram API returned None")
+                raise TelegramError(f"Failed to send clean message to chat {chat_id}: Telegram API returned None")
             logger.info(f"Sent clean message to chat {chat_id}: {clean_text[:50]}... (Message ID: {sent_message.message_id})")
             return sent_message
-        except telegram.error.TelegramError as e:
+        except TelegramError as e:
             logger.error(f"Failed to send clean message to chat {chat_id}: {e}")
             raise
-    except telegram.error.TelegramError as e:
+    except TelegramError as e:
         logger.error(f"Failed to send message to chat {chat_id}: {e}")
         raise
         
