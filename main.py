@@ -1271,7 +1271,7 @@ async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             admin_notification_cache[admin_key] = True
             await send_channel_notification(
                 context,
-                f"⚠️ User {user_id} attempted /next without a chat\\_id 🌑"
+                f"⚠️ User {user_id} attempted /next without a chat\_id 🌑"
             )
         return
     
