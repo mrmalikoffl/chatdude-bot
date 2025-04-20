@@ -2020,7 +2020,7 @@ async def button(update: Update, context: ContextTypes) -> None:
         await safe_reply(update, f"👤 Gender updated to {gender}! Use /settings to make more changes.", context)
         context.user_data.pop("settings_state", None)
         return
-        if data == "help_menu":
+    if data == "help_menu":
         help_text = (
         "🆘 *Help Menu* 🆘\n\n"
         "Here’s how to use the bot:\n"
