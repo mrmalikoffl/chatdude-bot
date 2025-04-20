@@ -2737,11 +2737,11 @@ async def botinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         info_message = (
             f"🤖 *{escape_markdown_v2(BOT_INFO['name'])} Info* 🤖\n\n"
-            f"🔧 *Tools Used*: {escape_markdown_v2(BOT_INFO['tools'])}\n"
-            f"👨‍💻 *Created By*: {escape_markdown_v2(BOT_INFO['created_by'])}\n"
-            f"💻 *Language*: {escape_markdown_v2(BOT_INFO['language'])}\n"
-            f"👤 *Owner*: {escape_markdown_v2(BOT_INFO['owner'])}\n"
-            f"📌 *Version*: {escape_markdown_v2(BOT_INFO['version'])}\n"
+            f"🔧 *Tools Used*: {escape_markdown_v2(BOT_INFO['tools'])}\n\n"
+            f"👨‍💻 *Created By*: {escape_markdown_v2(BOT_INFO['created_by'])}\n\n"
+            f"💻 *Language*: {escape_markdown_v2(BOT_INFO['language'])}\n\n"
+            f"👤 *Owner*: {escape_markdown_v2(BOT_INFO['owner'])}\n\n"
+            f"📌 *Version*: {escape_markdown_v2(BOT_INFO['version'])}\n\n"
             f"📞 *Help & Support*: {escape_markdown_v2(BOT_INFO['support'])}\n"
         )
         await safe_reply(update, info_message, context, parse_mode=ParseMode.MARKDOWN_V2)
