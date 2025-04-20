@@ -1299,7 +1299,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 admin_notification_cache[admin_key] = True
                 await send_channel_notification(
                     context,
-                    f"⚠️ Failed to notify partner {partner_id} of user {user_id} leaving chat: No chat\\_id found 🌑"
+                    f"⚠️ Failed to notify partner {partner_id} of user {user_id} leaving chat: No chat_id found 🌑"
                 )
         await safe_reply(update, "👋 Chat ended\\. Use /start to begin a new chat\\.", context, parse_mode=ParseMode.MARKDOWN_V2)
         if user_id in chat_histories and not has_premium_feature(user_id, "vaulted_chats"):
@@ -1326,7 +1326,7 @@ async def next_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             admin_notification_cache[admin_key] = True
             await send_channel_notification(
                 context,
-                f"⚠️ User {user_id} attempted /next without a chat\_id 🌑"
+                f"⚠️ User {user_id} attempted /next without a chat_id 🌑"
             )
         return
     
