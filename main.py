@@ -22,7 +22,7 @@ from telegram.constants import ParseMode
 import re
 from collections import defaultdict
 import warnings
-import telegram.error
+from telegram.error import TelegramError  # Add this import
 import random
 from typing import Tuple
 import threading
