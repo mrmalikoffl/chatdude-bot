@@ -70,6 +70,17 @@ ALLOWED_TAGS = {
     "nature", "science", "history", "coding"
 }
 
+# Bot information configuration
+BOT_INFO = {
+    "name": "Talk2Anyone",
+    "tools": "Python, python-telegram-bot, MongoDB, Heroku",
+    "created_by": "Mr Malik",
+    "language": "Python 3.10",
+    "owner": "Malik Infotech",
+    "version": "1.0.0",
+    "support": "@mrmalik_offl"
+}
+
 # In-memory storage
 waiting_users_lock = threading.Lock()
 waiting_users = []
@@ -2009,7 +2020,7 @@ async def button(update: Update, context: ContextTypes) -> None:
         await safe_reply(update, f"👤 Gender updated to {gender}! Use /settings to make more changes.", context)
         context.user_data.pop("settings_state", None)
         return
-    if data == "help_menu":
+        if data == "help_menu":
         help_text = (
             "🆘 *Help Menu* 🆘\n\n"
             "Here’s how to use the bot:\n"
@@ -2018,9 +2029,10 @@ async def button(update: Update, context: ContextTypes) -> None:
             "• /stop - End current chat or stop waiting\n"
             "• /settings - Update your profile\n"
             "• /help - Show this menu\n"
+            "• /botinfo - View bot information\n"  # New line
             "• /deleteprofile - Delete your profile\n"
         )
-        await safe_reply(update, help_text, context)
+        await safe_reply(update, help_text, context, parse_mode=ParseMode.MARKDOWN_V2)  # Added parse_mode
         return
     if data == "start_chat":
         await start(update, context)
@@ -2668,6 +2680,34 @@ async def set_tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     return ConversationHandler.END
 
+async def botinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display information about the bot."""
+    user_id = update.effective_user.id
+    if is_banned(user_id):
+        user = get_user_with_cache(user_id)
+        ban_msg = (
+            "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
+            if user["ban_type"] == "permanent"
+            else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M:%S')} ⏰."
+        )
+        await safe_reply(update, ban_msg, context, parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    # Format the bot information message
+    info_message = (
+        f"🤖 *{escape_markdown_v2(BOT_INFO['name'])} Info* 🤖\n\n"
+        f"🔧 *Tools Used*: {escape_markdown_v2(BOT_INFO['tools'])}\n"
+        f"👨‍💻 *Created By*: {escape_markdown_v2(BOT_INFO['created_by'])}\n"
+        f"💻 *Language*: {escape_markdown_v2(BOT_INFO['language'])}\n"
+        f"👤 *Owner*: {escape_markdown_v2(BOT_INFO['owner'])}\n"
+        f"📌 *Version*: {escape_markdown_v2(BOT_INFO['version'])}\n"
+        f"📞 *Help & Support*: {escape_markdown_v2(BOT_INFO['support'])}\n"
+    )
+
+    # Send the message
+    await safe_reply(update, info_message, context, parse_mode=ParseMode.MARKDOWN_V2)
+    logger.info(f"Sent /botinfo response to user {user_id}")
+
 async def admin_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Grant admin access and display commands"""
     user_id = update.effective_user.id
@@ -3258,6 +3298,7 @@ def main() -> None:
     application.add_handler(CommandHandler("settings", restrict_access(settings)))
     application.add_handler(CommandHandler("report", restrict_access(report)))
     application.add_handler(CommandHandler("deleteprofile", restrict_access(delete_profile)))
+    application.add_handler(CommandHandler("botinfo", botinfo))
 
     # Add admin command handlers
     application.add_handler(CommandHandler("admin", admin_access))
