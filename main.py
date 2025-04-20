@@ -183,41 +183,58 @@ async def process_queued_operations(context: ContextTypes.DEFAULT_TYPE) -> None:
                 operation_retries.pop(operation_key, None)
 
 def restrict_access(handler):
-    """Decorator to restrict access to users with complete profiles and no bans."""
     @wraps(handler)
     async def wrapper(update: Update, context: ContextTypes, *args, **kwargs):
         user_id = update.effective_user.id
         
-        # Check ban status
-        if is_banned(user_id):
-            user = get_user_with_cache(user_id)
-            ban_msg = (
-                "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
-                if user["ban_type"] == "permanent"
-                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M')} ⏰."
-            )
-            await update.message.reply_text(ban_msg)
-            return
-        
-        # Allow /start and /deleteprofile even without consent/verification
+        # Allow /start and /deleteprofile without checks
         if handler.__name__ in ["start", "delete_profile"]:
             return await handler(update, context, *args, **kwargs)
         
-        # Allow admin commands for admins
+        # Check if user exists in database (bypass cache)
+        user = get_db_collection("users").find_one({"user_id": user_id})
+        if not user:
+            await safe_reply(
+                update,
+                "⚠️ Your profile was deleted or not found. Please use /start to register.",
+                context,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            return
+        
+        # Existing checks
+        if is_banned(user_id):
+            user = get_user_with_cache(user_id)  # Cache is fine here since we confirmed existence
+            ban_msg = (
+                "🚫 You are permanently banned 🔒. Contact support to appeal 📧."
+                if user["ban_type"] == "permanent"
+                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M:%S')} ⏰."
+            )
+            await safe_reply(update, ban_msg, context, parse_mode=ParseMode.MARKDOWN_V2)
+            return
+        
         if user_id in ADMIN_IDS and handler.__name__.startswith("admin_"):
             return await handler(update, context, *args, **kwargs)
         
-        # Check profile completeness, consent, and verification
-        user = get_user_with_cache(user_id)
         if not user.get("consent", False) or not user.get("verified", False):
-            await update.message.reply_text("⚠️ Please complete your profile setup with /start, including consent and verification.")
+            await safe_reply(
+                update,
+                "⚠️ Please complete your profile setup with /start.",
+                context,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
             return
+        
         if not is_profile_complete(user):
-            await update.message.reply_text("⚠️ Please complete your profile setup with /start before using this feature.")
+            await safe_reply(
+                update,
+                "⚠️ Your profile is incomplete. Use /start to finish setting it up.",
+                context,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
             return
         
         return await handler(update, context, *args, **kwargs)
-    
     return wrapper
 
 def is_profile_complete(user: dict) -> bool:
@@ -335,7 +352,7 @@ def update_user(user_id: int, data: dict) -> bool:
     logger.error(f"Failed to update user {user_id} after {retries} attempts")
     return False
 
-def delete_user(user_id: int):
+def delete_user(user_id: int, context: ContextTypes.DEFAULT_TYPE = None):
     try:
         reports = get_db_collection("reports")
         violations = get_db_collection("keyword_violations")
@@ -347,14 +364,35 @@ def delete_user(user_id: int):
             logger.info(f"Deleted user {user_id} from database")
         else:
             logger.warning(f"No user found with user_id {user_id}")
+        
         # Clear in-memory data
         user_activities.pop(user_id, None)
         command_timestamps.pop(user_id, None)
         message_timestamps.pop(user_id, None)
         chat_histories.pop(user_id, None)
+        
+        with waiting_users_lock:
+            if user_id in waiting_users:
+                waiting_users.remove(user_id)
+        
+        with user_pairs_lock:
+            if user_id in user_pairs:
+                partner_id = user_pairs.pop(user_id)
+                user_pairs.pop(partner_id, None)
+                if context:
+                    chat_key = tuple(sorted([user_id, partner_id]))
+                    context.bot_data.get("chat_start_times", {}).pop(chat_key, None)
+        
+        if context:
+            context.bot_data.get("rematch_requests", {}).pop(user_id, None)
+            context.bot_data.get("personal_chat_requests", {}).pop(user_id, None)
+        
+        # Clear LRU cache
+        get_user_cached.cache_clear()  # Clears entire cache; alternatively, clear specific user_id if using cachetools
+        
     except (ConnectionError, OperationFailure) as e:
         logger.error(f"Failed to delete user {user_id}: {e}")
-        operation_queue.put(("delete_user", (user_id,)))
+        operation_queue.put(("delete_user", (user_id, context)))
         raise
     except Exception as e:
         logger.error(f"Unexpected error deleting user {user_id}: {e}")
@@ -624,30 +662,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.effective_chat.id
     logger.info(f"Received /start command from user {user_id} with chat_id {chat_id}")
     
-    # Save chat_id immediately
+    # Clear cache for this user
+    get_user_cached.cache_clear()  # Or clear specific user_id if using cachetools
+    user = get_user_with_cache(user_id)
+    
+    # Save chat_id
     try:
-        user_data = get_user_with_cache(user_id) or {}
+        user_data = user or {}
         user_data["chat_id"] = chat_id
         user_data["created_at"] = user_data.get("created_at", int(time.time()))
-        result = get_db_collection("users").update_one(  # Fixed: db["users"] instead of db.collection("users")
+        result = get_db_collection("users").update_one(
             {"user_id": user_id},
             {"$set": user_data},
             upsert=True
         )
         logger.info(f"Updated user {user_id} with chat_id {chat_id}, matched: {result.matched_count}, modified: {result.modified_count}")
     except Exception as e:
-        logger.error(f"Failed to save chat_id for user {user_id}: {e}")
-        admin_key = (user_id, f"start_error_{str(e)}")
-        if admin_key not in admin_notification_cache:
-            admin_notification_cache[admin_key] = True
-            await send_channel_notification(
-                context,
-                f"⚠️ Failed to save chat_id for user {user_id}: {escape_markdown_v2(str(e))} 🌑"
-            )
-        error_message = escape_markdown_v2("An error occurred while setting up your profile. Please try again later or contact support! 😓")
+        logger.error(f"Error updating user {user_id}: {e}")
         await safe_reply(
             update,
-            f"⚠️ {error_message}",
+            "⚠️ Error saving your chat ID. Please try again or contact support.",
             context,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -2292,41 +2326,54 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         await safe_reply(update, "❌ Error submitting report 😔. Please try again.", context)
 
+
 async def delete_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     
-    # End any active chats
+    # Notify partner if in a chat
+    partner_id = None
     if user_id in user_pairs:
         partner_id = user_pairs[user_id]
-        del user_pairs[user_id]
-        if partner_id in user_pairs:
-            del user_pairs[partner_id]
-        await safe_bot_send_message(context.bot, partner_id, "👋 Your partner has left the chat. Use /start to find a new one.", context)
+        partner_data = get_user_with_cache(partner_id)
+        partner_chat_id = partner_data.get("chat_id") if partner_data else None
+        if partner_chat_id:
+            await safe_bot_send_message(
+                context.bot,
+                partner_chat_id,
+                "👋 Your chat partner has deleted their profile. Use /next to find a new partner.",
+                context,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
     
-    # Remove from waiting list
-    if user_id in waiting_users:
-        with waiting_users_lock:
-            waiting_users.remove(user_id)
-    
-    # Clear chat history
-    if user_id in chat_histories:
-        del chat_histories[user_id]
-    
-    # Clear user data from database
+    # Clear user data
     try:
-        delete_user(user_id)
-        # Clear in-memory context to force setup restart
+        delete_user(user_id, context)
         context.user_data.clear()
-        await safe_reply(update, "🗑️ Your profile and data have been deleted successfully 🌟. Use /start to set up a new profile.", context)
+        await safe_reply(
+            update,
+            "🗑️ Your profile and data have been deleted successfully 🌟. Use /start to set up a new profile.",
+            context,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
         notification_message = (
             "🗑️ *User Deleted Profile* 🗑️\n\n"
             f"👤 *User ID*: {user_id}\n"
             f"🕒 *Deleted At*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
         await send_channel_notification(context, notification_message)
+        logger.info(f"User {user_id} deleted their profile")
     except Exception as e:
         logger.error(f"Error deleting profile for user {user_id}: {e}")
-        await safe_reply(update, "❌ Error deleting profile 😔. Please try again or contact support.", context)
+        await safe_reply(
+            update,
+            "❌ Error deleting profile 😔. Please try again or contact support.",
+            context,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        # Revert in-memory changes if database deletion fails
+        if partner_id and user_id not in user_pairs:
+            user_pairs[user_id] = partner_id
+            user_pairs[partner_id] = user_id
 
 async def message_handler(update: Update, context: ContextTypes) -> None:
     user_id = update.effective_user.id
@@ -2709,14 +2756,13 @@ async def admin_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await safe_reply(update, access_text, context)  # No explicit parse_mode
 
 async def admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Delete a user's data"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         await safe_reply(update, "🔒 Unauthorized 🌑.", context)
         return
     try:
         target_id = int(context.args[0])
-        delete_user(target_id)
+        delete_user(target_id, context)
         await safe_reply(update, f"🗑️ User *{target_id}* data deleted successfully 🌟.", context)
         logger.info(f"Admin {user_id} deleted user {target_id}.")
     except (IndexError, ValueError):
