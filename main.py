@@ -819,7 +819,7 @@ async def consent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if not success:
                 await safe_reply(update, "⚠️ Failed to update consent. Please try again.", context)
                 return ConversationHandler.END
-            await safe_reply(updae, "✅ Thank you for agreeing! Let’s verify your profile.", context)
+            await safe_reply(update, "✅ Thank you for agreeing! Let’s verify your profile.", context)
             correct_emoji = random.choice(VERIFICATION_EMOJIS)
             context.user_data["correct_emoji"] = correct_emoji
             other_emojis = random.sample([e for e in VERIFICATION_EMOJIS if e != correct_emoji], 3)
