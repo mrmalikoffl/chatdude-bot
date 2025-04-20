@@ -2022,18 +2022,28 @@ async def button(update: Update, context: ContextTypes) -> None:
         return
         if data == "help_menu":
         help_text = (
-            "🆘 *Help Menu* 🆘\n\n"
-            "Here’s how to use the bot:\n"
-            "• /start - Set up or view your profile\n"
-            "• /next - Find a new chat partner\n"
-            "• /stop - End current chat or stop waiting\n"
-            "• /settings - Update your profile\n"
-            "• /help - Show this menu\n"
-            "• /botinfo - View bot information\n"  # New line
-            "• /deleteprofile - Delete your profile\n"
-        )
-        await safe_reply(update, help_text, context, parse_mode=ParseMode.MARKDOWN_V2)  # Added parse_mode
-        return
+        "🆘 *Help Menu* 🆘\n\n"
+        "Here’s how to use the bot:\n"
+        "• /start - Set up or view your profile 🚀\n"
+        "• /next - Find a new chat partner 🔍\n"
+        "• /stop - End current chat or stop waiting 🛑\n"
+        "• /settings - Update your profile ⚙️\n"
+        "• /help - Show this menu 🆘\n"
+        "• /botinfo - View bot information 🤖\n"
+        "• /deleteprofile - Delete your profile 🗑️\n"
+        "• /premium - Access premium features 💎\n"
+        "• /shine - Highlight your profile ✨\n"
+        "• /instant - Start an instant chat ⚡\n"
+        "• /mood - Set your mood for matching 😊\n"
+        "• /vault - Access vaulted chats 🔒\n"
+        "• /history - View chat history 📜\n"
+        "• /rematch - Reconnect with a past partner 🔄\n"
+        "• /flare - Add flair to your messages 🌟\n"
+        "• /personal - Start a personal chat 👤\n"
+        "• /report - Report a user 🚨\n"
+    )
+    await safe_reply(update, help_text, context, parse_mode=ParseMode.MARKDOWN_V2)
+    return
     if data == "start_chat":
         await start(update, context)
     elif data == "next_chat":
