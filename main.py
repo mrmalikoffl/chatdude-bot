@@ -693,6 +693,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
 
+    # Check if user is banned
     if is_banned(user_id):
         user = get_user_with_cache(user_id)
         ban_type = user.get("ban_type", "permanent")
@@ -705,6 +706,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await safe_reply(update, ban_msg, context, parse_mode=ParseMode.MARKDOWN_V2)
         return ConversationHandler.END
     
+    # Check rate limit
     if not check_rate_limit(user_id):
         await safe_reply(
             update,
@@ -714,6 +716,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
     
+    # Check if user is already in a chat
     if user_id in user_pairs:
         await safe_reply(
             update,
@@ -723,6 +726,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
     
+    # Check if user is waiting for a chat partner
     if user_id in waiting_users:
         await safe_reply(
             update,
@@ -732,15 +736,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
     
+    # Fetch user data again for consistency
     user = get_user_with_cache(user_id)
-    current_state = user.get("setup_state")
-    if current_state is not None:
-        context.user_data["state"] = current_state
-        message = escape_markdown_v2(f"Continuing setup. Please provide the requested information for {current_state}.")
-        await safe_reply(update, message, context, parse_mode=ParseMode.MARKDOWN_V2)
-        return current_state
+    logger.debug(f"User data for {user_id}: {user}")  # Debug log to inspect user data
 
+    # Check if profile is complete
     if user.get("consent") and user.get("verified") and is_profile_complete(user):
+        logger.info(f"User {user_id} has completed profile: consent={user.get('consent')}, verified={user.get('verified')}")
         profile = user.get("profile", {})
         profile_text = (
             f"👤 *Your Profile* 👤\n\n"
@@ -753,9 +755,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             f"⚙️ Use /settings to update your profile\\."
         )
         await safe_reply(update, profile_text, context, parse_mode=ParseMode.MARKDOWN_V2)
+        # Ensure setup_state is cleared
+        update_user(user_id, {"setup_state": None})
+        context.user_data["state"] = None
         return ConversationHandler.END
     
+    # Check current setup state
+    current_state = user.get("setup_state")
+    if current_state is not None:
+        logger.info(f"User {user_id} has setup_state: {current_state}")
+        context.user_data["state"] = current_state
+        message = escape_markdown_v2(f"Continuing setup. Please provide the requested information for {current_state}.")
+        await safe_reply(update, message, context, parse_mode=ParseMode.MARKDOWN_V2)
+        return current_state
+
+    # If no consent, prompt for it
     if not user.get("consent"):
+        logger.info(f"User {user_id} has no consent, prompting for consent")
         keyboard = [
             [InlineKeyboardButton("✅ I Agree", callback_data="consent_agree")],
             [InlineKeyboardButton("❌ I Disagree", callback_data="consent_disagree")]
@@ -779,11 +795,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             f"📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
             "ℹ️ Awaiting consent"
         ))
-        update_user(user_id, {"setup_state": CONSENT})  # Ensure update_user also uses db["users"]
+        update_user(user_id, {"setup_state": CONSENT})
         context.user_data["state"] = CONSENT
         return CONSENT
     
+    # If not verified, prompt for verification
     if not user.get("verified"):
+        logger.info(f"User {user_id} is not verified, prompting for verification")
         correct_emoji = random.choice(VERIFICATION_EMOJIS)
         context.user_data["correct_emoji"] = correct_emoji
         other_emojis = random.sample([e for e in VERIFICATION_EMOJIS if e != correct_emoji], 3)
@@ -797,10 +815,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data["state"] = VERIFICATION
         return VERIFICATION
     
+    # If profile is incomplete, start profile setup
     profile = user.get("profile", {})
     required_fields = ["name", "age", "gender", "location"]
     missing_fields = [field for field in required_fields if not profile.get(field)]
     if missing_fields:
+        logger.info(f"User {user_id} has missing profile fields: {missing_fields}")
         await safe_reply(
             update,
             "✨ Let’s set up your profile\\! Please enter your name:",
@@ -811,6 +831,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data["state"] = NAME
         return NAME
     
+    # Fallback: Profile should be complete, but ensure setup_state is cleared
+    logger.info(f"User {user_id} reached fallback case, clearing setup_state")
     await safe_reply(
         update,
         "🎉 Your profile is ready\\! Use /next to find a chat partner and start connecting\\! 🚀",
