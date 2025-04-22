@@ -187,7 +187,7 @@ def restrict_access(handler):
     async def wrapper(update: Update, context: ContextTypes, *args, **kwargs):
         user_id = update.effective_user.id
         
-        # Allow /start and /deleteprofile
+        # Allow /start and /deleteprofile without restrictions
         if handler.__name__ in ["start", "delete_profile"]:
             return await handler(update, context, *args, **kwargs)
         
@@ -200,17 +200,17 @@ def restrict_access(handler):
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
-            return
+            return ConversationHandler.END
         
         # Ban check
         if is_banned(user_id):
             ban_msg = (
                 "🚫 You are permanently banned 🔒\\. Contact support to appeal 📧\\."
-                if user["ban_type"] == "permanent"
-                else f"🚫 You are banned until {datetime.fromtimestamp(user['ban_expiry']).strftime('%Y-%m-%d %H:%M:%S')} ⏰."
+                if user.get("ban_type") == "permanent"
+                else f"🚫 You are banned until {datetime.fromtimestamp(user.get('ban_expiry')).strftime('%Y-%m-%d %H:%M:%S')} ⏰."
             )
             await safe_reply(update, ban_msg, context, parse_mode=ParseMode.MARKDOWN_V2)
-            return
+            return ConversationHandler.END
         
         # Admin commands
         if user_id in ADMIN_IDS and handler.__name__.startswith("admin_"):
@@ -225,7 +225,7 @@ def restrict_access(handler):
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
-            return
+            return ConversationHandler.END
         
         # Profile completeness check
         if not is_profile_complete(user):
@@ -236,7 +236,7 @@ def restrict_access(handler):
                 context,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
-            return
+            return ConversationHandler.END
         
         return await handler(update, context, *args, **kwargs)
     return wrapper
@@ -315,38 +315,17 @@ def update_user(user_id: int, data: dict) -> bool:
     for attempt in range(retries):
         try:
             users = get_db_collection("users")
-            existing = users.find_one({"user_id": user_id})
-            existing_data = existing or {
-                "profile": {},
-                "consent": False,
-                "consent_time": None,
-                "premium_expiry": None,
-                "ban_type": None,
-                "ban_expiry": None,
-                "verified": False,
-                "premium_features": {},
-                "created_at": int(time.time())
-            }
-            updated_data = {
-                "user_id": user_id,
-                "profile": data.get("profile", existing_data.get("profile", {})),
-                "consent": data.get("consent", existing_data.get("consent", False)),
-                "consent_time": data.get("consent_time", existing_data.get("consent_time", None)),
-                "premium_expiry": data.get("premium_expiry", existing_data.get("premium_expiry", None)),
-                "ban_type": data.get("ban_type", existing_data.get("ban_type", None)),
-                "ban_expiry": data.get("ban_expiry", existing_data.get("ban_expiry", None)),
-                "verified": data.get("verified", existing_data.get("verified", False)),
-                "premium_features": data.get("premium_features", existing_data.get("premium_features", {})),
-                "created_at": data.get("created_at", existing_data.get("created_at", int(time.time())))
-            }
-            users.update_one(
+            result = users.update_one(
                 {"user_id": user_id},
-                {"$set": updated_data},
+                {"$set": data},
                 upsert=True
             )
-            logger.info(f"Updated user {user_id}")
-            return True
-        except (ConnectionError, OperationFailure) as e:
+            if result.matched_count > 0 or result.upserted_id:
+                logger.info(f"Updated user {user_id}: {data}")
+                return True
+            logger.warning(f"No user matched for update: user_id={user_id}")
+            return False
+        except pymongo.errors.PyMongoError as e:
             logger.error(f"Attempt {attempt + 1}/{retries} failed to update user {user_id}: {e}")
             if attempt < retries - 1:
                 time.sleep(1)
@@ -673,12 +652,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         user_data = user or {}
         user_data["chat_id"] = chat_id
         user_data["created_at"] = user_data.get("created_at", int(time.time()))
-        result = get_db_collection("users").update_one(
-            {"user_id": user_id},
-            {"$set": user_data},
-            upsert=True
-        )
-        logger.info(f"Updated user {user_id} with chat_id {chat_id}, matched: {result.matched_count}, modified: {result.modified_count}")
+        success = update_user(user_id, user_data)
+        if not success:
+            logger.error(f"Failed to update chat_id for user {user_id}")
+            await safe_reply(
+                update,
+                "⚠️ Error saving your chat ID\\. Please try again or contact support\\.",
+                context,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            return ConversationHandler.END
+        logger.info(f"Updated user {user_id} with chat_id {chat_id}")
     except pymongo.errors.PyMongoError as e:
         logger.error(f"Database error updating user {user_id}: {e}")
         await safe_reply(
@@ -689,12 +673,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
 
-    # Clear cache to ensure fresh data (consider removing if cache issues persist)
-    get_user_cached.cache_clear()
-    
     # Fetch user data again for consistency
     user = get_user_with_cache(user_id)
-    logger.debug(f"User data for {user_id}: {user}")  # Debug log to inspect user data
+    logger.debug(f"User data for {user_id}: {user}")
 
     # Check if user is banned
     if is_banned(user_id):
@@ -756,6 +737,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         # Ensure setup_state is cleared
         update_user(user_id, {"setup_state": None})
         context.user_data["state"] = None
+        get_user_cached.cache_clear()  # Clear cache at the end
         return ConversationHandler.END
     
     # Check current setup state
@@ -765,6 +747,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data["state"] = current_state
         message = escape_markdown_v2(f"Continuing setup. Please provide the requested information for {current_state}.")
         await safe_reply(update, message, context, parse_mode=ParseMode.MARKDOWN_V2)
+        get_user_cached.cache_clear()
         return current_state
 
     # If no consent, prompt for it
@@ -795,6 +778,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ))
         update_user(user_id, {"setup_state": CONSENT})
         context.user_data["state"] = CONSENT
+        get_user_cached.cache_clear()
         return CONSENT
     
     # If not verified, prompt for verification
@@ -811,6 +795,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await safe_reply(update, message, context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
         update_user(user_id, {"setup_state": VERIFICATION})
         context.user_data["state"] = VERIFICATION
+        get_user_cached.cache_clear()
         return VERIFICATION
     
     # If profile is incomplete, start profile setup
@@ -827,6 +812,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         update_user(user_id, {"setup_state": NAME})
         context.user_data["state"] = NAME
+        get_user_cached.cache_clear()
         return NAME
     
     # Fallback: Profile should be complete, but ensure setup_state is cleared
@@ -839,6 +825,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     update_user(user_id, {"setup_state": None})
     context.user_data["state"] = None
+    get_user_cached.cache_clear()
     return ConversationHandler.END
 
 async def consent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -851,17 +838,20 @@ async def consent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if choice == "consent_agree":
         try:
             user = get_user_with_cache(user_id)
-            result = update_user(user_id, {
+            user_data = {
+                "user_id": user_id,
                 "consent": True,
                 "consent_time": int(time.time()),
                 "profile": user.get("profile", {}),
                 "premium_expiry": user.get("premium_expiry"),
                 "premium_features": user.get("premium_features", {}),
                 "created_at": user.get("created_at", int(time.time())),
-                "setup_state": VERIFICATION  # Explicitly set setup_state
-            })
-            # Check if update was successful
-            if not result or (hasattr(result, "matched_count") and result.matched_count == 0):
+                "setup_state": VERIFICATION,
+                "verified": user.get("verified", False),
+                "chat_id": user.get("chat_id")
+            }
+            success = update_user(user_id, user_data)
+            if not success:
                 logger.error(f"Failed to update consent for user {user_id}")
                 await safe_reply(update, "⚠️ Failed to update consent. Please try again.", context)
                 return ConversationHandler.END
@@ -877,6 +867,7 @@ async def consent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             message = f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{escape_markdown_v2(correct_emoji)}*"
             await safe_reply(update, message, context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
             context.user_data["state"] = VERIFICATION
+            get_user_cached.cache_clear()
             return VERIFICATION
         except pymongo.errors.PyMongoError as e:
             logger.error(f"Database error in consent_handler for user {user_id}: {e}")
@@ -891,6 +882,7 @@ async def consent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await safe_reply(update, "❌ You must agree to the rules to use this bot. Use /start to try again.", context)
         update_user(user_id, {"setup_state": None})
         context.user_data["state"] = None
+        get_user_cached.cache_clear()
         return ConversationHandler.END
 
 async def verify_emoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -901,16 +893,25 @@ async def verify_emoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     correct_emoji = context.user_data.get("correct_emoji")
     if selected_emoji == correct_emoji:
         user = get_user_with_cache(user_id)
-        update_user(user_id, {
+        user_data = {
+            "user_id": user_id,
             "verified": True,
             "profile": user.get("profile", {}),
-            "consent": user.get("consent", False),
             "premium_expiry": user.get("premium_expiry"),
             "premium_features": user.get("premium_features", {}),
-            "created_at": user.get("created_at", int(time.time()))
-        })
+            "created_at": user.get("created_at", int(time.time())),
+            "setup_state": NAME,
+            "chat_id": user.get("chat_id")
+        }
+        success = update_user(user_id, user_data)
+        if not success:
+            logger.error(f"Failed to update verification for user {user_id}")
+            await safe_reply(update, "⚠️ Failed to verify profile. Please try again.", context)
+            return ConversationHandler.END
         await safe_reply(update, "🎉 Profile verified successfully! Let’s set up your profile.", context)
         await safe_reply(update, "✨ Please enter your name:", context)
+        context.user_data["state"] = NAME
+        get_user_cached.cache_clear()
         return NAME
     else:
         correct_emoji = random.choice(VERIFICATION_EMOJIS)
@@ -920,7 +921,8 @@ async def verify_emoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         random.shuffle(all_emojis)
         keyboard = [[InlineKeyboardButton(emoji, callback_data=f"emoji_{emoji}") for emoji in all_emojis]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await safe_reply(update, f"❌ Incorrect emoji. Try again!\nPlease select this emoji: *{correct_emoji}*", context, reply_markup=reply_markup)
+        await safe_reply(update, f"❌ Incorrect emoji. Try again!\nPlease select this emoji: *{escape_markdown_v2(correct_emoji)}*", context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+        get_user_cached.cache_clear()
         return VERIFICATION
 
 async def set_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -936,18 +938,24 @@ async def set_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await safe_reply(update, f"⚠️ Name contains inappropriate content: {reason}", context)
         return NAME
     profile["name"] = name
-    update_user(user_id, {
+    user_data = {
+        "user_id": user_id,
         "profile": profile,
-        "consent": user.get("consent", False),
-        "verified": user.get("verified", False),
         "premium_expiry": user.get("premium_expiry"),
         "premium_features": user.get("premium_features", {}),
         "created_at": user.get("created_at", int(time.time())),
-        "setup_state": AGE
-    })
+        "setup_state": AGE,
+        "chat_id": user.get("chat_id")
+    }
+    success = update_user(user_id, user_data)
+    if not success:
+        logger.error(f"Failed to update name for user {user_id}")
+        await safe_reply(update, "⚠️ Failed to set name. Please try again.", context)
+        return NAME
     context.user_data["state"] = AGE
-    await safe_reply(update, f"🧑 Name set to: *{name}*!", context)
-    await safe_reply(update, "🎂 Please enter your age (e.g., 25):", context)
+    await safe_reply(update, f"🧑 Name set to: *{escape_markdown_v2(name)}*!", context, parse_mode=ParseMode.MARKDOWN_V2)
+    await safe_reply(update, "🎂 Please enter your age (e.g., 25):", context, parse_mode=ParseMode.MARKDOWN_V2)
+    get_user_cached.cache_clear()
     return AGE
 
 async def set_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -961,17 +969,22 @@ async def set_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             await safe_reply(update, "⚠️ Age must be between 13 and 120.", context)
             return AGE
         profile["age"] = age
-        update_user(user_id, {
+        user_data = {
+            "user_id": user_id,
             "profile": profile,
-            "consent": user.get("consent", False),
-            "verified": user.get("verified", False),
             "premium_expiry": user.get("premium_expiry"),
             "premium_features": user.get("premium_features", {}),
             "created_at": user.get("created_at", int(time.time())),
-            "setup_state": GENDER
-        })
+            "setup_state": GENDER,
+            "chat_id": user.get("chat_id")
+        }
+        success = update_user(user_id, user_data)
+        if not success:
+            logger.error(f"Failed to update age for user {user_id}")
+            await safe_reply(update, "⚠️ Failed to set age. Please try again.", context)
+            return AGE
         context.user_data["state"] = GENDER
-        await safe_reply(update, f"🎂 Age set to: *{age}*!", context)
+        await safe_reply(update, f"🎂 Age set to: *{age}*!", context, parse_mode=ParseMode.MARKDOWN_V2)
         keyboard = [
             [
                 InlineKeyboardButton("👨 Male", callback_data="gender_male"),
@@ -980,7 +993,8 @@ async def set_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await safe_reply(update, "👤 *Set Your Gender* 👤\n\nChoose your gender below:", context, reply_markup=reply_markup)
+        await safe_reply(update, "👤 *Set Your Gender* 👤\n\nChoose your gender below:", context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+        get_user_cached.cache_clear()
         return GENDER
     except ValueError:
         await safe_reply(update, "⚠️ Please enter a valid number for your age.", context)
@@ -999,18 +1013,24 @@ async def set_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             await safe_reply(update, "⚠️ Invalid gender selection.", context)
             return GENDER
         profile["gender"] = gender
-        update_user(user_id, {
+        user_data = {
+            "user_id": user_id,
             "profile": profile,
-            "consent": user.get("consent", False),
-            "verified": user.get("verified", False),
             "premium_expiry": user.get("premium_expiry"),
             "premium_features": user.get("premium_features", {}),
             "created_at": user.get("created_at", int(time.time())),
-            "setup_state": LOCATION
-        })
+            "setup_state": LOCATION,
+            "chat_id": user.get("chat_id")
+        }
+        success = update_user(user_id, user_data)
+        if not success:
+            logger.error(f"Failed to update gender for user {user_id}")
+            await safe_reply(update, "⚠️ Failed to set gender. Please try again.", context)
+            return GENDER
         context.user_data["state"] = LOCATION
-        await safe_reply(update, f"👤 Gender set to: *{gender}*!", context)
-        await safe_reply(update, "📍 Please enter your location (e.g., New York):", context)
+        await safe_reply(update, f"👤 Gender set to: *{escape_markdown_v2(gender)}*!", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "📍 Please enter your location (e.g., New York):", context, parse_mode=ParseMode.MARKDOWN_V2)
+        get_user_cached.cache_clear()
         return LOCATION
     await safe_reply(update, "⚠️ Invalid selection. Please choose a gender.", context)
     return GENDER
@@ -1032,32 +1052,38 @@ async def set_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await safe_reply(update, f"⚠️ Location contains inappropriate content: {reason}", context)
         return LOCATION
     profile["location"] = location
-    update_user(user_id, {
+    user_data = {
+        "user_id": user_id,
         "profile": profile,
-        "consent": user.get("consent", False),
-        "verified": user.get("verified", False),
         "premium_expiry": user.get("premium_expiry"),
         "premium_features": user.get("premium_features", {}),
         "created_at": user.get("created_at", int(time.time())),
-        "setup_state": None
-    })
+        "setup_state": None,
+        "chat_id": user.get("chat_id")
+    }
+    success = update_user(user_id, user_data)
+    if not success:
+        logger.error(f"Failed to update location for user {user_id}")
+        await safe_reply(update, "⚠️ Failed to set location. Please try again.", context)
+        return LOCATION
     context.user_data["state"] = None
-    await safe_reply(update, "🎉 Congratulations! Profile setup complete! 🎉", context)
+    await safe_reply(update, "🎉 Congratulations! Profile setup complete! 🎉", context, parse_mode=ParseMode.MARKDOWN_V2)
     await safe_reply(update, (
         "🔍 Your profile is ready! 🎉\n\n"
         "🚀 Use `/next` to find a chat partner and start connecting!\n"
         "ℹ️ Sending text messages now won’t start a chat. Use /help for more options."
-    ), context)
+    ), context, parse_mode=ParseMode.MARKDOWN_V2)
     notification_message = (
         "🆕 *New User Registered* 🆕\n\n"
         f"👤 *User ID*: {user_id}\n"
-        f"🧑 *Name*: {profile.get('name', 'Not set')}\n"
+        f"🧑 *Name*: {escape_markdown_v2(profile.get('name', 'Not set'))}\n"
         f"🎂 *Age*: {profile.get('age', 'Not set')}\n"
-        f"👤 *Gender*: {profile.get('gender', 'Not set')}\n"
-        f"📍 *Location*: {location}\n"
+        f"👤 *Gender*: {escape_markdown_v2(profile.get('gender', 'Not set'))}\n"
+        f"📍 *Location*: {escape_markdown_v2(location)}\n"
         f"📅 *Joined*: {datetime.fromtimestamp(user.get('created_at', int(time.time()))).strftime('%Y-%m-%d %H:%M:%S')}"
     )
     await send_channel_notification(context, notification_message)
+    get_user_cached.cache_clear()
     return ConversationHandler.END
 
 async def match_users(context: ContextTypes.DEFAULT_TYPE) -> None:
