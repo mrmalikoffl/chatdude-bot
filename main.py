@@ -749,8 +749,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             f"👤 *Gender*: {escape_markdown_v2(profile.get('gender', 'Not set'))}\n"
             f"📍 *Location*: {escape_markdown_v2(profile.get('location', 'Not set'))}\n"
             f"🏷️ *Tags*: {escape_markdown_v2(', '.join(profile.get('tags', [])) or 'None')}\n\n"
-            f"🔍 Use /next to find a chat partner!\n"
-            f"⚙️ Use /settings to update your profile."
+            f"🔍 Use /next to find a chat partner\\!\n"
+            f"⚙️ Use /settings to update your profile\\."
         )
         await safe_reply(update, profile_text, context, parse_mode=ParseMode.MARKDOWN_V2)
         return ConversationHandler.END
