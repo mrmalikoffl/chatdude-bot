@@ -682,7 +682,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         upsert=True
     )
     logger.info(f"Updated user {user_id} with chat_id {chat_id}, matched: {result.matched_count}, modified: {result.modified_count}")
-except Exception as e:
+    except Exception as e:
     logger.error(f"Error updating user {user_id}: {e}")
     await safe_reply(
         update,
