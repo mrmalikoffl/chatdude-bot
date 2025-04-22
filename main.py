@@ -667,14 +667,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.effective_chat.id
     logger.info(f"Received /start command from user {user_id} with chat_id {chat_id}")
     
-    # Clear cache to ensure fresh data
-    get_user_cached.cache_clear()
-    
     # Save chat_id
     try:
-        # Fetch user data from cache or database
         user = get_user_with_cache(user_id)
-        user_data = user or {}  # Use empty dict if user is None or not found
+        user_data = user or {}
         user_data["chat_id"] = chat_id
         user_data["created_at"] = user_data.get("created_at", int(time.time()))
         result = get_db_collection("users").update_one(
@@ -683,8 +679,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             upsert=True
         )
         logger.info(f"Updated user {user_id} with chat_id {chat_id}, matched: {result.matched_count}, modified: {result.modified_count}")
-    except Exception as e:
-        logger.error(f"Error updating user {user_id}: {e}")
+    except pymongo.errors.PyMongoError as e:
+        logger.error(f"Database error updating user {user_id}: {e}")
         await safe_reply(
             update,
             "⚠️ Error saving your chat ID\\. Please try again or contact support\\.",
@@ -693,9 +689,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
 
+    # Clear cache to ensure fresh data (consider removing if cache issues persist)
+    get_user_cached.cache_clear()
+    
+    # Fetch user data again for consistency
+    user = get_user_with_cache(user_id)
+    logger.debug(f"User data for {user_id}: {user}")  # Debug log to inspect user data
+
     # Check if user is banned
     if is_banned(user_id):
-        user = get_user_with_cache(user_id)
         ban_type = user.get("ban_type", "permanent")
         ban_expiry = user.get("ban_expiry")
         ban_msg = (
@@ -736,10 +738,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
     
-    # Fetch user data again for consistency
-    user = get_user_with_cache(user_id)
-    logger.debug(f"User data for {user_id}: {user}")  # Debug log to inspect user data
-
     # Check if profile is complete
     if user.get("consent") and user.get("verified") and is_profile_complete(user):
         logger.info(f"User {user_id} has completed profile: consent={user.get('consent')}, verified={user.get('verified')}")
@@ -751,8 +749,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             f"👤 *Gender*: {escape_markdown_v2(profile.get('gender', 'Not set'))}\n"
             f"📍 *Location*: {escape_markdown_v2(profile.get('location', 'Not set'))}\n"
             f"🏷️ *Tags*: {escape_markdown_v2(', '.join(profile.get('tags', [])) or 'None')}\n\n"
-            f"🔍 Use /next to find a chat partner\\!\n"
-            f"⚙️ Use /settings to update your profile\\."
+            f"🔍 Use /next to find a chat partner!\n"
+            f"⚙️ Use /settings to update your profile."
         )
         await safe_reply(update, profile_text, context, parse_mode=ParseMode.MARKDOWN_V2)
         # Ensure setup_state is cleared
@@ -832,7 +830,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return NAME
     
     # Fallback: Profile should be complete, but ensure setup_state is cleared
-    logger.info(f"User {user_id} reached fallback case, clearing setup_state")
+    logger.warning(f"User {user_id} reached fallback case: consent={user.get('consent')}, verified={user.get('verified')}, profile={profile}")
     await safe_reply(
         update,
         "🎉 Your profile is ready\\! Use /next to find a chat partner and start connecting\\! 🚀",
@@ -848,20 +846,26 @@ async def consent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
     user_id = query.from_user.id
     choice = query.data
+    logger.info(f"User {user_id} selected consent choice: {choice}")
+
     if choice == "consent_agree":
         try:
             user = get_user_with_cache(user_id)
-            success = update_user(user_id, {
+            result = update_user(user_id, {
                 "consent": True,
                 "consent_time": int(time.time()),
                 "profile": user.get("profile", {}),
                 "premium_expiry": user.get("premium_expiry"),
                 "premium_features": user.get("premium_features", {}),
-                "created_at": user.get("created_at", int(time.time()))
+                "created_at": user.get("created_at", int(time.time())),
+                "setup_state": VERIFICATION  # Explicitly set setup_state
             })
-            if not success:
+            # Check if update was successful
+            if not result or (hasattr(result, "matched_count") and result.matched_count == 0):
+                logger.error(f"Failed to update consent for user {user_id}")
                 await safe_reply(update, "⚠️ Failed to update consent. Please try again.", context)
                 return ConversationHandler.END
+            logger.info(f"User {user_id} consent updated successfully")
             await safe_reply(update, "✅ Thank you for agreeing! Let’s verify your profile.", context)
             correct_emoji = random.choice(VERIFICATION_EMOJIS)
             context.user_data["correct_emoji"] = correct_emoji
@@ -870,14 +874,23 @@ async def consent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             random.shuffle(all_emojis)
             keyboard = [[InlineKeyboardButton(emoji, callback_data=f"emoji_{emoji}") for emoji in all_emojis]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await safe_reply(update, f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{correct_emoji}*".replace(".", "\\."), context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+            message = f"🔐 *Verify Your Profile* 🔐\n\nPlease select this emoji: *{escape_markdown_v2(correct_emoji)}*"
+            await safe_reply(update, message, context, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+            context.user_data["state"] = VERIFICATION
             return VERIFICATION
+        except pymongo.errors.PyMongoError as e:
+            logger.error(f"Database error in consent_handler for user {user_id}: {e}")
+            await safe_reply(update, "⚠️ An error occurred. Please try again with /start.", context)
+            return ConversationHandler.END
         except Exception as e:
-            logger.error(f"Error in consent_handler for user {user_id}: {e}")
+            logger.error(f"Unexpected error in consent_handler for user {user_id}: {e}")
             await safe_reply(update, "⚠️ An error occurred. Please try again with /start.", context)
             return ConversationHandler.END
     else:
+        logger.info(f"User {user_id} disagreed to terms")
         await safe_reply(update, "❌ You must agree to the rules to use this bot. Use /start to try again.", context)
+        update_user(user_id, {"setup_state": None})
+        context.user_data["state"] = None
         return ConversationHandler.END
 
 async def verify_emoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
