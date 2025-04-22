@@ -670,7 +670,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # Clear cache to ensure fresh data
     get_user_cached.cache_clear()
     
-    try:
+try:
     # Fetch user data from cache or database
     user = get_user_with_cache(user_id)
     user_data = user or {}  # Use empty dict if user is None or not found
@@ -682,7 +682,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         upsert=True
     )
     logger.info(f"Updated user {user_id} with chat_id {chat_id}, matched: {result.matched_count}, modified: {result.modified_count}")
-    except Exception as e:
+except Exception as e:
     logger.error(f"Error updating user {user_id}: {e}")
     await safe_reply(
         update,
