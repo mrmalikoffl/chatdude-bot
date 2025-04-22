@@ -670,27 +670,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # Clear cache to ensure fresh data
     get_user_cached.cache_clear()
     
-try:
-    # Fetch user data from cache or database
-    user = get_user_with_cache(user_id)
-    user_data = user or {}  # Use empty dict if user is None or not found
-    user_data["chat_id"] = chat_id
-    user_data["created_at"] = user_data.get("created_at", int(time.time()))
-    result = get_db_collection("users").update_one(
-        {"user_id": user_id},
-        {"$set": user_data},
-        upsert=True
-    )
-    logger.info(f"Updated user {user_id} with chat_id {chat_id}, matched: {result.matched_count}, modified: {result.modified_count}")
-except Exception as e:
-    logger.error(f"Error updating user {user_id}: {e}")
-    await safe_reply(
-        update,
-        "⚠️ Error saving your chat ID\\. Please try again or contact support\\.",
-        context,
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
-    return ConversationHandler.END
+    # Save chat_id
+    try:
+        # Fetch user data from cache or database
+        user = get_user_with_cache(user_id)
+        user_data = user or {}  # Use empty dict if user is None or not found
+        user_data["chat_id"] = chat_id
+        user_data["created_at"] = user_data.get("created_at", int(time.time()))
+        result = get_db_collection("users").update_one(
+            {"user_id": user_id},
+            {"$set": user_data},
+            upsert=True
+        )
+        logger.info(f"Updated user {user_id} with chat_id {chat_id}, matched: {result.matched_count}, modified: {result.modified_count}")
+    except Exception as e:
+        logger.error(f"Error updating user {user_id}: {e}")
+        await safe_reply(
+            update,
+            "⚠️ Error saving your chat ID\\. Please try again or contact support\\.",
+            context,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return ConversationHandler.END
 
     if is_banned(user_id):
         user = get_user_with_cache(user_id)
@@ -818,7 +819,7 @@ except Exception as e:
     )
     update_user(user_id, {"setup_state": None})
     context.user_data["state"] = None
-    return ConversationHandler.END       
+    return ConversationHandler.END
 
 async def consent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
