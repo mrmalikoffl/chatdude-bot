@@ -953,8 +953,8 @@ async def set_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await safe_reply(update, "⚠️ Failed to set name. Please try again.", context)
         return NAME
     context.user_data["state"] = AGE
-    await safe_reply(update, f"🧑 Name set to: *{escape_markdown_v2(name)}*!", context, parse_mode=ParseMode.MARKDOWN_V2)
-    await safe_reply(update, "🎂 Please enter your age (e.g., 25):", context, parse_mode=ParseMode.MARKDOWN_V2)
+    await safe_reply(update, f"🧑 Name set to: *{escape_markdown_v2(name)}*\\!", context, parse_mode=ParseMode.MARKDOWN_V2)
+    await safe_reply(update, "🎂 Please enter your age \\(e.g., 25):", context, parse_mode=ParseMode.MARKDOWN_V2)
     get_user_cached.cache_clear()
     return AGE
 
@@ -984,7 +984,7 @@ async def set_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             await safe_reply(update, "⚠️ Failed to set age. Please try again.", context)
             return AGE
         context.user_data["state"] = GENDER
-        await safe_reply(update, f"🎂 Age set to: *{age}*!", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, f"🎂 Age set to: *{age}*\\!", context, parse_mode=ParseMode.MARKDOWN_V2)
         keyboard = [
             [
                 InlineKeyboardButton("👨 Male", callback_data="gender_male"),
@@ -1028,8 +1028,8 @@ async def set_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             await safe_reply(update, "⚠️ Failed to set gender. Please try again.", context)
             return GENDER
         context.user_data["state"] = LOCATION
-        await safe_reply(update, f"👤 Gender set to: *{escape_markdown_v2(gender)}*!", context, parse_mode=ParseMode.MARKDOWN_V2)
-        await safe_reply(update, "📍 Please enter your location (e.g., New York):", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, f"👤 Gender set to: *{escape_markdown_v2(gender)}*\\!", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "📍 Please enter your location \\(e.g., New York):", context, parse_mode=ParseMode.MARKDOWN_V2)
         get_user_cached.cache_clear()
         return LOCATION
     await safe_reply(update, "⚠️ Invalid selection. Please choose a gender.", context)
@@ -1067,7 +1067,7 @@ async def set_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await safe_reply(update, "⚠️ Failed to set location. Please try again.", context)
         return LOCATION
     context.user_data["state"] = None
-    await safe_reply(update, "🎉 Congratulations! Profile setup complete! 🎉", context, parse_mode=ParseMode.MARKDOWN_V2)
+    await safe_reply(update, "🎉 Congratulations! Profile setup complete\\! 🎉", context, parse_mode=ParseMode.MARKDOWN_V2)
     await safe_reply(update, (
         "🔍 Your profile is ready! 🎉\n\n"
         "🚀 Use `/next` to find a chat partner and start connecting!\n"
