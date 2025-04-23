@@ -954,7 +954,7 @@ async def set_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return NAME
     context.user_data["state"] = AGE
     await safe_reply(update, f"🧑 Name set to: *{escape_markdown_v2(name)}*\\!", context, parse_mode=ParseMode.MARKDOWN_V2)
-    await safe_reply(update, "🎂 Please enter your age \\(e.g., 25):", context, parse_mode=ParseMode.MARKDOWN_V2)
+    await safe_reply(update, "🎂 Please enter your age \\(e.g., 25\\):", context, parse_mode=ParseMode.MARKDOWN_V2)
     get_user_cached.cache_clear()
     return AGE
 
@@ -1029,7 +1029,7 @@ async def set_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             return GENDER
         context.user_data["state"] = LOCATION
         await safe_reply(update, f"👤 Gender set to: *{escape_markdown_v2(gender)}*\\!", context, parse_mode=ParseMode.MARKDOWN_V2)
-        await safe_reply(update, "📍 Please enter your location \\(e.g., New York):", context, parse_mode=ParseMode.MARKDOWN_V2)
+        await safe_reply(update, "📍 Please enter your location \\(e.g., New York\\):", context, parse_mode=ParseMode.MARKDOWN_V2)
         get_user_cached.cache_clear()
         return LOCATION
     await safe_reply(update, "⚠️ Invalid selection. Please choose a gender.", context)
